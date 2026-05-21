@@ -106,10 +106,16 @@ def test_gtf_fasta_extraction_and_saluki_builder(tmp_path):
     assert records["tx_neg"].splice_positions == (2,)
     assert records["tx_neg"].cds_positions == (0, 3)
 
+    gtf.write_text(
+        gtf.read_text(encoding="utf-8")
+        + 'chrZ\ttest\texon\t1\t3\t.\t+\t.\tgene_id "G3"; transcript_id "tx_alt";\n',
+        encoding="utf-8",
+    )
     targets = tmp_path / "targets.csv"
     targets.write_text(
         "transcript_id,log_kdeg,split\n"
         "tx_neg,2.5,test\n"
+        "tx_alt,3.5,train\n"
         "tx_pos,1.5,train\n"
         "missing,9.0,train\n",
         encoding="utf-8",
@@ -135,3 +141,5 @@ def test_gtf_fasta_extraction_and_saluki_builder(tmp_path):
     assert loaded.ids == ["tx_neg", "tx_pos"]
     assert loaded.config["builder"] == "saluki_gtf"
     assert loaded.config["n_missing_transcripts"] == 1
+    assert loaded.config["n_skipped_missing_fasta_chromosome"] == 1
+    assert loaded.config["skipped_missing_fasta_chromosomes"] == {"chrZ": 1}

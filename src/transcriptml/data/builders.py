@@ -229,12 +229,34 @@ def build_saluki_dataset_from_gtf(
         selected_target_rows = [target_by_id[tid] for tid in selected_ids] if target_by_id is not None else None
     if not selected_ids:
         raise ValueError("No transcripts with exon annotations were found for the requested inputs")
+    n_missing_gtf_transcripts = len(target_rows) - len(selected_ids) if target_rows is not None else None
 
-    X = np.lib.format.open_memmap(out / "X.npy", mode="w+", dtype=np.uint8, shape=(len(selected_ids), 6, int(length)))
-    ids: list[str] = []
-    metadata: list[dict[str, Any]] = []
     fasta = _FastaAccessor(fasta_path)
     try:
+        kept_ids: list[str] = []
+        kept_target_rows: list[Mapping[str, str]] | None = [] if selected_target_rows is not None else None
+        skipped_fasta_chromosomes: dict[str, int] = {}
+        for i, tid in enumerate(selected_ids):
+            chrom = features_by_id[tid].chrom
+            if not fasta.has_chrom(chrom):
+                skipped_fasta_chromosomes[chrom] = skipped_fasta_chromosomes.get(chrom, 0) + 1
+                continue
+            kept_ids.append(tid)
+            if kept_target_rows is not None and selected_target_rows is not None:
+                kept_target_rows.append(selected_target_rows[i])
+        if not kept_ids:
+            raise ValueError("No transcripts remained after filtering to chromosomes present in the FASTA")
+
+        selected_ids = kept_ids
+        selected_target_rows = kept_target_rows
+        X = np.lib.format.open_memmap(
+            out / "X.npy",
+            mode="w+",
+            dtype=np.uint8,
+            shape=(len(selected_ids), 6, int(length)),
+        )
+        ids: list[str] = []
+        metadata: list[dict[str, Any]] = []
         for i, tid in enumerate(selected_ids):
             record = transcript_record_from_feature(features_by_id[tid], fasta)
             X[i] = encode_saluki_transcript(
@@ -252,9 +274,9 @@ def build_saluki_dataset_from_gtf(
                 row_meta.update(_metadata_for_row(target_row, exclude, metadata_cols))
             ids.append(tid)
             metadata.append(row_meta)
+        X.flush()
     finally:
         fasta.close()
-    X.flush()
 
     y = None
     if target_col is not None:
@@ -280,9 +302,10 @@ def build_saluki_dataset_from_gtf(
             "split_col": split_col,
             "length": int(length),
             "n_requested_targets": len(target_rows) if target_rows is not None else None,
-            "n_missing_transcripts": (
-                len(target_rows) - len(selected_ids) if target_rows is not None else None
-            ),
+            "n_missing_transcripts": n_missing_gtf_transcripts,
+            "n_missing_gtf_transcripts": n_missing_gtf_transcripts,
+            "n_skipped_missing_fasta_chromosome": int(sum(skipped_fasta_chromosomes.values())),
+            "skipped_missing_fasta_chromosomes": dict(sorted(skipped_fasta_chromosomes.items())),
         },
     )
     save_bundle_metadata(bundle, out)

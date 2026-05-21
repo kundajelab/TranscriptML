@@ -94,6 +94,9 @@ class _FastaAccessor:
     def keys(self) -> set[str]:
         return self._keys
 
+    def has_chrom(self, chrom: str) -> bool:
+        return _resolve_chrom_name(chrom, self.keys) is not None
+
     def close(self) -> None:
         if self._fa is not None and hasattr(self._fa, "close"):
             self._fa.close()

@@ -42,6 +42,9 @@ For Saluki-style transcript models, provide:
   target column such as `log_kdeg`. A `split` column with `train`, `val`, and
   `test` is optional.
 
+Transcripts on GTF chromosomes that are absent from the FASTA are skipped and
+reported in `config.json` under `skipped_missing_fasta_chromosomes`.
+
 Saluki arrays have shape `(N, 6, L)`: A/C/G/U, CDS codon-start positions, and
 splice-junction positions. Short transcripts are padded with all-zero columns.
 Long transcripts are truncated from the 5-prime side, preserving the 3-prime
