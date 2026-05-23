@@ -19,6 +19,8 @@ class SmallCNNConfig:
     output_dim: int = 1
 
     def to_kwargs(self) -> dict[str, object]:
+        """Return constructor keyword arguments for ``SmallCNN``."""
+
         return asdict(self)
 
 
@@ -35,6 +37,8 @@ class SmallCNN(nn.Module):
         head_hidden: int = 64,
         output_dim: int = 1,
     ):
+        """Create the compact CNN regression model."""
+
         super().__init__()
         if n_layers < 1:
             raise ValueError("n_layers must be at least 1")
@@ -60,6 +64,8 @@ class SmallCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass on ``(B, C, L)`` encoded sequences."""
+
         z = self.encoder(x.float())
         pooled = torch.cat([z.amax(dim=-1), z.mean(dim=-1)], dim=1)
         y = self.head(pooled)

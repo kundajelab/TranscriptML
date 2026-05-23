@@ -40,6 +40,8 @@ class TrainConfig:
 
 
 def _seed_everything(seed: int) -> None:
+    """Seed Python, NumPy, and PyTorch random number generators."""
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -48,6 +50,8 @@ def _seed_everything(seed: int) -> None:
 
 
 def _load_config(path: str | Path) -> dict[str, Any]:
+    """Load a JSON or TOML training configuration file."""
+
     p = Path(path)
     if p.suffix.lower() == ".toml":
         try:
@@ -60,18 +64,24 @@ def _load_config(path: str | Path) -> dict[str, Any]:
 
 
 def _as_train_config(config: TrainConfig | Mapping[str, Any]) -> TrainConfig:
+    """Normalize mapping-like training config to ``TrainConfig``."""
+
     if isinstance(config, TrainConfig):
         return config
     return TrainConfig(**dict(config))
 
 
 def _select_device(name: str) -> torch.device:
+    """Resolve ``auto`` or explicit torch device names."""
+
     if name == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(name)
 
 
 def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
+    """Choose dataset splits from the bundle or training config."""
+
     if bundle.splits:
         return normalize_splits(bundle.splits)
     split_cfg = dict(cfg.split or {})
@@ -94,17 +104,25 @@ def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]
 
 class _ArrayRegressionDataset(Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray):
+        """Wrap NumPy arrays as a PyTorch regression dataset."""
+
         self.X = X
         self.y = y
 
     def __len__(self) -> int:
+        """Return the number of examples."""
+
         return int(self.X.shape[0])
 
     def __getitem__(self, idx: int) -> tuple[np.ndarray, np.float32]:
+        """Return one input array and scalar target."""
+
         return np.asarray(self.X[int(idx)]), np.float32(self.y[int(idx)])
 
 
 def _collate_regression(batch: list[tuple[np.ndarray, np.float32]]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Stack NumPy regression examples into tensors."""
+
     xs, ys = zip(*batch)
     return torch.as_tensor(np.stack(xs, axis=0)), torch.as_tensor(np.asarray(ys, dtype=np.float32))
 
@@ -118,6 +136,8 @@ def _loader(
     num_workers: int = 0,
     pin_memory: bool = False,
 ) -> DataLoader | None:
+    """Create a DataLoader for a split, or ``None`` for empty splits."""
+
     if not indices:
         return None
     return DataLoader(
@@ -139,6 +159,8 @@ def _run_loader(
     loss_fn: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
 ) -> dict[str, float]:
+    """Run one train or evaluation pass over a loader."""
+
     if loader is None:
         return {"loss": float("nan"), "pearson": float("nan")}
     training = optimizer is not None
@@ -169,6 +191,8 @@ def _run_loader(
 
 
 def _is_better(value: float, best: float | None, monitor: str) -> bool:
+    """Return whether a monitored metric improved."""
+
     if np.isnan(value):
         return False
     if best is None:
@@ -179,6 +203,8 @@ def _is_better(value: float, best: float | None, monitor: str) -> bool:
 
 
 def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) -> dict[str, Any]:
+    """Train a model from an in-memory dataset bundle and config."""
+
     cfg = _as_train_config(config)
     if bundle.y is None:
         raise ValueError("Training requires bundle.y")
@@ -281,6 +307,8 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
 
 
 def train_from_config(config_path: str | Path) -> dict[str, Any]:
+    """Load a training config and train its requested model."""
+
     cfg = TrainConfig(**_load_config(config_path))
     bundle = load_bundle(cfg.dataset, mmap_mode=cfg.mmap_mode)
     return train_model(bundle, cfg)

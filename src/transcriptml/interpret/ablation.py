@@ -37,6 +37,8 @@ def enumerate_motif_instances(
     *,
     valid_lengths: Sequence[int] | None = None,
 ) -> list[MotifInstance]:
+    """Find all motif instances in a batch of encoded sequences."""
+
     arr = np.asarray(X)
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
     motif_sets = parse_motif(motif)
@@ -68,6 +70,8 @@ def mean_ablation_prediction(
     strategy: str,
     rng: np.random.Generator,
 ) -> float:
+    """Predict the mean response after repeated motif-scrambling ablations."""
+
     if n_scrambles <= 0:
         return float(predictor.predict(x_ref[None, :, :])[0])
     batch = np.repeat(x_ref[None, :, :], int(n_scrambles), axis=0).copy()
@@ -117,6 +121,8 @@ def motif_ablation(
 
 
 def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path) -> None:
+    """Save motif ablation arrays, instance table, and summary metadata."""
+
     save_result_dir(
         out_dir,
         arrays={

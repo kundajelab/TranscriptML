@@ -23,6 +23,8 @@ class SalukiLikeConfig:
     output_dim: int = 1
 
     def to_kwargs(self) -> dict[str, object]:
+        """Return constructor keyword arguments for ``SalukiLike``."""
+
         return asdict(self)
 
 
@@ -47,6 +49,8 @@ class SalukiLike(nn.Module):
         head_hidden: int = 64,
         output_dim: int = 1,
     ):
+        """Create the Saluki-inspired Conv/GRU regression model."""
+
         super().__init__()
         if n_convs < 1:
             raise ValueError("n_convs must be at least 1")
@@ -82,6 +86,8 @@ class SalukiLike(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass on ``(B, C, L)`` Saluki-style inputs."""
+
         z = self.encoder(x.float()).transpose(1, 2)
         _, h_n = self.gru(z)
         if self.gru.bidirectional:

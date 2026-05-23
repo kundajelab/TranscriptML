@@ -57,6 +57,8 @@ def _enumerate_pairs_for_sequence(
     motif2_sets: Sequence[set[int]] | None,
     skip_overlaps: bool,
 ) -> list[tuple[Site, Site]]:
+    """Enumerate candidate motif-site pairs for one encoded sequence."""
+
     starts1 = find_motif_starts(x[:4, :valid_length], motif_sets)
     len1 = len(motif_sets)
     sites1 = [Site("motif1" if motif2 else "motif", int(s), int(s + len1), motif) for s in starts1]
@@ -90,6 +92,8 @@ def _mean_multi_ablation_prediction(
     strategy: str,
     rng: np.random.Generator,
 ) -> float:
+    """Predict the mean response after applying multiple motif ablations."""
+
     if n_scrambles <= 0:
         return float(predictor.predict(x_ref[None, :, :])[0])
     batch = np.repeat(x_ref[None, :, :], int(n_scrambles), axis=0).copy()
@@ -218,6 +222,8 @@ def motif_epistasis(
 
 
 def save_epistasis_result(result: EpistasisResult, out_dir: str | Path) -> None:
+    """Save epistasis arrays, pair table, and summary metadata."""
+
     save_result_dir(
         out_dir,
         arrays={

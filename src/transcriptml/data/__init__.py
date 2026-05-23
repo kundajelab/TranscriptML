@@ -2,6 +2,7 @@
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle, save_bundle
 from transcriptml.data.encoding import (
+    DEFAULT_SALUKI_LENGTH,
     encode_rna_sequence,
     encode_saluki_transcript,
     encode_sequences,
@@ -20,6 +21,7 @@ from transcriptml.data.schemas import RNA4, SALUKI6, SequenceSchema, get_schema
 
 __all__ = [
     "DatasetBundle",
+    "DEFAULT_SALUKI_LENGTH",
     "RNA4",
     "SALUKI6",
     "SequenceSchema",

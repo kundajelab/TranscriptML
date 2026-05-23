@@ -8,6 +8,7 @@ from transcriptml.data.schemas import RNA4, SALUKI6, SequenceSchema, get_schema
 
 BASE_TO_INDEX = {"A": 0, "C": 1, "G": 2, "U": 3, "T": 3}
 INDEX_TO_BASE = {0: "A", 1: "C", 2: "G", 3: "U"}
+DEFAULT_SALUKI_LENGTH = 12_288
 _BASE_LUT = np.full(256, -1, dtype=np.int16)
 for _base, _idx in BASE_TO_INDEX.items():
     _BASE_LUT[ord(_base)] = _idx
@@ -95,6 +96,8 @@ def _adjust_positions(
     length: int,
     original_length: int,
 ) -> list[int]:
+    """Shift original transcript positions into a truncated fixed-length window."""
+
     if positions is None:
         return []
     adjusted: list[int] = []
@@ -111,7 +114,7 @@ def _adjust_positions(
 def encode_saluki_transcript(
     seq: str,
     *,
-    length: int = 12880,
+    length: int = DEFAULT_SALUKI_LENGTH,
     cds_positions: Iterable[int] | None = None,
     splice_positions: Iterable[int] | None = None,
     dtype: np.dtype | type = np.uint8,
@@ -153,6 +156,8 @@ def infer_valid_length(x: np.ndarray, *, base_channels: int | None = None) -> in
 
 
 def infer_valid_lengths(X: np.ndarray, *, base_channels: int | None = None) -> np.ndarray:
+    """Infer valid sequence lengths for a batch of encoded arrays."""
+
     arr = np.asarray(X)
     if arr.ndim != 3:
         raise ValueError(f"Expected a (N, C, L) array, got shape {arr.shape}")

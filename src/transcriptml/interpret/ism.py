@@ -42,6 +42,8 @@ def compute_ism(
     meta: list[tuple[int, int, int]] = []
 
     def flush() -> None:
+        """Predict and store any queued mutant sequences."""
+
         if not batch:
             return
         preds = predictor.predict(np.stack(batch, axis=0))
@@ -72,10 +74,14 @@ def compute_ism(
 
 
 def max_abs_effect_per_position(deltas: np.ndarray) -> np.ndarray:
+    """Summarize ISM effects by maximum absolute base substitution effect."""
+
     return np.max(np.abs(np.asarray(deltas)), axis=1)
 
 
 def save_ism_result(result: ISMResult, out_dir: str | Path) -> None:
+    """Save ISM result arrays and a small JSON summary."""
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     np.save(out / "deltas.npy", result.deltas)

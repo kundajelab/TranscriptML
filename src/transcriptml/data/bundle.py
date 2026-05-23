@@ -23,6 +23,8 @@ class DatasetBundle:
     config: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Normalize schema and validate array-aligned fields."""
+
         self.schema = get_schema(self.schema)
         if self.ids is None:
             self.ids = [str(i) for i in range(int(self.X.shape[0]))]
@@ -33,6 +35,8 @@ class DatasetBundle:
 
 
 def _json_default(obj: Any) -> Any:
+    """Convert common NumPy and path objects to JSON-serializable values."""
+
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     if isinstance(obj, (np.integer, np.floating)):
@@ -43,6 +47,8 @@ def _json_default(obj: Any) -> Any:
 
 
 def save_bundle_metadata(bundle: DatasetBundle, out_dir: str | Path) -> None:
+    """Write dataset sidecar metadata files for an existing ``X.npy``."""
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "ids.txt").write_text("\n".join(str(x) for x in bundle.ids) + "\n", encoding="utf-8")
@@ -64,6 +70,8 @@ def save_bundle_metadata(bundle: DatasetBundle, out_dir: str | Path) -> None:
 
 
 def save_bundle(bundle: DatasetBundle, out_dir: str | Path) -> None:
+    """Write a complete dataset bundle, including arrays and sidecars."""
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     np.save(out / "X.npy", bundle.X)
@@ -73,6 +81,8 @@ def save_bundle(bundle: DatasetBundle, out_dir: str | Path) -> None:
 
 
 def load_bundle(path: str | Path, *, mmap_mode: str | None = None) -> DatasetBundle:
+    """Load a processed dataset bundle from disk."""
+
     root = Path(path)
     X = np.load(root / "X.npy", mmap_mode=mmap_mode)
     y_path = root / "y.npy"

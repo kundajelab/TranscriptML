@@ -113,6 +113,8 @@ def motif_context_scan(
 
 
 def save_motif_context_result(result: MotifContextResult, out_dir: str | Path) -> None:
+    """Save motif context scan arrays, instance table, and summary metadata."""
+
     save_result_dir(
         out_dir,
         arrays={

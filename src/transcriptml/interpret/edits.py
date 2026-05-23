@@ -8,6 +8,8 @@ from transcriptml.interpret.motifs import ALL_BASES, base_indices_from_ohe, regi
 
 
 def extract_base_indices(x: np.ndarray, start: int, end: int) -> np.ndarray:
+    """Extract unambiguous base indices from a sequence window."""
+
     bases = base_indices_from_ohe(np.asarray(x)[:4, start:end])
     if np.any(bases < 0):
         raise ValueError("Cannot edit a region containing all-zero or ambiguous base columns")
@@ -15,6 +17,8 @@ def extract_base_indices(x: np.ndarray, start: int, end: int) -> np.ndarray:
 
 
 def write_bases_inplace(x: np.ndarray, start: int, bases: Sequence[int]) -> None:
+    """Overwrite base channels in place while preserving annotation channels."""
+
     bases_arr = np.asarray(bases, dtype=np.int64)
     end = int(start) + len(bases_arr)
     x[:4, start:end] = 0
@@ -23,12 +27,16 @@ def write_bases_inplace(x: np.ndarray, start: int, bases: Sequence[int]) -> None
 
 
 def random_different_bases(orig: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Sample bases that differ at every position from the original bases."""
+
     orig = np.asarray(orig, dtype=np.int64)
     r = rng.integers(0, 3, size=orig.shape[0], dtype=np.int64)
     return r + (r >= orig).astype(np.int64)
 
 
 def shuffle_bases(orig: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Return a random permutation of base indices."""
+
     return np.asarray(orig, dtype=np.int64)[rng.permutation(len(orig))].copy()
 
 
@@ -76,6 +84,8 @@ def dinuc_shuffle_bases(orig: np.ndarray, rng: np.random.Generator) -> np.ndarra
 
 
 def scramble_region_bases(orig: np.ndarray, strategy: str, rng: np.random.Generator) -> np.ndarray:
+    """Scramble a base-index vector using the requested strategy."""
+
     if strategy == "random_different":
         return random_different_bases(orig, rng)
     if strategy == "shuffle":
@@ -93,6 +103,8 @@ def scramble_window_inplace(
     strategy: str,
     rng: np.random.Generator,
 ) -> None:
+    """Scramble one fixed-width base window in place."""
+
     orig = extract_base_indices(x, start, start + window_size)
     write_bases_inplace(x, start, scramble_region_bases(orig, strategy, rng))
 
@@ -106,6 +118,8 @@ def scramble_motif_ablating_inplace(
     rng: np.random.Generator,
     max_tries: int = 25,
 ) -> None:
+    """Scramble a motif instance until it no longer matches the motif."""
+
     start = int(motif_start)
     end = start + len(motif_sets)
     orig = extract_base_indices(x, start, end)
@@ -131,6 +145,8 @@ def scramble_motif_ablating_inplace(
 
 
 def valid_base_window(x: np.ndarray, start: int, end: int) -> bool:
+    """Return whether a window contains only unambiguous base columns."""
+
     try:
         extract_base_indices(x, start, end)
     except ValueError:

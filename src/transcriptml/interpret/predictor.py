@@ -20,6 +20,8 @@ class Predictor:
         device: str | torch.device = "cpu",
         batch_size: int = 128,
     ):
+        """Create a predictor from a PyTorch module or NumPy callable."""
+
         self.model = model
         self.device = torch.device(device)
         self.batch_size = int(batch_size)
@@ -35,11 +37,15 @@ class Predictor:
         device: str | torch.device = "cpu",
         batch_size: int = 128,
     ) -> "Predictor":
+        """Load a checkpoint and wrap the reconstructed model for prediction."""
+
         model, _ = load_checkpoint(checkpoint_path, map_location=device)
         return cls(model, device=device, batch_size=batch_size)
 
     @torch.no_grad()
     def predict(self, X: np.ndarray | torch.Tensor, *, batch_size: int | None = None) -> np.ndarray:
+        """Predict one scalar output per input sequence."""
+
         if not isinstance(self.model, torch.nn.Module):
             return np.asarray(self.model(np.asarray(X)), dtype=np.float32).reshape(-1)
         bs = int(batch_size or self.batch_size)
@@ -60,6 +66,8 @@ class EnsemblePredictor:
     """Mean or median reduction over multiple predictors."""
 
     def __init__(self, predictors: Sequence[Predictor], *, reduction: str = "mean"):
+        """Create an ensemble predictor with mean or median reduction."""
+
         if not predictors:
             raise ValueError("EnsemblePredictor requires at least one predictor")
         if reduction not in {"mean", "median"}:
@@ -68,6 +76,8 @@ class EnsemblePredictor:
         self.reduction = reduction
 
     def predict(self, X: np.ndarray | torch.Tensor, *, batch_size: int | None = None) -> np.ndarray:
+        """Predict with each member and reduce predictions across members."""
+
         preds = np.stack([p.predict(X, batch_size=batch_size) for p in self.predictors], axis=0)
         if self.reduction == "mean":
             return preds.mean(axis=0, dtype=np.float64).astype(np.float32)

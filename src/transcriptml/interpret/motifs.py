@@ -52,6 +52,8 @@ def parse_motif(motif: str) -> list[set[int]]:
 
 
 def motif_length(motif: str | Sequence[Set[int]]) -> int:
+    """Return motif length after expanding motif syntax."""
+
     return len(parse_motif(motif)) if isinstance(motif, str) else len(motif)
 
 
@@ -70,6 +72,8 @@ def base_indices_from_ohe(ohe_4_by_L: np.ndarray) -> np.ndarray:
 
 
 def region_matches_motif(base_region: np.ndarray, motif_sets: Sequence[Set[int]]) -> bool:
+    """Return whether base indices match parsed motif position sets."""
+
     if len(base_region) != len(motif_sets):
         return False
     for base, allowed in zip(base_region, motif_sets):
@@ -79,6 +83,8 @@ def region_matches_motif(base_region: np.ndarray, motif_sets: Sequence[Set[int]]
 
 
 def find_motif_starts(ohe_4_by_L: np.ndarray, motif: str | Sequence[Set[int]]) -> np.ndarray:
+    """Find start positions where a motif matches one-hot base channels."""
+
     motif_sets = parse_motif(motif) if isinstance(motif, str) else [set(x) for x in motif]
     m = len(motif_sets)
     bases = base_indices_from_ohe(ohe_4_by_L)
@@ -93,4 +99,6 @@ def find_motif_starts(ohe_4_by_L: np.ndarray, motif: str | Sequence[Set[int]]) -
 
 
 def intervals_overlap(a0: int, a1: int, b0: int, b1: int) -> bool:
+    """Return whether two half-open intervals overlap."""
+
     return int(a0) < int(b1) and int(b0) < int(a1)

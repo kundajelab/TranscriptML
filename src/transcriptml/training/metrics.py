@@ -4,6 +4,8 @@ import numpy as np
 
 
 def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Compute mean squared error for flattened arrays."""
+
     y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
     if y_true.shape != y_pred.shape:
@@ -12,6 +14,8 @@ def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def pearson_corr(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Compute Pearson correlation, returning NaN when undefined."""
+
     y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
     if y_true.size < 2 or y_pred.size < 2:

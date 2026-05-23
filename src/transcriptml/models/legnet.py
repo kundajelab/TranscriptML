@@ -24,16 +24,22 @@ class LegNetConfig:
     output_dim: int = 1
 
     def to_kwargs(self) -> dict[str, object]:
+        """Return constructor keyword arguments for ``LegNet``."""
+
         return asdict(self)
 
 
 class SELayer(nn.Module):
     def __init__(self, inp: int, reduction: int = 4):
+        """Create a squeeze-excitation block for 1D sequence channels."""
+
         super().__init__()
         hidden = max(1, int(inp) // int(reduction))
         self.fc = nn.Sequential(nn.Linear(inp, hidden), nn.SiLU(), nn.Linear(hidden, inp), nn.Sigmoid())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply channel reweighting to a ``(B, C, L)`` tensor."""
+
         b, c, _ = x.size()
         y = x.mean(dim=2)
         y = self.fc(y).view(b, c, 1)
@@ -42,6 +48,8 @@ class SELayer(nn.Module):
 
 class LocalBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, ks: int, dropout: float = 0.0):
+        """Create a local convolution, normalization, activation, and dropout block."""
+
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv1d(in_ch, out_ch, kernel_size=ks, padding="same", bias=False),
@@ -51,11 +59,15 @@ class LocalBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the local convolutional block."""
+
         return self.block(x)
 
 
 class EffBlock(nn.Module):
     def __init__(self, in_ch: int, ks: int, resize_factor: int, dropout: float = 0.0):
+        """Create a LegNet efficient residual-style convolutional block."""
+
         super().__init__()
         inner = int(in_ch) * int(resize_factor)
         self.block = nn.Sequential(
@@ -75,15 +87,21 @@ class EffBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the efficient block."""
+
         return self.block(x)
 
 
 class ResidualConcat(nn.Module):
     def __init__(self, fn: nn.Module):
+        """Wrap a module whose output is concatenated with its input."""
+
         super().__init__()
         self.fn = fn
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Concatenate transformed and original channels."""
+
         return torch.cat([self.fn(x), x], dim=1)
 
 
@@ -104,6 +122,8 @@ class LegNet(nn.Module):
         stem_dropout: float = 0.0,
         output_dim: int = 1,
     ):
+        """Create the compact LegNet regression model."""
+
         super().__init__()
         if len(pool_sizes) != len(ef_block_sizes):
             raise ValueError("pool_sizes and ef_block_sizes must have the same length")
@@ -130,6 +150,8 @@ class LegNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass on ``(B, C, L)`` encoded sequences."""
+
         z = self.stem(x.float())
         z = self.main(z)
         z = self.mapper(z)

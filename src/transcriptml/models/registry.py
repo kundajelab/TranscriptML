@@ -19,6 +19,8 @@ class ModelConfig:
     params: Dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize model name and parameters to a plain dictionary."""
+
         return {"name": self.name, "params": dict(self.params or {})}
 
 
@@ -38,6 +40,8 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
 
 
 def normalize_model_config(config: ModelConfig | Mapping[str, Any] | str) -> ModelConfig:
+    """Normalize supported model config forms to ``ModelConfig``."""
+
     if isinstance(config, ModelConfig):
         return config
     if isinstance(config, str):
@@ -52,6 +56,8 @@ def normalize_model_config(config: ModelConfig | Mapping[str, Any] | str) -> Mod
 
 
 def build_model(config: ModelConfig | Mapping[str, Any] | str) -> nn.Module:
+    """Instantiate a registered model from configuration."""
+
     cfg = normalize_model_config(config)
     try:
         spec = MODEL_REGISTRY[cfg.name]
@@ -64,6 +70,8 @@ def build_model(config: ModelConfig | Mapping[str, Any] | str) -> nn.Module:
 
 
 def _strip_module_prefix(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Remove a leading DataParallel ``module.`` prefix when present."""
+
     if not state_dict:
         return dict(state_dict)
     first = next(iter(state_dict))
@@ -82,6 +90,8 @@ def save_checkpoint(
     optimizer_state: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> None:
+    """Save model weights, model config, metrics, and optional training state."""
+
     cfg = normalize_model_config(model_config).to_dict()
     obj: dict[str, Any] = {
         "state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
@@ -98,6 +108,8 @@ def save_checkpoint(
 
 
 def _torch_load(path: str | Path, map_location: str | torch.device = "cpu") -> Any:
+    """Load a PyTorch object while supporting older torch versions."""
+
     try:
         return torch.load(path, map_location=map_location, weights_only=False)
     except TypeError:
@@ -110,6 +122,8 @@ def load_checkpoint(
     map_location: str | torch.device = "cpu",
     strict: bool = True,
 ) -> tuple[nn.Module, dict[str, Any]]:
+    """Load a TranscriptML checkpoint and rebuild its model."""
+
     ckpt = _torch_load(path, map_location=map_location)
     if not isinstance(ckpt, dict):
         raise ValueError("Checkpoint must be a dictionary saved by save_checkpoint")

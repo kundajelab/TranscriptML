@@ -19,21 +19,31 @@ class SequenceSchema:
 
     @property
     def n_channels(self) -> int:
+        """Return the total number of channels in the schema."""
+
         return len(self.channels)
 
     @property
     def n_base_channels(self) -> int:
+        """Return the number of nucleotide base channels."""
+
         return len(self.base_channels)
 
     @property
     def annotation_channels(self) -> Tuple[str, ...]:
+        """Return non-base annotation channel names."""
+
         return self.channels[self.n_base_channels :]
 
     def to_dict(self) -> Dict[str, object]:
+        """Serialize the schema to a JSON-compatible dictionary."""
+
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "SequenceSchema":
+        """Deserialize a schema from a dictionary."""
+
         return cls(
             name=str(data["name"]),
             channels=tuple(str(x) for x in data["channels"]),
@@ -60,6 +70,8 @@ SCHEMAS: Dict[str, SequenceSchema] = {s.name: s for s in (RNA4, SALUKI6)}
 
 
 def get_schema(schema: str | SequenceSchema) -> SequenceSchema:
+    """Resolve a schema name or return an existing schema object."""
+
     if isinstance(schema, SequenceSchema):
         return schema
     try:
@@ -69,4 +81,6 @@ def get_schema(schema: str | SequenceSchema) -> SequenceSchema:
 
 
 def list_schemas() -> Sequence[str]:
+    """List registered schema names."""
+
     return tuple(sorted(SCHEMAS))

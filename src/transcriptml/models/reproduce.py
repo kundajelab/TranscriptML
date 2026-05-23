@@ -22,16 +22,22 @@ class SalukiExactConfig:
     bn_eps: float = 1e-3
 
     def to_kwargs(self) -> dict[str, object]:
+        """Return constructor keyword arguments for ``SalukiExact``."""
+
         return asdict(self)
 
 
 def keras_he_normal_trunc_(tensor: torch.Tensor) -> torch.Tensor:
+    """Initialize a tensor with Keras-style truncated He normal weights."""
+
     fan_in, _ = nn.init._calculate_fan_in_and_fan_out(tensor)
     std = math.sqrt(2.0 / fan_in)
     return nn.init.trunc_normal_(tensor, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std)
 
 
 def shift_sequence_right(x: torch.Tensor, shift: int, pad_value: float = 0.0) -> torch.Tensor:
+    """Shift sequence channels right with left padding."""
+
     if shift == 0:
         return x
     if shift < 0:
@@ -42,10 +48,14 @@ def shift_sequence_right(x: torch.Tensor, shift: int, pad_value: float = 0.0) ->
 
 class StochasticShift(nn.Module):
     def __init__(self, shift_max: int = 3):
+        """Create a random right-shift augmentation module."""
+
         super().__init__()
         self.shift_max = int(shift_max)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply a random right shift during training."""
+
         if (not self.training) or self.shift_max <= 0:
             return x
         shift = int(torch.randint(0, self.shift_max + 1, size=(), device=x.device).item())
@@ -67,6 +77,8 @@ class SalukiExact(nn.Module):
         keras_bn_momentum: float = 0.90,
         bn_eps: float = 1e-3,
     ):
+        """Create the Saluki architecture reproduction."""
+
         super().__init__()
         self.seq_depth = int(seq_depth)
         self.filters = int(filters)
@@ -99,6 +111,8 @@ class SalukiExact(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
+        """Initialize weights to match the legacy Keras conventions."""
+
         keras_he_normal_trunc_(self.conv0.weight)
         for blk in self.blocks:
             keras_he_normal_trunc_(blk["conv"].weight)
@@ -113,6 +127,8 @@ class SalukiExact(nn.Module):
         nn.init.zeros_(self.fc2.bias)
 
     def _to_bcl(self, x: torch.Tensor) -> torch.Tensor:
+        """Convert supported input layouts to ``(B, C, L)`` float tensors."""
+
         if x.ndim != 3:
             raise ValueError(f"Expected 3D input, got {tuple(x.shape)}")
         if x.shape[1] == self.seq_depth:
@@ -122,6 +138,8 @@ class SalukiExact(nn.Module):
         raise ValueError(f"Expected channel depth {self.seq_depth}, got shape {tuple(x.shape)}")
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode an input sequence into the final Saluki feature vector."""
+
         z = self.shift(self._to_bcl(x))
         z = self.conv0(z)
         for blk in self.blocks:
@@ -136,6 +154,8 @@ class SalukiExact(nn.Module):
         return z[:, -1, :]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass and return scalar predictions."""
+
         z = self.forward_features(x)
         z = self.fc1(torch.relu(self.bn1(z)))
         z = self.drop1(z)

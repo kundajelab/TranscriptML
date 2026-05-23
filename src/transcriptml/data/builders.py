@@ -8,18 +8,22 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from transcriptml.data.bundle import DatasetBundle, save_bundle, save_bundle_metadata
-from transcriptml.data.encoding import encode_saluki_transcript, encode_sequences
+from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH, encode_saluki_transcript, encode_sequences
 from transcriptml.data.genomics import _FastaAccessor, load_transcript_features, transcript_record_from_feature
 from transcriptml.data.schemas import RNA4, SALUKI6
 
 
 def _infer_delimiter(path: str | Path, delimiter: str | None) -> str:
+    """Return the explicit delimiter or infer CSV/TSV from the filename."""
+
     if delimiter is not None:
         return delimiter
     return "\t" if str(path).lower().endswith((".tsv", ".tab")) else ","
 
 
 def _read_rows(path: str | Path, *, delimiter: str | None = None) -> list[dict[str, str]]:
+    """Read a delimited table into dictionaries keyed by header names."""
+
     delim = _infer_delimiter(path, delimiter)
     with Path(path).open("r", newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter=delim)
@@ -29,11 +33,15 @@ def _read_rows(path: str | Path, *, delimiter: str | None = None) -> list[dict[s
 
 
 def _metadata_for_row(row: Mapping[str, str], exclude: set[str], metadata_cols: Sequence[str] | None) -> dict[str, Any]:
+    """Select metadata fields from a source row."""
+
     cols = metadata_cols if metadata_cols is not None else [c for c in row if c not in exclude]
     return {c: row.get(c) for c in cols if c in row}
 
 
 def _parse_positions(value: str | None) -> list[int]:
+    """Parse transcript-coordinate positions from JSON or delimiter-separated text."""
+
     if value is None:
         return []
     text = str(value).strip()
@@ -48,6 +56,8 @@ def _parse_positions(value: str | None) -> list[int]:
 
 
 def _dedupe_target_rows(rows: Sequence[Mapping[str, str]], id_col: str) -> dict[str, Mapping[str, str]]:
+    """Index target rows by transcript id and reject duplicate ids."""
+
     out: dict[str, Mapping[str, str]] = {}
     for row in rows:
         tid = str(row[id_col])
@@ -58,6 +68,8 @@ def _dedupe_target_rows(rows: Sequence[Mapping[str, str]], id_col: str) -> dict[
 
 
 def _splits_from_rows(rows: Sequence[Mapping[str, str]], split_col: str | None) -> dict[str, list[int]] | None:
+    """Build train/validation/test index lists from a table split column."""
+
     if split_col is None:
         return None
     splits = {"train": [], "val": [], "test": []}
@@ -124,15 +136,15 @@ def build_mpra_dataset(
 
 
 def build_saluki_dataset(
+    *,
     table_path: str | Path,
     out_dir: str | Path,
-    *,
     sequence_col: str,
     id_col: str,
     target_col: str | None = None,
     cds_positions_col: str | None = None,
     splice_positions_col: str | None = None,
-    length: int = 12880,
+    length: int = DEFAULT_SALUKI_LENGTH,
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
@@ -191,14 +203,14 @@ def build_saluki_dataset(
 
 
 def build_saluki_dataset_from_gtf(
+    *,
     gtf_path: str | Path,
     fasta_path: str | Path,
     out_dir: str | Path,
-    *,
     targets_path: str | Path | None = None,
     target_col: str | None = None,
     target_id_col: str = "transcript_id",
-    length: int = 12880,
+    length: int = DEFAULT_SALUKI_LENGTH,
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,

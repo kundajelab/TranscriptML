@@ -21,6 +21,8 @@ def predict_array(
     batch_size: int = 128,
     device: str | torch.device = "cpu",
 ) -> np.ndarray:
+    """Predict scalar outputs for every example in an array."""
+
     model = model.to(device)
     model.eval()
     preds: list[np.ndarray] = []
@@ -41,6 +43,8 @@ def _predict_indexed_array(
     batch_size: int = 128,
     device: str | torch.device = "cpu",
 ) -> np.ndarray:
+    """Predict scalar outputs for selected array indices."""
+
     model = model.to(device)
     model.eval()
     preds: list[np.ndarray] = []
@@ -60,6 +64,8 @@ def evaluate_model(
     batch_size: int = 128,
     device: str | torch.device = "cpu",
 ) -> dict[str, object]:
+    """Evaluate a model on a dataset bundle and optional subset indices."""
+
     idx = np.arange(bundle.X.shape[0]) if indices is None else np.asarray(indices, dtype=int)
     preds = _predict_indexed_array(model, bundle.X, idx, batch_size=batch_size, device=device)
     result: dict[str, object] = {"predictions": preds, "indices": idx.tolist()}
@@ -83,6 +89,8 @@ def predict_to_csv(
     targets: Sequence[float] | None = None,
     indices: Sequence[int] | None = None,
 ) -> None:
+    """Write prediction rows, and optional targets, to a CSV file."""
+
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
         fieldnames = ["index", "id", "prediction"]
@@ -107,6 +115,8 @@ def evaluate_checkpoint(
     batch_size: int = 128,
     device: str | torch.device = "cpu",
 ) -> dict[str, object]:
+    """Load a checkpoint and evaluate it on a dataset bundle."""
+
     model, _ = load_checkpoint(checkpoint_path, map_location=device)
     bundle = load_bundle(dataset_path, mmap_mode="r")
     indices = None

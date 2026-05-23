@@ -8,6 +8,8 @@ from typing import Iterator, Mapping, Sequence
 
 import numpy as np
 
+from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH
+
 
 _GTF_ATTR_RE = re.compile(r'\s*([^\s=;]+)\s+(?:"([^"]*)"|([^;]*))\s*;?')
 _DNA_COMPLEMENT = str.maketrans("ACGTRYMKBDHVNacgtrymkbdhvn", "TGCAYRKMVHDBNtgcayrkmvhdbn")
@@ -41,10 +43,14 @@ class TranscriptFeature:
 
     @property
     def exon_count(self) -> int:
+        """Return the number of exon features in the transcript."""
+
         return len(self.exons)
 
     @property
     def transcript_length(self) -> int:
+        """Return total spliced transcript length in nucleotides."""
+
         return int(sum(r.end - r.start for r in self.exons))
 
 
@@ -78,6 +84,8 @@ class _ExonMap:
 
 class _FastaAccessor:
     def __init__(self, path: str | Path):
+        """Open a FASTA through pyfaidx or a small in-memory fallback."""
+
         self.path = Path(path)
         self._fa = None
         self._seqs: dict[str, str] | None = None
@@ -92,16 +100,24 @@ class _FastaAccessor:
 
     @property
     def keys(self) -> set[str]:
+        """Return available FASTA sequence names."""
+
         return self._keys
 
     def has_chrom(self, chrom: str) -> bool:
+        """Return whether a chromosome can be resolved in the FASTA."""
+
         return _resolve_chrom_name(chrom, self.keys) is not None
 
     def close(self) -> None:
+        """Close the underlying FASTA handle when one exists."""
+
         if self._fa is not None and hasattr(self._fa, "close"):
             self._fa.close()
 
     def fetch(self, chrom: str, start: int, end: int) -> str:
+        """Fetch an uppercase genomic interval using 0-based half-open coordinates."""
+
         key = _resolve_chrom_name(chrom, self.keys)
         if key is None:
             raise KeyError(f"Chromosome '{chrom}' was not found in FASTA {self.path}")
@@ -113,6 +129,8 @@ class _FastaAccessor:
 
 
 def _open_text(path: str | Path):
+    """Open plain or gzip-compressed text for reading."""
+
     p = Path(path)
     if p.suffix == ".gz":
         return gzip.open(p, "rt", encoding="utf-8")
@@ -120,6 +138,8 @@ def _open_text(path: str | Path):
 
 
 def _read_fasta_into_memory(path: Path) -> dict[str, str]:
+    """Read a small FASTA file into an uppercase sequence dictionary."""
+
     seqs: dict[str, list[str]] = {}
     current: str | None = None
     with _open_text(path) as handle:
@@ -138,6 +158,8 @@ def _read_fasta_into_memory(path: Path) -> dict[str, str]:
 
 
 def _resolve_chrom_name(chrom: str, keys: set[str]) -> str | None:
+    """Resolve exact and common ``chr``/no-``chr`` chromosome aliases."""
+
     if chrom in keys:
         return chrom
     candidates = []
@@ -156,6 +178,8 @@ def _resolve_chrom_name(chrom: str, keys: set[str]) -> str | None:
 
 
 def reverse_complement(seq: str) -> str:
+    """Return the reverse complement of a DNA sequence."""
+
     return str(seq).translate(_DNA_COMPLEMENT)[::-1]
 
 
@@ -278,6 +302,8 @@ def load_transcript_features(
 
 
 def _transcript_ordered_exons(feature: TranscriptFeature) -> list[GTFRecord]:
+    """Return exons ordered in transcript orientation."""
+
     if feature.strand == "+":
         return sorted(feature.exons, key=lambda r: (r.start, r.end))
     if feature.strand == "-":
@@ -286,6 +312,8 @@ def _transcript_ordered_exons(feature: TranscriptFeature) -> list[GTFRecord]:
 
 
 def _build_exon_map(feature: TranscriptFeature) -> list[_ExonMap]:
+    """Build transcript-coordinate spans for each ordered exon."""
+
     offset = 0
     mapped: list[_ExonMap] = []
     for exon in _transcript_ordered_exons(feature):
@@ -296,6 +324,8 @@ def _build_exon_map(feature: TranscriptFeature) -> list[_ExonMap]:
 
 
 def _sequence_for_feature(feature: TranscriptFeature, fasta: _FastaAccessor) -> str:
+    """Assemble a spliced transcript sequence from genomic exon intervals."""
+
     parts: list[str] = []
     for exon in _transcript_ordered_exons(feature):
         seq = fasta.fetch(exon.chrom, exon.start, exon.end)
@@ -309,6 +339,8 @@ def _map_interval_to_transcript(
     *,
     strand: str,
 ) -> list[tuple[int, int]]:
+    """Map a genomic interval onto transcript-coordinate intervals."""
+
     mapped: list[tuple[int, int]] = []
     for exon in exon_map:
         ex = exon.record
@@ -327,6 +359,8 @@ def _map_interval_to_transcript(
 
 
 def _cds_codon_positions(feature: TranscriptFeature, exon_map: Sequence[_ExonMap]) -> tuple[int, ...]:
+    """Return transcript-coordinate codon-start positions for CDS features."""
+
     ranges: list[tuple[int, int]] = []
     for cds in feature.cds:
         ranges.extend(_map_interval_to_transcript(cds, exon_map, strand=feature.strand))
@@ -338,6 +372,8 @@ def _cds_codon_positions(feature: TranscriptFeature, exon_map: Sequence[_ExonMap
 
 
 def transcript_record_from_feature(feature: TranscriptFeature, fasta: _FastaAccessor) -> TranscriptRecord:
+    """Create a transcript sequence record from one annotated transcript feature."""
+
     exon_map = _build_exon_map(feature)
     sequence = _sequence_for_feature(feature, fasta)
     splice_positions = tuple(int(exon.tx_start - 1) for exon in exon_map[1:])
@@ -382,7 +418,7 @@ def write_saluki_memmap(
     path: str | Path,
     records: Sequence[TranscriptRecord],
     *,
-    length: int = 12880,
+    length: int = DEFAULT_SALUKI_LENGTH,
     dtype: np.dtype | type = np.uint8,
 ) -> np.memmap:
     """Encode transcript records to a Saluki ``X.npy`` file without a RAM-sized copy."""

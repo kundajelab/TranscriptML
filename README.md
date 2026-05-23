@@ -24,6 +24,70 @@ python -m pip install -e ".[dev,genomics]"
 
 ## Quickstart
 
+This example starts from a genome FASTA, transcript annotations, and a target
+table with transcript-level RNA stability measurements. Replace the example
+paths and column names with the ones from your dataset.
+
+Required inputs:
+
+- `genome.fa`: genomic FASTA
+- `annotations.gtf`: transcript annotation GTF with `exon` rows and
+  `transcript_id` attributes
+- `targets.csv`: table containing `transcript_id`, `log_kdeg`, and optionally
+  `split` values such as `train`, `val`, and `test`
+
+Build a Saluki-style dataset bundle:
+
+```bash
+transcriptml build-saluki-gtf \
+  --gtf annotations.gtf \
+  --fasta genome.fa \
+  --out-dir data/saluki \
+  --targets targets.csv \
+  --target-id-col transcript_id \
+  --target-col log_kdeg \
+  --split-col split \
+  --length 12288
+```
+
+The commands here assume `targets.csv` has a `split` column. If it does not,
+omit `--split-col split` above and `--split test` during evaluation; training
+will create a random train/validation/test split and write test predictions
+under the run directory. The build command writes `data/saluki/X.npy`,
+`data/saluki/y.npy`, transcript IDs, metadata, and bundle configuration files.
+
+Create a small training config:
+
+```bash
+cat > train_saluki.json <<'JSON'
+{
+  "dataset": "data/saluki",
+  "output_dir": "runs/saluki_gru",
+  "model": {"name": "saluki_gru"},
+  "epochs": 50,
+  "device": "auto"
+}
+JSON
+```
+
+Train, evaluate, and run single-nucleotide ISM:
+
+```bash
+transcriptml train train_saluki.json
+
+transcriptml evaluate runs/saluki_gru/best.pt data/saluki predictions.csv \
+  --split test \
+  --device auto
+
+transcriptml ism runs/saluki_gru/best.pt data/saluki interpret/ism \
+  --device auto \
+  --mutation-batch-size 512
+```
+
+Training writes checkpoints and summaries under `runs/saluki_gru/`. Evaluation
+writes `predictions.csv` and `predictions.summary.json`. ISM writes NumPy arrays
+under `interpret/ism/`.
+
 ## Details
 
 ### Input Data
@@ -56,12 +120,15 @@ window, matching the legacy Saluki-style preprocessing.
 Build Saluki input directly from GTF/FASTA:
 
 ```bash
-transcriptml build-saluki-gtf annotations.gtf genome.fa data/saluki \
+transcriptml build-saluki-gtf \
+  --gtf annotations.gtf \
+  --fasta genome.fa \
+  --out-dir data/saluki \
   --targets targets.csv \
   --target-id-col transcript_id \
   --target-col log_kdeg \
   --split-col split \
-  --length 12880
+  --length 12288
 ```
 
 Only transcripts present in both the GTF and target table are kept. If no target
@@ -72,14 +139,16 @@ If you already have transcript sequences and transcript-coordinate annotations,
 use the table builder instead:
 
 ```bash
-transcriptml build-saluki transcripts.csv data/saluki_table \
+transcriptml build-saluki \
+  --table transcripts.csv \
+  --out-dir data/saluki_table \
   --sequence-col sequence \
   --id-col transcript_id \
   --target-col log_kdeg \
   --cds-positions-col cds_starts \
   --splice-positions-col splice_sites \
   --split-col split \
-  --length 12880
+  --length 12288
 ```
 
 For MPRA-style sequence/target tables:
@@ -153,7 +222,7 @@ transcriptml ism runs/saluki_gru/best.pt data/saluki interpret/ism \
   --mutation-batch-size 512
 ```
 
-Full-length ISM over many 12,880 nt transcripts can be expensive because it
+Full-length ISM over many 12,288 nt transcripts can be expensive because it
 evaluates three mutants per valid base. For first-pass Saluki interpretation,
 motif-centered analyses are usually much cheaper.
 

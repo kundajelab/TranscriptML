@@ -6,6 +6,8 @@ import numpy as np
 
 
 def _check_no_overlap(splits: Mapping[str, Sequence[int]]) -> None:
+    """Validate that no example index appears in more than one split."""
+
     seen: dict[int, str] = {}
     for name, values in splits.items():
         for idx in values:
@@ -22,6 +24,8 @@ def random_split_indices(
     test_frac: float = 0.1,
     seed: int | None = None,
 ) -> dict[str, list[int]]:
+    """Create reproducible random train/validation/test split indices."""
+
     if n <= 0:
         raise ValueError("n must be positive")
     if not (0 <= val_frac < 1) or not (0 <= test_frac < 1):
@@ -56,6 +60,8 @@ def predefined_split_indices(
     val_values: Sequence[str] = ("val", "valid", "validation"),
     test_values: Sequence[str] = ("test",),
 ) -> dict[str, list[int]]:
+    """Create split indices from a metadata column."""
+
     train_set = {x.lower() for x in train_values}
     val_set = {x.lower() for x in val_values}
     test_set = {x.lower() for x in test_values}
@@ -75,6 +81,8 @@ def predefined_split_indices(
 
 
 def normalize_splits(splits: Mapping[str, Sequence[int]]) -> dict[str, list[int]]:
+    """Normalize split indices to mutable integer lists with standard keys."""
+
     out = {name: [int(i) for i in values] for name, values in splits.items()}
     out.setdefault("train", [])
     out.setdefault("val", [])

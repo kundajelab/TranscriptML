@@ -6,6 +6,7 @@ from pathlib import Path
 
 from transcriptml.data.bundle import load_bundle
 from transcriptml.data.builders import build_mpra_dataset, build_saluki_dataset, build_saluki_dataset_from_gtf
+from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH
 from transcriptml.interpret.ablation import motif_ablation, save_motif_ablation_result
 from transcriptml.interpret.context import motif_context_scan, save_motif_context_result
 from transcriptml.interpret.epistasis import motif_epistasis, save_epistasis_result
@@ -16,12 +17,16 @@ from transcriptml.training.trainer import train_from_config
 
 
 def _csv_list(value: str | None) -> list[str] | None:
+    """Parse a comma-separated CLI value into a list of strings."""
+
     if value is None:
         return None
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Construct the TranscriptML command-line argument parser."""
+
     parser = argparse.ArgumentParser(prog="transcriptml")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -37,26 +42,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--delimiter")
 
     p = sub.add_parser("build-saluki", help="Build a Saluki-style transcript dataset bundle")
-    p.add_argument("table")
-    p.add_argument("out_dir")
+    p.add_argument("--table", required=True)
+    p.add_argument("--out-dir", required=True)
     p.add_argument("--sequence-col", required=True)
     p.add_argument("--id-col", required=True)
     p.add_argument("--target-col")
     p.add_argument("--cds-positions-col")
     p.add_argument("--splice-positions-col")
-    p.add_argument("--length", type=int, default=12880)
+    p.add_argument("--length", type=int, default=DEFAULT_SALUKI_LENGTH)
     p.add_argument("--metadata-cols")
     p.add_argument("--split-col")
     p.add_argument("--delimiter")
 
     p = sub.add_parser("build-saluki-gtf", help="Build a Saluki dataset from GTF + genome FASTA")
-    p.add_argument("gtf")
-    p.add_argument("fasta")
-    p.add_argument("out_dir")
+    p.add_argument("--gtf", required=True)
+    p.add_argument("--fasta", required=True)
+    p.add_argument("--out-dir", required=True)
     p.add_argument("--targets")
     p.add_argument("--target-col")
     p.add_argument("--target-id-col", default="transcript_id")
-    p.add_argument("--length", type=int, default=12880)
+    p.add_argument("--length", type=int, default=DEFAULT_SALUKI_LENGTH)
     p.add_argument("--metadata-cols")
     p.add_argument("--split-col")
     p.add_argument("--delimiter")
@@ -107,6 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run the TranscriptML command-line interface."""
+
     args = build_parser().parse_args(argv)
     if args.command == "build-mpra":
         build_mpra_dataset(
@@ -123,8 +130,8 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "build-saluki":
         build_saluki_dataset(
-            args.table,
-            args.out_dir,
+            table_path=args.table,
+            out_dir=args.out_dir,
             sequence_col=args.sequence_col,
             id_col=args.id_col,
             target_col=args.target_col,
@@ -138,9 +145,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "build-saluki-gtf":
         build_saluki_dataset_from_gtf(
-            args.gtf,
-            args.fasta,
-            args.out_dir,
+            gtf_path=args.gtf,
+            fasta_path=args.fasta,
+            out_dir=args.out_dir,
             targets_path=args.targets,
             target_col=args.target_col,
             target_id_col=args.target_id_col,

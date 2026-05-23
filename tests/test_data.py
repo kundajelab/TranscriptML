@@ -121,9 +121,9 @@ def test_gtf_fasta_extraction_and_saluki_builder(tmp_path):
         encoding="utf-8",
     )
     bundle = build_saluki_dataset_from_gtf(
-        gtf,
-        fasta,
-        tmp_path / "bundle",
+        gtf_path=gtf,
+        fasta_path=fasta,
+        out_dir=tmp_path / "bundle",
         targets_path=targets,
         target_col="log_kdeg",
         split_col="split",

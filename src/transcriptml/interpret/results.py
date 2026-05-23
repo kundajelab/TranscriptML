@@ -10,12 +10,16 @@ import numpy as np
 
 
 def _row_dict(row: Any) -> dict[str, Any]:
+    """Convert a dataclass or mapping-like row to a plain dictionary."""
+
     if is_dataclass(row):
         return asdict(row)
     return dict(row)
 
 
 def save_table(path: str | Path, rows: Sequence[Any]) -> None:
+    """Save a sequence of dataclass or mapping rows as CSV."""
+
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     row_dicts = [_row_dict(row) for row in rows]
     if not row_dicts:
@@ -35,6 +39,8 @@ def save_result_dir(
     tables: Mapping[str, Sequence[Any]] | None = None,
     summary: Mapping[str, Any] | None = None,
 ) -> None:
+    """Save arrays, optional tables, and optional summary into a result directory."""
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for name, arr in arrays.items():
