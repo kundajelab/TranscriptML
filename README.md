@@ -62,8 +62,8 @@ Create a small training config:
 cat > train_saluki.json <<'JSON'
 {
   "dataset": "data/saluki",
-  "output_dir": "runs/saluki_gru",
-  "model": {"name": "saluki_gru"},
+  "output_dir": "runs/saluki_exact",
+  "model": {"name": "saluki_exact"},
   "epochs": 50,
   "device": "auto"
 }
@@ -75,16 +75,16 @@ Train, evaluate, and run single-nucleotide ISM:
 ```bash
 transcriptml train train_saluki.json
 
-transcriptml evaluate runs/saluki_gru/best.pt data/saluki predictions.csv \
+transcriptml evaluate runs/saluki_exact/best.pt data/saluki predictions.csv \
   --split test \
   --device auto
 
-transcriptml ism runs/saluki_gru/best.pt data/saluki interpret/ism \
+transcriptml ism runs/saluki_exact/best.pt data/saluki interpret/ism \
   --device auto \
   --mutation-batch-size 512
 ```
 
-Training writes checkpoints and summaries under `runs/saluki_gru/`. Evaluation
+Training writes checkpoints and summaries under `runs/saluki_exact/`. Evaluation
 writes `predictions.csv` and `predictions.summary.json`. ISM writes NumPy arrays
 under `interpret/ism/`.
 
@@ -168,16 +168,16 @@ Training is config-driven. Example `train_saluki.json`:
 ```json
 {
   "dataset": "data/saluki",
-  "output_dir": "runs/saluki_gru",
+  "output_dir": "runs/saluki_exact",
   "model": {
-    "name": "saluki_gru",
+    "name": "saluki_exact",
     "params": {
-      "in_ch": 6,
-      "base_ch": 64,
-      "n_convs": 4,
-      "gru_hidden": 64,
-      "head_hidden": 64,
-      "dropout": 0.2
+      "seq_depth": 6,
+      "filters": 64,
+      "kernel_size": 5,
+      "num_layers": 6,
+      "dropout": 0.3,
+      "augment_shift": 3
     }
   },
   "batch_size": 64,
@@ -199,15 +199,14 @@ Then run:
 transcriptml train train_saluki.json
 ```
 
-Use `"name": "saluki_exact"` to train the closer PyTorch reproduction of the
-Basenji/Saluki architecture, or `"saluki_gru"` for the lighter Saluki-inspired
-Conv/GRU model. Checkpoints include model config and weights, so they can be
-reloaded without restating hyperparameters.
+The `"saluki_exact"` model trains the closer PyTorch reproduction of the
+Basenji/Saluki architecture. Checkpoints include model config and weights, so
+they can be reloaded without restating hyperparameters.
 
 ### Evaluate
 
 ```bash
-transcriptml evaluate runs/saluki_gru/best.pt data/saluki predictions.csv --split test --device auto
+transcriptml evaluate runs/saluki_exact/best.pt data/saluki predictions.csv --split test --device auto
 ```
 
 This writes per-transcript predictions and a companion summary JSON.
@@ -217,7 +216,7 @@ This writes per-transcript predictions and a companion summary JSON.
 Single-nucleotide ISM:
 
 ```bash
-transcriptml ism runs/saluki_gru/best.pt data/saluki interpret/ism \
+transcriptml ism runs/saluki_exact/best.pt data/saluki interpret/ism \
   --device auto \
   --mutation-batch-size 512
 ```
@@ -229,7 +228,7 @@ motif-centered analyses are usually much cheaper.
 Motif ablation, with effect `A - R`:
 
 ```bash
-transcriptml motif-ablation runs/saluki_gru/best.pt data/saluki interpret/pre_ablation \
+transcriptml motif-ablation runs/saluki_exact/best.pt data/saluki interpret/pre_ablation \
   --motif "UGUA[A|U|C]AUA" \
   --n-scrambles 10 \
   --device auto
@@ -238,7 +237,7 @@ transcriptml motif-ablation runs/saluki_gru/best.pt data/saluki interpret/pre_ab
 Motif context specificity, with effect `(MA - M) - (A - R)`:
 
 ```bash
-transcriptml motif-context runs/saluki_gru/best.pt data/saluki interpret/pre_context \
+transcriptml motif-context runs/saluki_exact/best.pt data/saluki interpret/pre_context \
   --motif "UGUA[A|U|C]AUA" \
   --window-size 5 \
   --context-width 100 \
@@ -250,7 +249,7 @@ transcriptml motif-context runs/saluki_gru/best.pt data/saluki interpret/pre_con
 Pairwise motif epistasis, with effect `A12 - A1 - A2 + R`:
 
 ```bash
-transcriptml epistasis runs/saluki_gru/best.pt data/saluki interpret/pre_epistasis \
+transcriptml epistasis runs/saluki_exact/best.pt data/saluki interpret/pre_epistasis \
   --motif "UGUA[A|U|C]AUA" \
   --n-scrambles 10 \
   --max-pairs 5000 \
