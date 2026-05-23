@@ -11,7 +11,8 @@ bundles, compact neural models, training/evaluation, and interpretation.
 For core model training and tests:
 
 ```bash
-conda activate rnadegnet
+git clone https://github.com/kundajelab/TranscriptML.git
+cd TranscriptML
 python -m pip install -e ".[dev]"
 ```
 
@@ -21,11 +22,11 @@ For direct GTF/FASTA transcript extraction, install the genomics extra:
 python -m pip install -e ".[dev,genomics]"
 ```
 
-The genomic builder parses GTF in pure Python, so it does not depend on
-`pyranges` and does not need the legacy R/rtracklayer conversion step. When
-`pyfaidx` is installed, FASTA sequence is fetched by indexed random access.
+## Quickstart
 
-## Input Data
+## Details
+
+### Input Data
 
 TranscriptML writes processed datasets as bundles containing `X.npy`, optional
 `y.npy`, `ids.txt`, `schema.json`, `config.json`, optional `metadata.json`, and
@@ -50,7 +51,7 @@ splice-junction positions. Short transcripts are padded with all-zero columns.
 Long transcripts are truncated from the 5-prime side, preserving the 3-prime
 window, matching the legacy Saluki-style preprocessing.
 
-## Build Datasets
+### Build Datasets
 
 Build Saluki input directly from GTF/FASTA:
 
@@ -91,7 +92,7 @@ transcriptml build-mpra mpra.csv data/mpra \
   --split-col split
 ```
 
-## Train Saluki
+### Train Saluki
 
 Training is config-driven. Example `train_saluki.json`:
 
@@ -134,7 +135,7 @@ Basenji/Saluki architecture, or `"saluki_gru"` for the lighter Saluki-inspired
 Conv/GRU model. Checkpoints include model config and weights, so they can be
 reloaded without restating hyperparameters.
 
-## Evaluate
+### Evaluate
 
 ```bash
 transcriptml evaluate runs/saluki_gru/best.pt data/saluki predictions.csv --split test --device auto
@@ -142,7 +143,7 @@ transcriptml evaluate runs/saluki_gru/best.pt data/saluki predictions.csv --spli
 
 This writes per-transcript predictions and a companion summary JSON.
 
-## Interpret Saluki
+### Interpret Saluki
 
 Single-nucleotide ISM:
 
@@ -190,7 +191,7 @@ transcriptml epistasis runs/saluki_gru/best.pt data/saluki interpret/pre_epistas
 Interpretation outputs are saved as `.npy` arrays plus CSV tables describing the
 motif instances or motif pairs that were tested.
 
-## Performance Notes
+### Performance Notes
 
 - Saluki builders write `X.npy` directly as a NumPy `.npy` memmap instead of
   holding an extra full-size array in RAM.
@@ -199,14 +200,3 @@ motif instances or motif pairs that were tested.
 - Evaluation and prediction convert data to float32 per batch, not for the
   whole dataset at once.
 - Motif scanning is vectorized over possible start positions.
-
-## Preserved Legacy Behavior
-
-- RNA one-hot encoding uses A/C/G/U channels, treats T as U, and encodes N or
-  unknown bases as all-zero.
-- Arrays use PyTorch shape convention: `(N, C, L)`.
-- Saluki-style transcript encoding preserves the 3-prime-most window for long
-  transcripts.
-- The CDS channel marks every third transcript-coordinate base from the first
-  CDS base. The splice channel marks transcript-coordinate donor junctions.
-- Interpretation analyses preserve non-base annotation channels during edits.
