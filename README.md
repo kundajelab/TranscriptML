@@ -2,24 +2,23 @@
 
 Training and interpreting RNA sequence-to-function models.
 
-TranscriptML uses a `src/` layout and the import name `transcriptml`. The first
-package version focuses on reusable APIs for RNA one-hot encoding, dataset
-bundles, compact neural models, training/evaluation, and interpretation.
+TranscriptML currently implements reusable APIs for RNA one-hot encoding (Saluki-style 6-channel and basic 4-channel for MPRAs), dataset
+bundles, model training/evaluation (Saluki and an MPRA model (LegNet) currently supported; RiboNN and potentially RBPNet in the future), and interpretation.
 
 ## Install
 
-For core model training and tests:
+For full-functionality model training and tests:
 
 ```bash
 git clone https://github.com/kundajelab/TranscriptML.git
 cd TranscriptML
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,genomics]"
 ```
 
-For direct GTF/FASTA transcript extraction, install the genomics extra:
+If you don't need the GTF/FASTA transcript extraction functionality, install with:
 
 ```bash
-python -m pip install -e ".[dev,genomics]"
+python -m pip install -e ".[dev]"
 ```
 
 ## Quickstart
