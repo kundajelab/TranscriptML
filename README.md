@@ -21,6 +21,26 @@ If you don't need the GTF/FASTA transcript extraction functionality, install wit
 python -m pip install -e ".[dev]"
 ```
 
+### Optional Dependencies
+
+TranscriptML keeps a small core install: NumPy, PyTorch, and TOML support on
+older Python versions. Optional extras enable workflows that need additional
+packages:
+
+- `dev`: installs `pytest` for running the test suite.
+- `genomics`: installs `pyfaidx` for GTF/FASTA transcript extraction used by
+  `transcriptml build-saluki-gtf`.
+- `arrow`: installs `pyarrow` for streaming codon-ISM mutation tables to
+  Parquet or Arrow IPC files.
+
+Common combinations:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,genomics]"
+python -m pip install -e ".[dev,genomics,arrow]"
+```
+
 ## Quickstart
 
 This example starts from a genome FASTA, transcript annotations, and a target
