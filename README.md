@@ -224,6 +224,25 @@ Full-length ISM over many 12,288 nt transcripts can be expensive because it
 evaluates three mutants per valid base. For first-pass Saluki interpretation,
 motif-centered analyses are usually much cheaper.
 
+CDS codon ISM writes a long-form mutation table with one row per codon
+mutation and effect `mutant_prediction - reference_prediction`. By default it
+only scans synonymous alternatives. Use `--mutation-policy all-codons` to scan
+all 63 alternatives per reference codon; stop codons are included unless
+`--exclude-stop-codons` is set.
+
+```bash
+transcriptml codon-ism runs/saluki_exact/best.pt data/saluki interpret/codon_ism \
+  --device auto \
+  --mutation-policy synonymous-only \
+  --table-format npz \
+  --mutation-batch-size 512
+```
+
+For large jobs, `codon-ism` streams the mutation table as CSV, chunked NPZ,
+Parquet, or Arrow IPC. Parquet and Arrow output require installing the optional
+`arrow` extra. Add `--position-scores` to also save the legacy-style derived
+max-absolute codon effect projected back onto reference nucleotide channels.
+
 Motif ablation, with effect `A - R`:
 
 ```bash

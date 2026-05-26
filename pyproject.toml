@@ -25,6 +25,9 @@ dev = [
 genomics = [
   "pyfaidx>=0.8"
 ]
+arrow = [
+  "pyarrow>=12"
+]
 
 [project.scripts]
 transcriptml = "transcriptml.cli.main:main"

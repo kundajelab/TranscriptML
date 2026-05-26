@@ -9,6 +9,7 @@ from transcriptml.data.builders import build_mpra_dataset, build_saluki_dataset,
 from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH
 from transcriptml.interpret.ablation import motif_ablation, save_motif_ablation_result
 from transcriptml.interpret.context import motif_context_scan, save_motif_context_result
+from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_writer, save_codon_ism_result
 from transcriptml.interpret.epistasis import motif_epistasis, save_epistasis_result
 from transcriptml.interpret.ism import compute_ism, save_ism_result
 from transcriptml.interpret.predictor import Predictor
@@ -79,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, help_text in [
         ("ism", "Run single-nucleotide ISM"),
+        ("codon-ism", "Run CDS codon-level ISM"),
         ("motif-ablation", "Run motif ablation"),
         ("motif-context", "Run motif context scan"),
         ("epistasis", "Run pairwise motif epistasis"),
@@ -89,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("out_dir")
         p.add_argument("--device", default="cpu")
         p.add_argument("--batch-size", type=int, default=128)
-        if name != "ism":
+        if name not in {"ism", "codon-ism"}:
             p.add_argument("--motif", required=True)
             p.add_argument("--n-scrambles", type=int, default=10)
             p.add_argument(
@@ -98,8 +100,24 @@ def build_parser() -> argparse.ArgumentParser:
                 choices=["random_different", "shuffle", "dinuc_shuffle"],
             )
             p.add_argument("--seed", type=int, default=123)
-        if name == "ism":
+        if name in {"ism", "codon-ism"}:
             p.add_argument("--mutation-batch-size", type=int, default=512)
+        if name == "codon-ism":
+            p.add_argument(
+                "--mutation-policy",
+                default="synonymous-only",
+                choices=["synonymous-only", "synonymous", "all-codons", "all"],
+            )
+            p.add_argument("--exclude-stop-codons", action="store_true")
+            p.add_argument("--cds-channel", help="CDS annotation channel name or integer index")
+            p.add_argument("--position-scores", action="store_true", help="Also save max-absolute codon effects")
+            p.add_argument(
+                "--table-format",
+                default="npz",
+                choices=["csv", "npz", "parquet", "arrow"],
+                help="Streaming long-form mutation table format",
+            )
+            p.add_argument("--rows-per-shard", type=int, default=100_000)
         if name == "motif-context":
             p.add_argument("--window-size", type=int, default=5)
             p.add_argument("--context-width", type=int)
@@ -178,6 +196,32 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "ism":
         result = compute_ism(bundle.X, predictor, mutation_batch_size=args.mutation_batch_size)
         save_ism_result(result, args.out_dir)
+    elif args.command == "codon-ism":
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if args.table_format == "csv":
+            table_path = out_dir / "mutations.csv"
+        elif args.table_format == "parquet":
+            table_path = out_dir / "mutations.parquet"
+        elif args.table_format == "arrow":
+            table_path = out_dir / "mutations.arrow"
+        else:
+            table_path = out_dir / "mutations_npz"
+        cds_channel = int(args.cds_channel) if args.cds_channel and args.cds_channel.isdigit() else args.cds_channel
+        writer = mutation_table_writer(table_path, format=args.table_format, rows_per_shard=args.rows_per_shard)
+        result = compute_codon_ism(
+            bundle.X,
+            predictor,
+            schema=bundle.schema,
+            cds_channel=cds_channel,
+            mutation_policy=args.mutation_policy,
+            include_stop_codons=not args.exclude_stop_codons,
+            mutation_batch_size=args.mutation_batch_size,
+            compute_position_scores=args.position_scores,
+            writer=writer,
+            collect=False,
+        )
+        save_codon_ism_result(result, args.out_dir, save_mutations=False)
     elif args.command == "motif-ablation":
         result = motif_ablation(
             bundle.X,
