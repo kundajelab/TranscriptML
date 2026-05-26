@@ -1,0 +1,25 @@
+{
+  "dataset": "REPLACED_BY_CV_SCRIPT",
+  "output_dir": "REPLACED_BY_CV_SCRIPT",
+  "model": {
+    "name": "saluki_exact",
+    "params": {
+      "seq_depth": 6,
+      "filters": 64,
+      "kernel_size": 5,
+      "num_layers": 6,
+      "dropout": 0.3,
+      "augment_shift": 3
+    }
+  },
+  "batch_size": 64,
+  "epochs": 50,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0,
+  "patience": 8,
+  "monitor": "val_loss",
+  "device": "auto",
+  "num_workers": 0,
+  "mmap_mode": "r",
+  "seed": 42
+}

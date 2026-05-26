@@ -41,6 +41,32 @@ python -m pip install -e ".[dev,genomics]"
 python -m pip install -e ".[dev,genomics,arrow]"
 ```
 
+For installing on Sherlock, I currently follow this workflow:
+
+```bash
+## Step 0: Hop on an interactive node
+salloc -c 4 --mem=16G --gpus=1 --partition=dev,akundaje -t 1:00:00
+
+## Step 1: Load necessary modules
+module load gcc/10.1.0
+module load openblas/0.3.10
+
+## Step 2: Install dependencies (+ some helpful extras) with conda when possible
+conda create -n transcript-ml \
+  -c conda-forge -c bioconda \
+  'python<=3.12' pip numpy pandas matplotlib pyfaidx pyarrow pytest
+
+conda activate transcript-ml
+
+## Step 3: Install Torch
+python -m pip install "torch==2.6.0+cu124" --index-url https://download.pytorch.org/whl/cu124
+
+## Step 4: Install TranscripML
+git clone https://github.com/kundajelab/TranscriptML.git
+cd TranscriptML
+pip install -e ".[dev,genomics,arrow]
+```
+
 ## Quickstart
 
 This example starts from a genome FASTA, transcript annotations, and a target
@@ -219,7 +245,7 @@ transcriptml train train_saluki.json
 ```
 
 The `"saluki_exact"` model trains the closer PyTorch reproduction of the
-Basenji/Saluki architecture. Checkpoints include model config and weights, so
+Saluki architecture. Checkpoints include model config and weights, so
 they can be reloaded without restating hyperparameters.
 
 ### Evaluate
