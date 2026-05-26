@@ -228,7 +228,7 @@ CDS codon ISM writes a long-form mutation table with one row per codon
 mutation and effect `mutant_prediction - reference_prediction`. By default it
 only scans synonymous alternatives. Use `--mutation-policy all-codons` to scan
 all 63 alternatives per reference codon; stop codons are included unless
-`--exclude-stop-codons` is set.
+`--exclude-stop-codons` is set. Stop codon ISMs are often not interpretable (Saluki does not learn canonical NMD unless trained on PTC-containing isoforms and thus won't predict PTCs to be destabilizing) or observe weird artifacts (fun example: UGA looks to be very stabilizing as it is only found within the CDS in selenocysteine protein mRNAs where it is decoded as selenocysteine; these mRNAs are on average highly stable, leading to a strong spurious correlation between UGA presence and stabilization), but I like to include them as a nice example of out-of-distribution hallucination.
 
 ```bash
 transcriptml codon-ism runs/saluki_exact/best.pt data/saluki interpret/codon_ism \
