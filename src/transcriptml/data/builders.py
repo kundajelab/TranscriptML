@@ -8,9 +8,10 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from transcriptml.data.bundle import DatasetBundle, save_bundle, save_bundle_metadata
-from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH, encode_saluki_transcript, encode_sequences
+from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH, encode_rna_sequence, encode_saluki_transcript
 from transcriptml.data.genomics import _FastaAccessor, load_transcript_features, transcript_record_from_feature
 from transcriptml.data.schemas import RNA4, SALUKI6
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 def _infer_delimiter(path: str | Path, delimiter: str | None) -> str:
@@ -96,16 +97,26 @@ def build_mpra_dataset(
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
+    progress: bool = True,
 ) -> DatasetBundle:
     """Build an RNA4 MPRA dataset from a delimited table."""
 
+    log_progress(f"build-mpra: reading {table_path}", enabled=progress)
     rows = _read_rows(table_path, delimiter=delimiter)
     seqs = [row[sequence_col] for row in rows]
     if length is None:
         length = max((len(str(s)) for s in seqs), default=0)
-    X = encode_sequences(seqs, length=length)
+    if length <= 0:
+        raise ValueError("Cannot encode an empty collection without a positive length")
+    X = np.zeros((len(seqs), 4, int(length)), dtype=np.uint8)
+    reporter = ProgressReporter("build-mpra: encode sequences", total=len(seqs), unit="sequences", enabled=progress)
+    for i, seq in enumerate(seqs):
+        X[i] = encode_rna_sequence(seq, length=int(length))
+        reporter.update()
+    reporter.close()
     y = None
     if target_col is not None:
+        log_progress("build-mpra: reading targets", enabled=progress)
         y = np.array([float(row[target_col]) for row in rows], dtype=np.float32)
     ids = [str(row[id_col]) if id_col else str(i) for i, row in enumerate(rows)]
     exclude = {sequence_col}
@@ -131,7 +142,9 @@ def build_mpra_dataset(
             "length": int(length),
         },
     )
+    log_progress(f"build-mpra: saving bundle to {out_dir}", enabled=progress)
     save_bundle(bundle, out_dir)
+    log_progress("build-mpra: done", enabled=progress)
     return bundle
 
 
@@ -148,6 +161,7 @@ def build_saluki_dataset(
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
+    progress: bool = True,
 ) -> DatasetBundle:
     """Build a Saluki-style fixed-length ``(N, 6, L)`` transcript dataset.
 
@@ -157,10 +171,17 @@ def build_saluki_dataset(
     transcript annotation GTF.
     """
 
+    log_progress(f"build-saluki: reading {table_path}", enabled=progress)
     rows = _read_rows(table_path, delimiter=delimiter)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     X = np.lib.format.open_memmap(out / "X.npy", mode="w+", dtype=np.uint8, shape=(len(rows), 6, int(length)))
+    reporter = ProgressReporter(
+        "build-saluki: encode transcripts",
+        total=len(rows),
+        unit="transcripts",
+        enabled=progress,
+    )
     for i, row in enumerate(rows):
         X[i] = encode_saluki_transcript(
             row[sequence_col],
@@ -168,9 +189,12 @@ def build_saluki_dataset(
             cds_positions=_parse_positions(row.get(cds_positions_col) if cds_positions_col else None),
             splice_positions=_parse_positions(row.get(splice_positions_col) if splice_positions_col else None),
         )
+        reporter.update()
     X.flush()
+    reporter.close()
     y = None
     if target_col is not None:
+        log_progress("build-saluki: writing targets", enabled=progress)
         y = np.array([float(row[target_col]) for row in rows], dtype=np.float32)
         np.save(out / "y.npy", y)
     ids = [str(row[id_col]) for row in rows]
@@ -198,7 +222,9 @@ def build_saluki_dataset(
             "length": int(length),
         },
     )
+    log_progress(f"build-saluki: saving metadata to {out}", enabled=progress)
     save_bundle_metadata(bundle, out)
+    log_progress("build-saluki: done", enabled=progress)
     return bundle
 
 
@@ -214,6 +240,7 @@ def build_saluki_dataset_from_gtf(
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
+    progress: bool = True,
 ) -> DatasetBundle:
     """Build a Saluki-style dataset directly from transcript GTF and genome FASTA.
 
@@ -228,11 +255,12 @@ def build_saluki_dataset_from_gtf(
     target_by_id: dict[str, Mapping[str, str]] | None = None
     transcript_ids: set[str] | None = None
     if targets_path is not None:
+        log_progress(f"build-saluki-gtf: reading targets {targets_path}", enabled=progress)
         target_rows = _read_rows(targets_path, delimiter=delimiter)
         target_by_id = _dedupe_target_rows(target_rows, target_id_col)
         transcript_ids = set(target_by_id)
 
-    features_by_id = load_transcript_features(gtf_path, transcript_ids=transcript_ids)
+    features_by_id = load_transcript_features(gtf_path, transcript_ids=transcript_ids, progress=progress)
     if target_rows is None:
         selected_ids = list(features_by_id)
         selected_target_rows = None
@@ -243,19 +271,29 @@ def build_saluki_dataset_from_gtf(
         raise ValueError("No transcripts with exon annotations were found for the requested inputs")
     n_missing_gtf_transcripts = len(target_rows) - len(selected_ids) if target_rows is not None else None
 
+    log_progress(f"build-saluki-gtf: opening FASTA {fasta_path}", enabled=progress)
     fasta = _FastaAccessor(fasta_path)
     try:
         kept_ids: list[str] = []
         kept_target_rows: list[Mapping[str, str]] | None = [] if selected_target_rows is not None else None
         skipped_fasta_chromosomes: dict[str, int] = {}
+        reporter = ProgressReporter(
+            "build-saluki-gtf: check FASTA chromosomes",
+            total=len(selected_ids),
+            unit="transcripts",
+            enabled=progress,
+        )
         for i, tid in enumerate(selected_ids):
             chrom = features_by_id[tid].chrom
             if not fasta.has_chrom(chrom):
                 skipped_fasta_chromosomes[chrom] = skipped_fasta_chromosomes.get(chrom, 0) + 1
+                reporter.update()
                 continue
             kept_ids.append(tid)
             if kept_target_rows is not None and selected_target_rows is not None:
                 kept_target_rows.append(selected_target_rows[i])
+            reporter.update()
+        reporter.close(extra=f"{len(kept_ids)} kept")
         if not kept_ids:
             raise ValueError("No transcripts remained after filtering to chromosomes present in the FASTA")
 
@@ -269,6 +307,12 @@ def build_saluki_dataset_from_gtf(
         )
         ids: list[str] = []
         metadata: list[dict[str, Any]] = []
+        reporter = ProgressReporter(
+            "build-saluki-gtf: encode transcripts",
+            total=len(selected_ids),
+            unit="transcripts",
+            enabled=progress,
+        )
         for i, tid in enumerate(selected_ids):
             record = transcript_record_from_feature(features_by_id[tid], fasta)
             X[i] = encode_saluki_transcript(
@@ -286,7 +330,9 @@ def build_saluki_dataset_from_gtf(
                 row_meta.update(_metadata_for_row(target_row, exclude, metadata_cols))
             ids.append(tid)
             metadata.append(row_meta)
+            reporter.update()
         X.flush()
+        reporter.close()
     finally:
         fasta.close()
 
@@ -294,6 +340,7 @@ def build_saluki_dataset_from_gtf(
     if target_col is not None:
         if selected_target_rows is None:
             raise ValueError("target_col requires targets_path")
+        log_progress("build-saluki-gtf: writing targets", enabled=progress)
         y = np.array([float(row[target_col]) for row in selected_target_rows], dtype=np.float32)
         np.save(out / "y.npy", y)
     splits = _splits_from_rows(selected_target_rows, split_col) if selected_target_rows is not None else None
@@ -320,5 +367,7 @@ def build_saluki_dataset_from_gtf(
             "skipped_missing_fasta_chromosomes": dict(sorted(skipped_fasta_chromosomes.items())),
         },
     )
+    log_progress(f"build-saluki-gtf: saving metadata to {out}", enabled=progress)
     save_bundle_metadata(bundle, out)
+    log_progress("build-saluki-gtf: done", enabled=progress)
     return bundle

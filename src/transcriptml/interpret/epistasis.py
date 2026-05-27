@@ -12,6 +12,7 @@ from transcriptml.interpret.edits import scramble_motif_ablating_inplace
 from transcriptml.interpret.motifs import find_motif_starts, intervals_overlap, parse_motif
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,7 @@ def motif_epistasis(
     skip_overlaps: bool = True,
     max_pairs: int | None = None,
     valid_lengths: Sequence[int] | None = None,
+    progress: bool = True,
 ) -> EpistasisResult:
     """Compute pairwise epistasis ``A12 - A1 - A2 + R``."""
 
@@ -128,11 +130,18 @@ def motif_epistasis(
     motif_sets = parse_motif(motif)
     motif2_sets = parse_motif(motif2) if motif2 is not None else None
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
+    log_progress(f"epistasis: predicting {arr.shape[0]} reference sequences", enabled=progress)
     ref_by_seq = predictor.predict(arr)
     rng = np.random.default_rng(seed)
     records: list[PairRecord] = []
     site_sets: dict[tuple[int, str, int, int], Sequence[set[int]]] = {}
     raw_pairs: list[tuple[int, Site, Site]] = []
+    enumerate_reporter = ProgressReporter(
+        "epistasis: enumerate motif pairs",
+        total=int(arr.shape[0]),
+        unit="sequences",
+        enabled=progress,
+    )
     for seq_i in range(arr.shape[0]):
         valid_len = min(int(lengths[seq_i]), int(arr.shape[-1]))
         pairs = _enumerate_pairs_for_sequence(
@@ -156,12 +165,16 @@ def motif_epistasis(
                 motif_sets if site2.motif == motif else motif2_sets
             )
         if max_pairs is not None and len(raw_pairs) >= int(max_pairs):
+            enumerate_reporter.update()
             break
+        enumerate_reporter.update()
+    enumerate_reporter.close(extra=f"{len(raw_pairs)} pairs")
     P = len(raw_pairs)
     R = np.zeros(P, dtype=np.float32)
     singles = np.zeros((P, 2), dtype=np.float32)
     paired = np.zeros(P, dtype=np.float32)
     single_cache: dict[tuple[int, str, int, int], float] = {}
+    pair_reporter = ProgressReporter("epistasis: score pairs", total=P, unit="pairs", enabled=progress)
     for pair_i, (seq_i, site1, site2) in enumerate(raw_pairs):
         valid_len = min(int(lengths[seq_i]), int(arr.shape[-1]))
         records.append(
@@ -207,6 +220,8 @@ def motif_epistasis(
             strategy=strategy,
             rng=rng,
         )
+        pair_reporter.update()
+    pair_reporter.close(extra=f"{len(single_cache)} unique single sites")
     single_effects = singles - R[:, None]
     paired_effects = paired - R
     epi = paired - singles[:, 0] - singles[:, 1] + R
@@ -221,9 +236,10 @@ def motif_epistasis(
     )
 
 
-def save_epistasis_result(result: EpistasisResult, out_dir: str | Path) -> None:
+def save_epistasis_result(result: EpistasisResult, out_dir: str | Path, *, progress: bool = True) -> None:
     """Save epistasis arrays, pair table, and summary metadata."""
 
+    log_progress(f"epistasis: saving results to {out_dir}", enabled=progress)
     save_result_dir(
         out_dir,
         arrays={
@@ -241,3 +257,4 @@ def save_epistasis_result(result: EpistasisResult, out_dir: str | Path) -> None:
             "n_pairs": len(result.pairs),
         },
     )
+    log_progress("epistasis: done", enabled=progress)

@@ -13,6 +13,7 @@ from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_w
 from transcriptml.interpret.epistasis import motif_epistasis, save_epistasis_result
 from transcriptml.interpret.ism import compute_ism, save_ism_result
 from transcriptml.interpret.predictor import Predictor
+from transcriptml.progress import log_progress
 from transcriptml.training.evaluation import evaluate_checkpoint
 from transcriptml.training.trainer import train_from_config
 
@@ -188,10 +189,13 @@ def main(argv: list[str] | None = None) -> None:
             device=args.device,
         )
         metrics = {k: v for k, v in result.items() if k not in {"predictions", "targets", "indices"}}
+        log_progress(f"evaluate: writing summary to {Path(args.out_csv).with_suffix('.summary.json')}")
         Path(args.out_csv).with_suffix(".summary.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         return
 
+    log_progress(f"{args.command}: loading dataset {args.dataset}")
     bundle = load_bundle(args.dataset)
+    log_progress(f"{args.command}: loading checkpoint {args.checkpoint}")
     predictor = Predictor.from_checkpoint(args.checkpoint, device=args.device, batch_size=args.batch_size)
     if args.command == "ism":
         result = compute_ism(bundle.X, predictor, mutation_batch_size=args.mutation_batch_size)

@@ -8,6 +8,7 @@ import numpy as np
 
 from transcriptml.data.encoding import infer_valid_lengths
 from transcriptml.interpret.predictor import Predictor
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 @dataclass
@@ -23,6 +24,7 @@ def compute_ism(
     *,
     valid_lengths: np.ndarray | None = None,
     mutation_batch_size: int = 512,
+    progress: bool = True,
 ) -> ISMResult:
     """Single-nucleotide ISM with signed mutant-minus-reference effects.
 
@@ -36,10 +38,12 @@ def compute_ism(
         raise ValueError(f"Expected X with shape (N, C>=4, L), got {arr.shape}")
     N, _, L = arr.shape
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
+    log_progress(f"ism: predicting {N} reference sequences", enabled=progress)
     ref = predictor.predict(arr)
     deltas = np.zeros((N, 4, L), dtype=np.float32)
     batch: list[np.ndarray] = []
     meta: list[tuple[int, int, int]] = []
+    n_mutants = 0
 
     def flush() -> None:
         """Predict and store any queued mutant sequences."""
@@ -52,6 +56,7 @@ def compute_ism(
         batch.clear()
         meta.clear()
 
+    reporter = ProgressReporter("ism: scan sequences", total=N, unit="sequences", enabled=progress)
     for i in range(N):
         seq_len = min(int(lengths[i]), L)
         for pos in range(seq_len):
@@ -67,9 +72,12 @@ def compute_ism(
                 mut[new_base, pos] = 1
                 batch.append(mut)
                 meta.append((i, new_base, pos))
+                n_mutants += 1
                 if len(batch) >= mutation_batch_size:
                     flush()
+        reporter.update()
     flush()
+    reporter.close(extra=f"{n_mutants} mutants predicted")
     return ISMResult(deltas=deltas, reference_predictions=ref.astype(np.float32), valid_lengths=lengths)
 
 
@@ -79,11 +87,12 @@ def max_abs_effect_per_position(deltas: np.ndarray) -> np.ndarray:
     return np.max(np.abs(np.asarray(deltas)), axis=1)
 
 
-def save_ism_result(result: ISMResult, out_dir: str | Path) -> None:
+def save_ism_result(result: ISMResult, out_dir: str | Path, *, progress: bool = True) -> None:
     """Save ISM result arrays and a small JSON summary."""
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    log_progress(f"ism: saving results to {out}", enabled=progress)
     np.save(out / "deltas.npy", result.deltas)
     np.save(out / "reference_predictions.npy", result.reference_predictions)
     np.save(out / "valid_lengths.npy", result.valid_lengths)
@@ -94,3 +103,4 @@ def save_ism_result(result: ISMResult, out_dir: str | Path) -> None:
         "deltas_shape": list(result.deltas.shape),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    log_progress("ism: done", enabled=progress)

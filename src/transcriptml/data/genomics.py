@@ -9,6 +9,7 @@ from typing import Iterator, Mapping, Sequence
 import numpy as np
 
 from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 _GTF_ATTR_RE = re.compile(r'\s*([^\s=;]+)\s+(?:"([^"]*)"|([^;]*))\s*;?')
@@ -258,12 +259,15 @@ def load_transcript_features(
     gtf_path: str | Path,
     *,
     transcript_ids: set[str] | Sequence[str] | None = None,
+    progress: bool = True,
 ) -> dict[str, TranscriptFeature]:
     """Load exon/CDS structures from a GTF without using pyranges."""
 
     wanted = {str(x) for x in transcript_ids} if transcript_ids is not None else None
     grouped: dict[str, _TranscriptMutable] = {}
+    reporter = ProgressReporter("parse GTF exon/CDS records", unit="records", enabled=progress)
     for rec in iter_gtf_records(gtf_path, features=("exon", "CDS")):
+        reporter.update()
         tid = rec.attributes.get("transcript_id") or rec.attributes.get("transcript")
         if not tid or (wanted is not None and tid not in wanted):
             continue
@@ -298,6 +302,7 @@ def load_transcript_features(
             cds=tuple(item.cds),
             attributes=dict(item.attrs),
         )
+    reporter.close(extra=f"{len(out)} transcripts with exons")
     return out
 
 
@@ -403,13 +408,26 @@ def extract_transcript_records(
     fasta_path: str | Path,
     *,
     transcript_ids: set[str] | Sequence[str] | None = None,
+    progress: bool = True,
 ) -> list[TranscriptRecord]:
     """Extract transcript sequences and Saluki annotation positions from GTF/FASTA."""
 
-    features = load_transcript_features(gtf_path, transcript_ids=transcript_ids)
+    features = load_transcript_features(gtf_path, transcript_ids=transcript_ids, progress=progress)
+    log_progress(f"opening FASTA {fasta_path}", enabled=progress)
     fasta = _FastaAccessor(fasta_path)
     try:
-        return [transcript_record_from_feature(feature, fasta) for feature in features.values()]
+        reporter = ProgressReporter(
+            "extract transcript records",
+            total=len(features),
+            unit="transcripts",
+            enabled=progress,
+        )
+        records = []
+        for feature in features.values():
+            records.append(transcript_record_from_feature(feature, fasta))
+            reporter.update()
+        reporter.close()
+        return records
     finally:
         fasta.close()
 
@@ -420,12 +438,14 @@ def write_saluki_memmap(
     *,
     length: int = DEFAULT_SALUKI_LENGTH,
     dtype: np.dtype | type = np.uint8,
+    progress: bool = True,
 ) -> np.memmap:
     """Encode transcript records to a Saluki ``X.npy`` file without a RAM-sized copy."""
 
     from transcriptml.data.encoding import encode_saluki_transcript
 
     X = np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=(len(records), 6, int(length)))
+    reporter = ProgressReporter("encode Saluki transcripts", total=len(records), unit="transcripts", enabled=progress)
     for i, record in enumerate(records):
         X[i] = encode_saluki_transcript(
             record.sequence,
@@ -434,5 +454,7 @@ def write_saluki_memmap(
             splice_positions=record.splice_positions,
             dtype=dtype,
         )
+        reporter.update()
     X.flush()
+    reporter.close()
     return X

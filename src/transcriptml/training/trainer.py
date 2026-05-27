@@ -17,6 +17,7 @@ from transcriptml.models.registry import build_model, normalize_model_config, sa
 from transcriptml.training.evaluation import evaluate_model, predict_to_csv
 from transcriptml.training.metrics import mse, pearson_corr
 from transcriptml.training.splits import normalize_splits, predefined_split_indices, random_split_indices
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 @dataclass
@@ -34,6 +35,7 @@ class TrainConfig:
     num_workers: int = 0
     mmap_mode: str | None = "r"
     seed: int = 123
+    progress: bool = True
     split: Mapping[str, Any] = field(
         default_factory=lambda: {"method": "random", "val_frac": 0.1, "test_frac": 0.1}
     )
@@ -158,6 +160,8 @@ def _run_loader(
     device: torch.device,
     loss_fn: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
+    progress: bool = True,
+    progress_label: str | None = None,
 ) -> dict[str, float]:
     """Run one train or evaluation pass over a loader."""
 
@@ -168,6 +172,13 @@ def _run_loader(
     losses: list[float] = []
     preds: list[np.ndarray] = []
     targets: list[np.ndarray] = []
+    reporter = ProgressReporter(
+        progress_label or ("train batches" if training else "eval batches"),
+        total=len(loader),
+        unit="batches",
+        enabled=progress,
+        percent_step=25.0,
+    )
     for xb, yb in loader:
         xb = xb.to(device)
         yb = yb.to(device).float().reshape(-1)
@@ -182,6 +193,8 @@ def _run_loader(
         losses.append(float(loss.detach().cpu().item()) * int(yb.numel()))
         preds.append(yhat.detach().cpu().numpy())
         targets.append(yb.detach().cpu().numpy())
+        reporter.update()
+    reporter.close()
     y_pred = np.concatenate(preds) if preds else np.array([])
     y_true = np.concatenate(targets) if targets else np.array([])
     return {
@@ -214,6 +227,15 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     out.mkdir(parents=True, exist_ok=True)
     splits = _make_splits(bundle, cfg)
     model_config = normalize_model_config(cfg.model)
+    log_progress(
+        (
+            "training: "
+            f"device={device}, output={out}, "
+            f"train={len(splits.get('train', []))}, val={len(splits.get('val', []))}, "
+            f"test={len(splits.get('test', []))}"
+        ),
+        enabled=cfg.progress,
+    )
     model = build_model(model_config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
     loss_fn = nn.MSELoss()
@@ -240,8 +262,25 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     best_epoch = -1
     stale = 0
     for epoch in range(1, cfg.epochs + 1):
-        train_metrics = _run_loader(model, train_loader, device=device, loss_fn=loss_fn, optimizer=optimizer)
-        val_metrics = _run_loader(model, val_loader, device=device, loss_fn=loss_fn, optimizer=None)
+        log_progress(f"epoch {epoch}/{cfg.epochs}: starting", enabled=cfg.progress)
+        train_metrics = _run_loader(
+            model,
+            train_loader,
+            device=device,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            progress=cfg.progress,
+            progress_label=f"epoch {epoch} train",
+        )
+        val_metrics = _run_loader(
+            model,
+            val_loader,
+            device=device,
+            loss_fn=loss_fn,
+            optimizer=None,
+            progress=cfg.progress,
+            progress_label=f"epoch {epoch} val",
+        )
         row = {
             "epoch": epoch,
             "train_loss": train_metrics["loss"],
@@ -275,16 +314,28 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             optimizer_state=optimizer.state_dict(),
             extra={"splits": splits, "train_config": asdict(cfg)},
         )
+        log_progress(
+            (
+                f"epoch {epoch}/{cfg.epochs}: "
+                f"train_loss={row['train_loss']:.6g}, train_pearson={row['train_pearson']:.4g}, "
+                f"val_loss={row['val_loss']:.6g}, val_pearson={row['val_pearson']:.4g}, "
+                f"best_{cfg.monitor}={best_value}"
+            ),
+            enabled=cfg.progress,
+        )
         if cfg.patience >= 0 and stale > cfg.patience:
+            log_progress(f"early stopping after epoch {epoch}: patience exceeded", enabled=cfg.progress)
             break
     (out / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     (out / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
+    log_progress("training: evaluating test split", enabled=cfg.progress)
     test_result = evaluate_model(
         model,
         bundle,
         indices=splits.get("test", []),
         batch_size=cfg.batch_size,
         device=device,
+        progress=cfg.progress,
     )
     if splits.get("test"):
         ids = [bundle.ids[int(i)] for i in test_result["indices"]]
@@ -303,12 +354,19 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "test_pearson": test_result.get("pearson"),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    log_progress(
+        f"training: done; best_epoch={best_epoch}, summary={out / 'summary.json'}",
+        enabled=cfg.progress,
+    )
     return {"model": model, "history": history, "splits": splits, "summary": summary}
 
 
-def train_from_config(config_path: str | Path) -> dict[str, Any]:
+def train_from_config(config_path: str | Path, *, progress: bool | None = None) -> dict[str, Any]:
     """Load a training config and train its requested model."""
 
     cfg = TrainConfig(**_load_config(config_path))
+    if progress is not None:
+        cfg.progress = bool(progress)
+    log_progress(f"training: loading dataset {cfg.dataset}", enabled=cfg.progress)
     bundle = load_bundle(cfg.dataset, mmap_mode=cfg.mmap_mode)
     return train_model(bundle, cfg)

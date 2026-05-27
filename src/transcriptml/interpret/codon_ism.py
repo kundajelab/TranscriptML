@@ -12,6 +12,7 @@ import torch
 from transcriptml.data.encoding import infer_valid_lengths
 from transcriptml.data.schemas import SequenceSchema, get_schema
 from transcriptml.interpret.predictor import Predictor
+from transcriptml.progress import ProgressReporter, log_progress
 
 MutationPolicy = Literal["synonymous", "synonymous-only", "all", "all-codons"]
 
@@ -550,6 +551,7 @@ def compute_codon_ism(
     collect: bool = True,
     sequence_indices: Sequence[int] | None = None,
     device: str | torch.device = "cpu",
+    progress: bool = True,
 ) -> CodonISMResult:
     """Run codon-level ISM and return mutant-minus-reference effects.
 
@@ -592,6 +594,7 @@ def compute_codon_ism(
         raise ValueError("sequence_indices contains indices outside X")
 
     X_ref = arr if sequence_indices is None else arr[analysis_indices]
+    log_progress(f"codon-ism: predicting {analysis_indices.shape[0]} reference sequences", enabled=progress)
     reference_predictions = _predict(predictor, X_ref, batch_size=reference_batch_size)
     if reference_predictions.shape[0] != analysis_indices.shape[0]:
         raise ValueError("predictor must return one scalar prediction per input sequence")
@@ -608,6 +611,14 @@ def compute_codon_ism(
     collected_rows: list[CodonMutation] = []
     mutant_batch: list[np.ndarray] = []
     pending: list[_PendingMutation] = []
+    sequence_reporter = ProgressReporter(
+        "codon-ism: scan sequences",
+        total=int(analysis_indices.shape[0]),
+        unit="sequences",
+        enabled=progress,
+    )
+    mutation_reporter = ProgressReporter("codon-ism: predict mutants", unit="mutations", enabled=progress)
+    n_codons = 0
 
     def emit_rows(rows: list[CodonMutation]) -> None:
         if not rows:
@@ -653,6 +664,7 @@ def compute_codon_ism(
                 key = (meta.local_index, meta.codon_start)
                 position_max_abs[key] = max(position_max_abs.get(key, 0.0), abs(float(delta)))
         emit_rows(rows)
+        mutation_reporter.update(advance=len(rows))
         mutant_batch.clear()
         pending.clear()
 
@@ -668,6 +680,7 @@ def compute_codon_ism(
                 cds_channel=cds_channel,
             )
             if cds.cds_length < 3 or cds.starts.size == 0:
+                sequence_reporter.update()
                 continue
 
             ref_pred = float(reference_predictions[local_i])
@@ -689,6 +702,7 @@ def compute_codon_ism(
                 )
                 if not alts:
                     continue
+                n_codons += 1
 
                 if compute_position_scores:
                     position_base_offsets[(local_i, start)] = ref_base_offsets
@@ -726,10 +740,13 @@ def compute_codon_ism(
                     )
                     if len(mutant_batch) >= mutation_batch_size:
                         flush_mutations()
+            sequence_reporter.update()
         flush_mutations()
     finally:
         if writer is not None:
             writer.close()
+    sequence_reporter.close(extra=f"{n_codons} codons scanned")
+    mutation_reporter.close()
 
     if position_scores is not None:
         for (local_i, start), max_abs in position_max_abs.items():
@@ -752,11 +769,13 @@ def save_codon_ism_result(
     out_dir: str | Path,
     *,
     save_mutations: bool = True,
+    progress: bool = True,
 ) -> None:
     """Save codon ISM arrays and, optionally, the in-memory mutation table."""
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    log_progress(f"codon-ism: saving results to {out}", enabled=progress)
     np.save(out / "reference_predictions.npy", result.reference_predictions)
     np.save(out / "valid_lengths.npy", result.valid_lengths)
     np.save(out / "sequence_indices.npy", result.sequence_indices)
@@ -772,3 +791,4 @@ def save_codon_ism_result(
         "has_position_scores": result.position_scores is not None,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    log_progress("codon-ism: done", enabled=progress)

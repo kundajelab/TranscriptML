@@ -11,6 +11,7 @@ from transcriptml.interpret.edits import scramble_motif_ablating_inplace
 from transcriptml.interpret.motifs import find_motif_starts, parse_motif
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ def enumerate_motif_instances(
     motif: str,
     *,
     valid_lengths: Sequence[int] | None = None,
+    progress: bool = True,
 ) -> list[MotifInstance]:
     """Find all motif instances in a batch of encoded sequences."""
 
@@ -43,6 +45,12 @@ def enumerate_motif_instances(
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
     motif_sets = parse_motif(motif)
     out: list[MotifInstance] = []
+    reporter = ProgressReporter(
+        f"motif scan '{motif}'",
+        total=int(arr.shape[0]),
+        unit="sequences",
+        enabled=progress,
+    )
     for seq_i in range(arr.shape[0]):
         valid_len = min(int(lengths[seq_i]), int(arr.shape[-1]))
         starts = find_motif_starts(arr[seq_i, :4, :valid_len], motif_sets)
@@ -57,6 +65,8 @@ def enumerate_motif_instances(
                     valid_length=valid_len,
                 )
             )
+        reporter.update()
+    reporter.close(extra=f"{len(out)} instances")
     return out
 
 
@@ -95,16 +105,24 @@ def motif_ablation(
     strategy: str = "random_different",
     seed: int = 123,
     valid_lengths: Sequence[int] | None = None,
+    progress: bool = True,
 ) -> MotifAblationResult:
     """Compute motif ablation effect ``A - R`` for each motif instance."""
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
-    instances = enumerate_motif_instances(arr, motif, valid_lengths=valid_lengths)
+    instances = enumerate_motif_instances(arr, motif, valid_lengths=valid_lengths, progress=progress)
+    log_progress(f"motif-ablation: predicting {arr.shape[0]} reference sequences", enabled=progress)
     ref_by_seq = predictor.predict(arr)
     R = np.zeros(len(instances), dtype=np.float32)
     A = np.zeros(len(instances), dtype=np.float32)
     rng = np.random.default_rng(seed)
+    reporter = ProgressReporter(
+        "motif-ablation: ablate instances",
+        total=len(instances),
+        unit="instances",
+        enabled=progress,
+    )
     for inst in instances:
         x_ref = arr[inst.seq_index]
         R[inst.instance_index] = ref_by_seq[inst.seq_index]
@@ -117,12 +135,15 @@ def motif_ablation(
             strategy=strategy,
             rng=rng,
         )
+        reporter.update()
+    reporter.close()
     return MotifAblationResult(instances=instances, reference_predictions=R, ablation_predictions=A, effects=A - R)
 
 
-def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path) -> None:
+def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path, *, progress: bool = True) -> None:
     """Save motif ablation arrays, instance table, and summary metadata."""
 
+    log_progress(f"motif-ablation: saving results to {out_dir}", enabled=progress)
     save_result_dir(
         out_dir,
         arrays={
@@ -137,3 +158,4 @@ def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path)
             "n_instances": len(result.instances),
         },
     )
+    log_progress("motif-ablation: done", enabled=progress)

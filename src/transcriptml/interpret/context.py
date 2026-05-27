@@ -11,6 +11,7 @@ from transcriptml.interpret.edits import scramble_motif_ablating_inplace, scramb
 from transcriptml.interpret.motifs import intervals_overlap, parse_motif
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 @dataclass
@@ -35,19 +36,32 @@ def motif_context_scan(
     strategy: str = "random_different",
     seed: int = 123,
     valid_lengths: Sequence[int] | None = None,
+    progress: bool = True,
 ) -> MotifContextResult:
     """Scan context windows with effect ``(MA - M) - (A - R)``."""
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
-    instances = enumerate_motif_instances(arr, motif, valid_lengths=valid_lengths)
+    instances = enumerate_motif_instances(arr, motif, valid_lengths=valid_lengths, progress=progress)
     L = int(arr.shape[-1])
     context_effects = np.zeros((len(instances), L), dtype=np.float32)
     context_mask = np.zeros((len(instances), L), dtype=np.uint8)
     R = np.zeros(len(instances), dtype=np.float32)
     A = np.zeros(len(instances), dtype=np.float32)
+    log_progress(f"motif-context: predicting {arr.shape[0]} reference sequences", enabled=progress)
     ref_by_seq = predictor.predict(arr)
     rng = np.random.default_rng(seed)
+    instance_reporter = ProgressReporter(
+        "motif-context: scan instances",
+        total=len(instances),
+        unit="instances",
+        enabled=progress,
+    )
+    window_reporter = ProgressReporter(
+        "motif-context: scan context windows",
+        unit="windows",
+        enabled=progress,
+    )
     for inst in instances:
         x_ref = arr[inst.seq_index]
         R[inst.instance_index] = ref_by_seq[inst.seq_index]
@@ -62,9 +76,11 @@ def motif_context_scan(
         )
         ablation_ref = float(A[inst.instance_index] - R[inst.instance_index])
         if window_size <= 0 or n_window_scrambles <= 0:
+            instance_reporter.update()
             continue
         max_start = int(inst.valid_length) - int(window_size)
         if max_start < 0:
+            instance_reporter.update()
             continue
         width = max(L, inst.valid_length) if context_width is None else int(context_width)
         start_min = max(0, inst.start - width)
@@ -102,6 +118,10 @@ def motif_context_scan(
                 deltas.append((MA - M) - ablation_ref)
             context_effects[inst.instance_index, w_start] = float(np.mean(deltas))
             context_mask[inst.instance_index, w_start] = 1
+            window_reporter.update()
+        instance_reporter.update()
+    window_reporter.close()
+    instance_reporter.close()
     return MotifContextResult(
         instances=instances,
         ablation_effects=A - R,
@@ -112,9 +132,10 @@ def motif_context_scan(
     )
 
 
-def save_motif_context_result(result: MotifContextResult, out_dir: str | Path) -> None:
+def save_motif_context_result(result: MotifContextResult, out_dir: str | Path, *, progress: bool = True) -> None:
     """Save motif context scan arrays, instance table, and summary metadata."""
 
+    log_progress(f"motif-context: saving results to {out_dir}", enabled=progress)
     save_result_dir(
         out_dir,
         arrays={
@@ -131,3 +152,4 @@ def save_motif_context_result(result: MotifContextResult, out_dir: str | Path) -
             "n_instances": len(result.instances),
         },
     )
+    log_progress("motif-context: done", enabled=progress)
