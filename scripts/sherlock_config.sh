@@ -1,10 +1,22 @@
 #!/bin/bash
 
-# Shared Sherlock defaults. For run-specific paths or knobs, set
-# TRANSCRIPTML_RUN_CONFIG to a separate config file instead of editing this file.
+# Shared Sherlock defaults. For a run, copy this scripts directory somewhere
+# writable, then edit the copied sherlock_config.sh and example_train_config.json.
 
 _TRANSCRIPTML_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TRANSCRIPTML_REPO="${TRANSCRIPTML_REPO:-$(cd "${_TRANSCRIPTML_SCRIPT_DIR}/.." && pwd)}"
+SCRIPT_CONFIG_DIR="${SCRIPT_CONFIG_DIR:-${_TRANSCRIPTML_SCRIPT_DIR}}"
+
+# If this copied scripts directory is outside the TranscriptML repo and the
+# package is not installed in CONDA_ENV, set this to the clean repo checkout.
+# TRANSCRIPTML_REPO="/home/users/isvock/TranscriptML"
+_TRANSCRIPTML_REPO_CANDIDATE="$(cd "${_TRANSCRIPTML_SCRIPT_DIR}/.." && pwd)"
+if [[ -z "${TRANSCRIPTML_REPO+x}" ]]; then
+  if [[ -d "${_TRANSCRIPTML_REPO_CANDIDATE}/src/transcriptml" ]]; then
+    TRANSCRIPTML_REPO="${_TRANSCRIPTML_REPO_CANDIDATE}"
+  else
+    TRANSCRIPTML_REPO=""
+  fi
+fi
 
 if [[ -n "${TRANSCRIPTML_RUN_CONFIG:-}" ]]; then
   if [[ ! -f "${TRANSCRIPTML_RUN_CONFIG}" ]]; then
@@ -42,7 +54,7 @@ INTERPRET_DATASET_DIR="${INTERPRET_DATASET_DIR:-${DATASET_DIR}}"
 # 10-fold CV settings.
 N_FOLDS="${N_FOLDS:-10}"
 CV_SEED="${CV_SEED:-42}"
-BASE_TRAIN_CONFIG="${BASE_TRAIN_CONFIG:-${TRANSCRIPTML_REPO}/scripts/example_train_config.json}"
+BASE_TRAIN_CONFIG="${BASE_TRAIN_CONFIG:-${SCRIPT_CONFIG_DIR}/example_train_config.json}"
 EVAL_SPLIT="${EVAL_SPLIT:-test}"
 
 # Runtime settings.
@@ -140,6 +152,18 @@ setup_transcriptml_env() {
   source "${SHERLOCK_CONDA_ROOT}/etc/profile.d/conda.sh"
   conda activate "${CONDA_ENV}"
 
-  cd "${TRANSCRIPTML_REPO}"
-  export PYTHONPATH="${TRANSCRIPTML_REPO}/src:${PYTHONPATH:-}"
+  if [[ -n "${TRANSCRIPTML_REPO}" ]]; then
+    if [[ ! -d "${TRANSCRIPTML_REPO}" ]]; then
+      echo "TRANSCRIPTML_REPO does not exist: ${TRANSCRIPTML_REPO}" >&2
+      return 1
+    fi
+    cd "${TRANSCRIPTML_REPO}"
+    if [[ -d "${TRANSCRIPTML_REPO}/src" ]]; then
+      export PYTHONPATH="${TRANSCRIPTML_REPO}/src:${PYTHONPATH:-}"
+    fi
+  elif ! command -v transcriptml >/dev/null 2>&1; then
+    echo "TRANSCRIPTML_REPO is unset and transcriptml is not on PATH after conda activation." >&2
+    echo "Set TRANSCRIPTML_REPO in the copied sherlock_config.sh, or install TranscriptML in ${CONDA_ENV}." >&2
+    return 1
+  fi
 }
