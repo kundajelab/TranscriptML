@@ -64,7 +64,7 @@ python -m pip install "torch==2.6.0+cu124" --index-url https://download.pytorch.
 ## Step 4: Install TranscripML
 git clone https://github.com/kundajelab/TranscriptML.git
 cd TranscriptML
-pip install -e ".[dev,genomics,arrow]
+pip install -e ".[dev,genomics,arrow]"
 ```
 
 ## Quickstart
