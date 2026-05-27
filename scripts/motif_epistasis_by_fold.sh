@@ -6,8 +6,8 @@
 #SBATCH --mem=24G
 #SBATCH --time=08:00:00
 #SBATCH -C GPU_MEM:48GB
-#SBATCH --output=%x_%A_%a.out
-#SBATCH --error=%x_%A_%a.err
+#SBATCH --output=slurm_output/%x_%A_%a.out
+#SBATCH --error=slurm_output/%x_%A_%a.err
 
 set -euo pipefail
 
