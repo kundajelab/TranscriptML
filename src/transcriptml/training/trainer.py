@@ -29,6 +29,7 @@ class TrainConfig:
     epochs: int = 20
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
+    gradient_clip_norm: float | None = 0.5
     patience: int = 5
     monitor: str | Sequence[str] = "val_loss"
     device: str = "cpu"
@@ -160,6 +161,7 @@ def _run_loader(
     device: torch.device,
     loss_fn: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
+    gradient_clip_norm: float | None = None,
     progress: bool = True,
     progress_label: str | None = None,
 ) -> dict[str, float]:
@@ -189,6 +191,8 @@ def _run_loader(
             loss = loss_fn(yhat, yb)
             if training:
                 loss.backward()
+                if gradient_clip_norm is not None and float(gradient_clip_norm) > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(gradient_clip_norm))
                 optimizer.step()
         losses.append(float(loss.detach().cpu().item()) * int(yb.numel()))
         preds.append(yhat.detach().cpu().numpy())
@@ -303,6 +307,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             device=device,
             loss_fn=loss_fn,
             optimizer=optimizer,
+            gradient_clip_norm=cfg.gradient_clip_norm,
             progress=cfg.progress,
             progress_label=f"epoch {epoch} train",
         )

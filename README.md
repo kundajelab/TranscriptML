@@ -233,6 +233,7 @@ Training is config-driven. Example `train_saluki.json`:
   "epochs": 50,
   "learning_rate": 0.001,
   "weight_decay": 0.0,
+  "gradient_clip_norm": 0.5,
   "patience": 8,
   "monitor": ["val_loss", "val_pearson"],
   "device": "auto",
@@ -241,6 +242,9 @@ Training is config-driven. Example `train_saluki.json`:
   "split": {"method": "metadata", "split_col": "split"}
 }
 ```
+
+`gradient_clip_norm` clips gradients by global norm during training. It defaults
+to `0.5`; set it to `null` or a non-positive value to disable clipping.
 
 Then run:
 

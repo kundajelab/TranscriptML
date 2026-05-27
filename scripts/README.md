@@ -97,6 +97,7 @@ Then edit the copied `scripts/example_train_config.json` for model and training 
   "batch_size": 64,
   "epochs": 10,
   "learning_rate": 0.001,
+  "gradient_clip_norm": 0.5,
   "patience": 3,
   "monitor": ["val_loss", "val_pearson"],
   "device": "auto",
