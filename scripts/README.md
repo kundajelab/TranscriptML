@@ -115,6 +115,10 @@ cd /scratch/users/isvock/transcriptml_runs/human_kdeg_saluki_exact
 sbatch scripts/build_saluki_gtf.sh
 ```
 
+Submit `sbatch` commands from the run directory that contains the copied
+`scripts/` directory. The job scripts use SLURM's submit directory to find the
+matching copied `scripts/sherlock_config.sh`.
+
 This writes the bundle under `${DATASET_DIR}`, including `X.npy`, `y.npy`, `ids.txt`, `schema.json`, and sidecar metadata.
 
 ## Train And Evaluate 10-Fold CV
