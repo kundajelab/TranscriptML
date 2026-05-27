@@ -1,23 +1,20 @@
 #!/bin/bash
 
-# Shared Sherlock defaults. For a run, copy this scripts directory somewhere
-# writable, then edit the copied sherlock_config.sh and example_train_config.json.
+# Shared Sherlock defaults.
+#
+# Normal workflow:
+#   1. Copy the full scripts/ directory to a writable run directory.
+#   2. Edit the "User settings" blocks in this copied file.
+#   3. Leave the "Internal setup" block alone unless you are changing how the
+#      scripts discover their own location.
 
+# ---------------------------------------------------------------------------
+# Internal setup: usually leave this alone.
+# ---------------------------------------------------------------------------
 _TRANSCRIPTML_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_CONFIG_DIR="${SCRIPT_CONFIG_DIR:-${_TRANSCRIPTML_SCRIPT_DIR}}"
 
-# If this copied scripts directory is outside the TranscriptML repo and the
-# package is not installed in CONDA_ENV, set this to the clean repo checkout.
-# TRANSCRIPTML_REPO="/home/users/isvock/TranscriptML"
-_TRANSCRIPTML_REPO_CANDIDATE="$(cd "${_TRANSCRIPTML_SCRIPT_DIR}/.." && pwd)"
-if [[ -z "${TRANSCRIPTML_REPO+x}" ]]; then
-  if [[ -d "${_TRANSCRIPTML_REPO_CANDIDATE}/src/transcriptml" ]]; then
-    TRANSCRIPTML_REPO="${_TRANSCRIPTML_REPO_CANDIDATE}"
-  else
-    TRANSCRIPTML_REPO=""
-  fi
-fi
-
+# Advanced option: source another shell config before applying defaults below.
 if [[ -n "${TRANSCRIPTML_RUN_CONFIG:-}" ]]; then
   if [[ ! -f "${TRANSCRIPTML_RUN_CONFIG}" ]]; then
     echo "TRANSCRIPTML_RUN_CONFIG does not exist: ${TRANSCRIPTML_RUN_CONFIG}" >&2
@@ -30,10 +27,24 @@ else
   TRANSCRIPTML_RUN_CONFIG_DIR=""
 fi
 
+# ---------------------------------------------------------------------------
+# User settings: environment and TranscriptML source.
+# ---------------------------------------------------------------------------
 CONDA_ENV="${CONDA_ENV:-transcript-ml}"
 SHERLOCK_CONDA_ROOT="${SHERLOCK_CONDA_ROOT:-${GROUP_HOME:-${HOME}}/miniconda}"
 
-# Data-processing inputs for build_saluki_gtf.sh.
+# If this copied scripts directory is outside the TranscriptML repo and the
+# package is not installed in CONDA_ENV, set TRANSCRIPTML_REPO to the clean repo
+# checkout. If scripts/ still lives inside the repo, this is auto-detected.
+TRANSCRIPTML_REPO="${TRANSCRIPTML_REPO:-}"
+_TRANSCRIPTML_REPO_CANDIDATE="$(cd "${_TRANSCRIPTML_SCRIPT_DIR}/.." && pwd)"
+if [[ -z "${TRANSCRIPTML_REPO}" && -d "${_TRANSCRIPTML_REPO_CANDIDATE}/src/transcriptml" ]]; then
+  TRANSCRIPTML_REPO="${_TRANSCRIPTML_REPO_CANDIDATE}"
+fi
+
+# ---------------------------------------------------------------------------
+# User settings: data-processing inputs for build_saluki_gtf.sh.
+# ---------------------------------------------------------------------------
 GTF="${GTF:-/path/to/annotations.gtf}"
 FASTA="${FASTA:-/path/to/genome.fa}"
 TARGETS="${TARGETS:-/path/to/targets.csv}"
@@ -43,7 +54,9 @@ SPLIT_COL="${SPLIT_COL:-}"
 METADATA_COLS="${METADATA_COLS:-}"
 SALUKI_LENGTH="${SALUKI_LENGTH:-12288}"
 
-# Main run locations.
+# ---------------------------------------------------------------------------
+# User settings: output locations.
+# ---------------------------------------------------------------------------
 RUN_NAME="${RUN_NAME:-saluki_human_example}"
 RUN_ROOT="${RUN_ROOT:-/scratch/users/${USER:-user}/TranscriptML/${RUN_NAME}}"
 DATASET_DIR="${DATASET_DIR:-${RUN_ROOT}/data/saluki}"
@@ -51,7 +64,9 @@ CV_ROOT="${CV_ROOT:-${RUN_ROOT}/cv10}"
 INTERPRET_ROOT="${INTERPRET_ROOT:-${RUN_ROOT}/interpret}"
 INTERPRET_DATASET_DIR="${INTERPRET_DATASET_DIR:-${DATASET_DIR}}"
 
-# 10-fold CV settings.
+# ---------------------------------------------------------------------------
+# User settings: CV and runtime knobs.
+# ---------------------------------------------------------------------------
 N_FOLDS="${N_FOLDS:-10}"
 CV_SEED="${CV_SEED:-42}"
 BASE_TRAIN_CONFIG="${BASE_TRAIN_CONFIG:-${SCRIPT_CONFIG_DIR}/example_train_config.json}"
@@ -62,6 +77,9 @@ PRED_BATCH_SIZE="${PRED_BATCH_SIZE:-128}"
 MUTATION_BATCH_SIZE="${MUTATION_BATCH_SIZE:-512}"
 DEVICE="${DEVICE:-cuda}"
 
+# ---------------------------------------------------------------------------
+# Internal helpers: leave these alone unless you are editing the scripts.
+# ---------------------------------------------------------------------------
 # Specs use top-level pipes as separators; pipes inside bracket alternatives are preserved.
 parse_motif_ablation_spec() {
   local spec="$1"

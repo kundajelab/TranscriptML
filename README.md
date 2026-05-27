@@ -61,11 +61,15 @@ conda activate transcript-ml
 ## Step 3: Install Torch
 python -m pip install "torch==2.6.0+cu124" --index-url https://download.pytorch.org/whl/cu124
 
-## Step 4: Install TranscripML
+## Step 4: Install TranscriptML
 git clone https://github.com/kundajelab/TranscriptML.git
 cd TranscriptML
 pip install -e ".[dev,genomics,arrow]"
 ```
+
+For SLURM jobs on Sherlock, see [scripts/README.md](scripts/README.md). It
+walks through which values to edit in `scripts/sherlock_config.sh` for a normal
+run and which internal helper code you can ignore.
 
 ## Quickstart
 

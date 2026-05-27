@@ -15,6 +15,10 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 
 ## Configure A Run
 
+All job scripts source `scripts/sherlock_config.sh` before doing work. For a
+normal run, edit the copied config values and ignore the internal helper code.
+The important knobs are paths, your conda environment, and a few run settings.
+
 From a clean TranscriptML checkout, copy the full scripts directory to a run/work directory:
 
 ```bash
@@ -26,14 +30,22 @@ cp -R "${TRANSCRIPTML_REPO}/scripts" "${RUN_WORKDIR}/scripts"
 cd "${RUN_WORKDIR}"
 ```
 
-Then edit the copied `scripts/sherlock_config.sh`:
+### What To Edit In `sherlock_config.sh`
+
+Edit the copied `scripts/sherlock_config.sh`, not the one in the clean repo.
+For the usual "clean repo in home/OAK, copied scripts in scratch" setup, set
+these values:
 
 ```bash
 # /scratch/users/isvock/transcriptml_runs/human_kdeg_saluki_exact/scripts/sherlock_config.sh
+
+# 1. TranscriptML checkout and conda environment.
+# Set TRANSCRIPTML_REPO because these copied scripts live outside the repo.
 TRANSCRIPTML_REPO="/home/users/isvock/TranscriptML"
 CONDA_ENV="transcript-ml"
 SHERLOCK_CONDA_ROOT="${GROUP_HOME:-${HOME}}/miniconda"
 
+# 2. Input files and column names for build_saluki_gtf.sh.
 GTF="/oak/stanford/groups/akundaje/refs/gencode.v44.annotation.gtf"
 FASTA="/oak/stanford/groups/akundaje/refs/GRCh38.primary_assembly.genome.fa"
 TARGETS="/scratch/users/isvock/rna_decay/targets.csv"
@@ -41,15 +53,38 @@ TARGET_ID_COL="transcript_id"
 TARGET_COL="log_kdeg"
 SPLIT_COL=""
 
+# 3. Output directories for this run.
 RUN_NAME="human_kdeg_saluki_exact"
 RUN_ROOT="/scratch/users/isvock/TranscriptML/${RUN_NAME}"
 DATASET_DIR="${RUN_ROOT}/data/saluki"
 CV_ROOT="${RUN_ROOT}/cv10"
 INTERPRET_ROOT="${RUN_ROOT}/interpret"
+
+# 4. Runtime choices.
+N_FOLDS="10"
+CV_SEED="42"
 DEVICE="cuda"
 ```
 
-When the scripts are copied outside the repo, `TRANSCRIPTML_REPO` should point to the clean TranscriptML checkout if you want jobs to use that source tree. If your conda environment already has `transcriptml` installed and on `PATH`, you can leave `TRANSCRIPTML_REPO` empty. In the original repo checkout, it is detected automatically.
+What each group means:
+
+| Variable(s) | When to change |
+| --- | --- |
+| `TRANSCRIPTML_REPO` | Set this to the clean TranscriptML checkout when the copied `scripts/` directory is outside the repo. This is the normal scratch-run case. If `transcriptml` is already installed in `CONDA_ENV`, you can leave it empty. |
+| `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Set these to the conda environment and conda install used on Sherlock. The job setup loads `gcc/10.1.0` and `openblas/0.3.10` before activating conda. |
+| `GTF`, `FASTA`, `TARGETS` | Set these to your annotation GTF, genome FASTA, and target table. |
+| `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
+| `RUN_NAME`, `RUN_ROOT` | Pick a run name and scratch/OAK location where outputs should be written. |
+| `DATASET_DIR`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
+| `N_FOLDS`, `CV_SEED`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior. |
+| `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
+| `MOTIF_ABLATION_SPECS`, `MOTIF_EPISTASIS_SPECS` | Edit only when running motif ablation or motif epistasis with a custom motif list. |
+
+You normally do not need to edit:
+
+- `_TRANSCRIPTML_SCRIPT_DIR`, `SCRIPT_CONFIG_DIR`, or `_TRANSCRIPTML_REPO_CANDIDATE`: internal path discovery for the copied scripts.
+- `TRANSCRIPTML_RUN_CONFIG`: optional advanced override file. Leave it unset for ordinary runs.
+- `parse_motif_ablation_spec`, `parse_motif_epistasis_spec`, or `setup_transcriptml_env`: helper functions used by the job scripts.
 
 Then edit the copied `scripts/example_train_config.json` for model and training hyperparameters. For example, a smaller fast pass could use:
 
