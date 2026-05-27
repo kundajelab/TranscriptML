@@ -98,7 +98,7 @@ Then edit the copied `scripts/example_train_config.json` for model and training 
   "epochs": 10,
   "learning_rate": 0.001,
   "patience": 3,
-  "monitor": "val_loss",
+  "monitor": ["val_loss", "val_pearson"],
   "device": "auto",
   "mmap_mode": "r",
   "seed": 42
@@ -106,6 +106,10 @@ Then edit the copied `scripts/example_train_config.json` for model and training 
 ```
 
 For the CV workflow, leave `dataset` and `output_dir` as placeholders in `scripts/example_train_config.json`. `train_eval_cv_fold.sh` calls `write_cv_fold_artifacts.py`, which reads the copied `scripts/example_train_config.json`, sets `dataset` to `${CV_ROOT}/foldN/dataset`, sets `output_dir` to `${CV_ROOT}/foldN/model`, and writes `${CV_ROOT}/foldN/train_config.json`. If you edit those two keys in the copied base config, the CV scripts still overwrite them in the generated fold configs. Edit them only when running `transcriptml train` directly outside this CV workflow.
+
+Training early stopping can monitor one metric or a list of metrics. With
+`"monitor": ["val_loss", "val_pearson"]`, an epoch counts as improved if the
+validation loss decreases or the validation Pearson correlation increases.
 
 ## Build The Dataset
 

@@ -4,7 +4,7 @@ import json
 import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -30,7 +30,7 @@ class TrainConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
     patience: int = 5
-    monitor: str = "val_loss"
+    monitor: str | Sequence[str] = "val_loss"
     device: str = "cpu"
     num_workers: int = 0
     mmap_mode: str | None = "r"
@@ -215,6 +215,39 @@ def _is_better(value: float, best: float | None, monitor: str) -> bool:
     return value > best
 
 
+def _monitor_names(monitor: str | Sequence[str]) -> tuple[str, ...]:
+    """Normalize one or more monitored metric names."""
+
+    if isinstance(monitor, str):
+        names = [part.strip() for part in monitor.split(",") if part.strip()]
+    else:
+        names = [str(part).strip() for part in monitor if str(part).strip()]
+    if not names:
+        raise ValueError("monitor must name at least one metric")
+    return tuple(names)
+
+
+def _format_best_metrics(best_metrics: Mapping[str, float | None]) -> str:
+    """Format monitored best values for progress output."""
+
+    return ", ".join(f"best_{name}={value}" for name, value in best_metrics.items())
+
+
+def _monitor_improved(
+    row: Mapping[str, float | int],
+    monitors: Sequence[str],
+    best_metrics: Mapping[str, float | None],
+) -> tuple[bool, dict[str, float]]:
+    """Return whether any monitored metric improved over the current best epoch."""
+
+    missing_monitors = [name for name in monitors if name not in row]
+    if missing_monitors:
+        raise ValueError(f"Unknown monitor metric(s): {', '.join(missing_monitors)}")
+    values = {name: float(row[name]) for name in monitors}
+    improved = any(_is_better(values[name], best_metrics[name], name) for name in monitors)
+    return improved, values
+
+
 def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) -> dict[str, Any]:
     """Train a model from an in-memory dataset bundle and config."""
 
@@ -258,7 +291,8 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         pin_memory=pin_memory,
     )
     history: list[dict[str, float | int]] = []
-    best_value: float | None = None
+    monitors = _monitor_names(cfg.monitor)
+    best_metrics: dict[str, float | None] = {name: None for name in monitors}
     best_epoch = -1
     stale = 0
     for epoch in range(1, cfg.epochs + 1):
@@ -289,9 +323,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             "val_pearson": val_metrics["pearson"],
         }
         history.append(row)
-        monitor_value = float(row.get(cfg.monitor, float("nan")))
-        if _is_better(monitor_value, best_value, cfg.monitor):
-            best_value = monitor_value
+        improved, monitor_values = _monitor_improved(row, monitors, best_metrics)
+        if improved:
+            best_metrics = dict(monitor_values)
             best_epoch = epoch
             stale = 0
             save_checkpoint(
@@ -319,7 +353,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
                 f"epoch {epoch}/{cfg.epochs}: "
                 f"train_loss={row['train_loss']:.6g}, train_pearson={row['train_pearson']:.4g}, "
                 f"val_loss={row['val_loss']:.6g}, val_pearson={row['val_pearson']:.4g}, "
-                f"best_{cfg.monitor}={best_value}"
+                f"{_format_best_metrics(best_metrics)}"
             ),
             enabled=cfg.progress,
         )
@@ -348,7 +382,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         )
     summary = {
         "best_epoch": best_epoch,
-        "best_monitor": best_value,
+        "monitor": list(monitors),
+        "best_monitor": best_metrics[monitors[0]] if len(monitors) == 1 else best_metrics,
+        "best_monitors": best_metrics,
         "epochs_run": len(history),
         "test_loss": test_result.get("loss"),
         "test_pearson": test_result.get("pearson"),

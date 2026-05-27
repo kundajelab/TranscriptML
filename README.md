@@ -234,7 +234,7 @@ Training is config-driven. Example `train_saluki.json`:
   "learning_rate": 0.001,
   "weight_decay": 0.0,
   "patience": 8,
-  "monitor": "val_loss",
+  "monitor": ["val_loss", "val_pearson"],
   "device": "auto",
   "num_workers": 0,
   "mmap_mode": "r",

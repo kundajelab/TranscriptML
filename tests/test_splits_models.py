@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from transcriptml.models.registry import build_model
+from transcriptml.training.trainer import _monitor_improved, _monitor_names
 from transcriptml.training.splits import predefined_split_indices, random_split_indices
 
 
@@ -23,6 +24,21 @@ def test_predefined_split_from_metadata():
     assert splits["train"] == [0]
     assert splits["val"] == [1, 3]
     assert splits["test"] == [2]
+
+
+def test_multiple_monitor_metrics_use_or_improvement():
+    monitors = _monitor_names(["val_loss", "val_pearson"])
+    best = {"val_loss": 1.0, "val_pearson": 0.5}
+
+    improved, values = _monitor_improved({"val_loss": 1.1, "val_pearson": 0.6}, monitors, best)
+    assert improved
+    assert values == {"val_loss": 1.1, "val_pearson": 0.6}
+
+    improved, _ = _monitor_improved({"val_loss": 0.9, "val_pearson": 0.4}, monitors, best)
+    assert improved
+
+    improved, _ = _monitor_improved({"val_loss": 1.1, "val_pearson": 0.4}, monitors, best)
+    assert not improved
 
 
 def test_model_registry_dummy_forward():
