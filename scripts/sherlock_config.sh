@@ -45,9 +45,9 @@ fi
 # ---------------------------------------------------------------------------
 # User settings: data-processing inputs for build_saluki_gtf.sh.
 # ---------------------------------------------------------------------------
-GTF="${GTF:-/path/to/annotations.gtf}"
-FASTA="${FASTA:-/path/to/genome.fa}"
-TARGETS="${TARGETS:-/path/to/targets.csv}"
+GTF="${GTF:-/oak/stanford/groups/akundaje/isvock/genomes/Hsap/MANE_SELECT.GRCh38.v1.4.refseq.gtf}"
+FASTA="${FASTA:-/oak/stanford/groups/akundaje/isvock/genomes/Hsap/hg38.fa}"
+TARGETS="${TARGETS:-oak/stanford/groups/akundaje/isvock/Data_RNAdegNet/RDC_TTDB/all_cells_avg_MANE.csv}}"
 TARGET_ID_COL="${TARGET_ID_COL:-transcript_id}"
 TARGET_COL="${TARGET_COL:-log_kdeg}"
 SPLIT_COL="${SPLIT_COL:-}"
@@ -57,8 +57,8 @@ SALUKI_LENGTH="${SALUKI_LENGTH:-12288}"
 # ---------------------------------------------------------------------------
 # User settings: output locations.
 # ---------------------------------------------------------------------------
-RUN_NAME="${RUN_NAME:-saluki_human_example}"
-RUN_ROOT="${RUN_ROOT:-/scratch/users/${USER:-user}/TranscriptML/${RUN_NAME}}"
+RUN_NAME="${RUN_NAME:-RDC_TTDB_All_SalukiExact}"
+RUN_ROOT="${RUN_ROOT:-/scratch/users/${USER:-user}/RNAStability/TranscriptML/${RUN_NAME}}"
 DATASET_DIR="${DATASET_DIR:-${RUN_ROOT}/data/saluki}"
 CV_ROOT="${CV_ROOT:-${RUN_ROOT}/cv10}"
 INTERPRET_ROOT="${INTERPRET_ROOT:-${RUN_ROOT}/interpret}"
@@ -76,9 +76,9 @@ EVAL_SPLIT="${EVAL_SPLIT:-test}"
 PRED_BATCH_SIZE="${PRED_BATCH_SIZE:-128}"
 MUTATION_BATCH_SIZE="${MUTATION_BATCH_SIZE:-512}"
 DEVICE="${DEVICE:-cuda}"
-if [[ -z "${MOTIF_REGION+x}" ]]; then
-  MOTIF_REGION="3utr"
-fi
+
+# Set to all or transcript if you want to do full-transcript analysis
+MOTIF_REGION="${MOTIF_REGION:-3utr}"
 
 # ---------------------------------------------------------------------------
 # Internal helpers: leave these alone unless you are editing the scripts.
@@ -144,6 +144,14 @@ if ! declare -p MOTIF_ABLATION_SPECS >/dev/null 2>&1; then
     "DRACH|GGACU"
     "let7_7mer_m8|CUACCUC"
     "miR16_7mer_m8|UGCUGCU"
+    "GRE|UGUUUGUUUGU"
+    "mir19_7mer_m8|UUUGCAC"
+    "mir17_7mer_m8|GCACUUU"
+    "mir29_7mer_m8|UGGUGCU"
+    "mir15_7mer_m8|UGCUGCU"
+    "mir130_7mer_m8|UGCACUA"
+    "random_ctl1|GCGUCC"
+    "random_ctl2|CGCGA"
   )
 fi
 
@@ -153,18 +161,14 @@ if ! declare -p MOTIF_EPISTASIS_SPECS >/dev/null 2>&1; then
   MOTIF_EPISTASIS_SPECS=(
     "PRE_PRE|UGUA[A|U|C]AUA|"
     "ARE_ARE|UUAUUUAUU|"
-    "GGACU_GGACU|GGACU|"
     "PRE_ARE|UGUA[A|U|C]AUA|UUAUUUAUU"
-    "PRE_GGACU|UGUA[A|U|C]AUA|GGACU"
-    "ARE_GGACU|UUAUUUAUU|GGACU"
-    "let7_miR16|CUACCUC|UGCUGCU"
   )
 fi
 
 N_SCRAMBLES="${N_SCRAMBLES:-10}"
 MOTIF_STRATEGY="${MOTIF_STRATEGY:-random_different}"
 MOTIF_SEED="${MOTIF_SEED:-123}"
-MAX_EPISTASIS_PAIRS="${MAX_EPISTASIS_PAIRS:-5000}"
+MAX_EPISTASIS_PAIRS="${MAX_EPISTASIS_PAIRS:-10000}"
 
 setup_transcriptml_env() {
   module load gcc/10.1.0
