@@ -18,13 +18,13 @@ setup_transcriptml_env
 for FOLD in $(seq 0 $((N_FOLDS - 1))); do
   CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
   for spec in "${MOTIF_EPISTASIS_SPECS[@]}"; do
-    IFS="|" read -r LABEL MOTIF MOTIF2 <<< "${spec}"
+    parse_motif_epistasis_spec "${spec}"
     args=(
       epistasis
       "${CHECKPOINT}"
       "${INTERPRET_DATASET_DIR}"
-      "${INTERPRET_ROOT}/motif_epistasis/${LABEL}/fold${FOLD}"
-      --motif "${MOTIF}"
+      "${INTERPRET_ROOT}/motif_epistasis/${MOTIF_SPEC_LABEL}/fold${FOLD}"
+      --motif "${MOTIF_SPEC_1}"
       --n-scrambles "${N_SCRAMBLES}"
       --strategy "${MOTIF_STRATEGY}"
       --seed "${MOTIF_SEED}"
@@ -32,8 +32,8 @@ for FOLD in $(seq 0 $((N_FOLDS - 1))); do
       --device "${DEVICE}"
       --batch-size "${PRED_BATCH_SIZE}"
     )
-    if [[ -n "${MOTIF2}" ]]; then
-      args+=(--motif2 "${MOTIF2}")
+    if [[ -n "${MOTIF_SPEC_2}" ]]; then
+      args+=(--motif2 "${MOTIF_SPEC_2}")
     fi
     transcriptml "${args[@]}"
   done

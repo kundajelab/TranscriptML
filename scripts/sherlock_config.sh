@@ -36,11 +36,64 @@ PRED_BATCH_SIZE="${PRED_BATCH_SIZE:-128}"
 MUTATION_BATCH_SIZE="${MUTATION_BATCH_SIZE:-512}"
 DEVICE="${DEVICE:-cuda}"
 
+# Specs use top-level pipes as separators; pipes inside bracket alternatives are preserved.
+parse_motif_ablation_spec() {
+  local spec="$1"
+  MOTIF_SPEC_LABEL="${spec%%|*}"
+  MOTIF_SPEC_1="${spec#*|}"
+  MOTIF_SPEC_2=""
+  if [[ "${MOTIF_SPEC_LABEL}" == "${spec}" || -z "${MOTIF_SPEC_LABEL}" || -z "${MOTIF_SPEC_1}" ]]; then
+    echo "Invalid motif ablation spec: ${spec}" >&2
+    return 1
+  fi
+}
+
+parse_motif_epistasis_spec() {
+  local spec="$1"
+  local token=""
+  local field=0
+  local in_bracket=0
+  local char
+  local i
+  MOTIF_SPEC_LABEL=""
+  MOTIF_SPEC_1=""
+  MOTIF_SPEC_2=""
+
+  for ((i = 0; i < ${#spec}; i++)); do
+    char="${spec:i:1}"
+    if [[ "${char}" == "[" ]]; then
+      in_bracket=1
+    elif [[ "${char}" == "]" ]]; then
+      in_bracket=0
+    elif [[ "${char}" == "|" && "${in_bracket}" -eq 0 && "${field}" -lt 2 ]]; then
+      if [[ "${field}" -eq 0 ]]; then
+        MOTIF_SPEC_LABEL="${token}"
+      else
+        MOTIF_SPEC_1="${token}"
+      fi
+      token=""
+      field=$((field + 1))
+      continue
+    fi
+    token+="${char}"
+  done
+
+  if [[ "${field}" -eq 1 ]]; then
+    MOTIF_SPEC_1="${token}"
+  else
+    MOTIF_SPEC_2="${token}"
+  fi
+  if [[ -z "${MOTIF_SPEC_LABEL}" || -z "${MOTIF_SPEC_1}" ]]; then
+    echo "Invalid motif epistasis spec: ${spec}" >&2
+    return 1
+  fi
+}
+
 # Motifs used by the ablation scripts: label|motif.
 MOTIF_ABLATION_SPECS=(
-  "PRE|UGUANAUA"
+  "PRE|UGUA[A|U|C]AUA"
   "ARE_nonamer|UUAUUUAUU"
-  "GGACU|GGACU"
+  "DRACH|GGACU"
   "let7_7mer_m8|CUACCUC"
   "miR16_7mer_m8|UGCUGCU"
 )
@@ -48,11 +101,11 @@ MOTIF_ABLATION_SPECS=(
 # Motif pairs used by the epistasis scripts: label|motif1|motif2.
 # Leave motif2 empty to test pairs of the same motif.
 MOTIF_EPISTASIS_SPECS=(
-  "PRE_PRE|UGUANAUA|"
+  "PRE_PRE|UGUA[A|U|C]AUA|"
   "ARE_ARE|UUAUUUAUU|"
   "GGACU_GGACU|GGACU|"
-  "PRE_ARE|UGUANAUA|UUAUUUAUU"
-  "PRE_GGACU|UGUANAUA|GGACU"
+  "PRE_ARE|UGUA[A|U|C]AUA|UUAUUUAUU"
+  "PRE_GGACU|UGUA[A|U|C]AUA|GGACU"
   "ARE_GGACU|UUAUUUAUU|GGACU"
   "let7_miR16|CUACCUC|UGCUGCU"
 )

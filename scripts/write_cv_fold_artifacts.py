@@ -63,6 +63,7 @@ def main() -> None:
     _write_json(fold_dataset / "splits.json", splits)
 
     config = json.loads(Path(args.base_config).read_text(encoding="utf-8"))
+    # CV owns these paths; placeholders or user edits in the base config are ignored here.
     config["dataset"] = str(fold_dataset)
     config["output_dir"] = str(model_dir)
     config["seed"] = int(config.get("seed", args.seed)) + int(args.fold)

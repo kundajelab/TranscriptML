@@ -5,7 +5,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 ## Files
 
 - `sherlock_config.sh`: one place to set paths, conda environment, fold count, motifs, and runtime knobs.
-- `example_train_config.json`: base TranscriptML training config used by the CV scripts. The CV script replaces `dataset` and `output_dir` for each fold.
+- `example_train_config.json`: base TranscriptML training config used by the CV scripts. The CV script always replaces `dataset` and `output_dir` in each generated fold config.
 - `build_saluki_gtf.sh`: builds a Saluki-style dataset bundle with `transcriptml build-saluki-gtf`.
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one job per fold.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
@@ -41,8 +41,8 @@ Then edit `scripts/example_train_config.json` for model and training hyperparame
 
 ```json
 {
-  "dataset": "REPLACED_BY_CV_SCRIPT",
-  "output_dir": "REPLACED_BY_CV_SCRIPT",
+  "dataset": "CV_SCRIPT_OVERWRITES_THIS_FROM_DATASET_DIR",
+  "output_dir": "CV_SCRIPT_OVERWRITES_THIS_PER_FOLD",
   "model": {"name": "saluki_exact", "params": {"seq_depth": 6, "filters": 32}},
   "batch_size": 64,
   "epochs": 10,
@@ -54,6 +54,8 @@ Then edit `scripts/example_train_config.json` for model and training hyperparame
   "seed": 42
 }
 ```
+
+For the CV workflow, leave `dataset` and `output_dir` as placeholders in `example_train_config.json`. `train_eval_cv_fold.sh` calls `write_cv_fold_artifacts.py`, which reads this base config, sets `dataset` to `${CV_ROOT}/foldN/dataset`, sets `output_dir` to `${CV_ROOT}/foldN/model`, and writes `${CV_ROOT}/foldN/train_config.json`. If you edit those two keys in the base config, the CV scripts still overwrite them in the generated fold configs. Edit them only when running `transcriptml train` directly outside this CV workflow.
 
 ## Build The Dataset
 
@@ -120,7 +122,7 @@ Outputs go to `${INTERPRET_ROOT}/codon_ism/fold*/`.
 
 ## Run Motif Ablations
 
-The default motif list in `sherlock_config.sh` includes PRE, ARE-nonamer, GGACU, a let-7 7mer-m8 target site, and a miR-16 7mer-m8 target site.
+The default motif list in `sherlock_config.sh` includes PRE (`UGUA[A|U|C]AUA`), ARE-nonamer, GGACU, a let-7 7mer-m8 target site, and a miR-16 7mer-m8 target site.
 
 To run one SLURM job per fold:
 
@@ -160,7 +162,7 @@ Change the ablation motif list in `sherlock_config.sh`:
 
 ```bash
 MOTIF_ABLATION_SPECS=(
-  "PRE|UGUANAUA"
+  "PRE|UGUA[A|U|C]AUA"
   "ARE_nonamer|UUAUUUAUU"
   "GGACU|GGACU"
   "let7_7mer_m8|CUACCUC"
@@ -172,9 +174,9 @@ Change epistasis pairs:
 
 ```bash
 MOTIF_EPISTASIS_SPECS=(
-  "PRE_ARE|UGUANAUA|UUAUUUAUU"
-  "PRE_PRE|UGUANAUA|"
+  "PRE_ARE|UGUA[A|U|C]AUA|UUAUUUAUU"
+  "PRE_PRE|UGUA[A|U|C]AUA|"
 )
 ```
 
-The motif syntax supports `A/C/G/U/T`, `N` wildcards, and bracket alternatives like `UGUA[A|U|C]AUA`.
+The motif syntax supports `A/C/G/U/T`, `N` wildcards, and bracket alternatives like `UGUA[A|U|C]AUA`. In motif specs, top-level `|` characters separate fields; `|` characters inside bracket alternatives stay part of the motif.
