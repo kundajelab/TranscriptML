@@ -78,6 +78,7 @@ What each group means:
 | `DATASET_DIR`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
 | `N_FOLDS`, `CV_SEED`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
+| `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
 | `MOTIF_ABLATION_SPECS`, `MOTIF_EPISTASIS_SPECS` | Edit only when running motif ablation or motif epistasis with a custom motif list. |
 
 You normally do not need to edit:
@@ -175,7 +176,7 @@ Outputs go to `${INTERPRET_ROOT}/codon_ism/fold*/`.
 
 ## Run Motif Ablations
 
-The default motif list in `sherlock_config.sh` includes PRE (`UGUA[A|U|C]AUA`), ARE-nonamer, GGACU, a let-7 7mer-m8 target site, and a miR-16 7mer-m8 target site.
+The default motif list in `sherlock_config.sh` includes PRE (`UGUA[A|U|C]AUA`), ARE-nonamer, GGACU, a let-7 7mer-m8 target site, and a miR-16 7mer-m8 target site. Sherlock motif jobs default to `MOTIF_REGION="3utr"`, so only motif instances fully inside the 3-prime UTR are analyzed. Set `MOTIF_REGION=""`, `5utr`, or `cds` in the copied `sherlock_config.sh` to change this.
 
 To run one SLURM job per fold:
 
@@ -191,9 +192,23 @@ sbatch scripts/motif_ablation_all_folds.sh
 
 Outputs go to `${INTERPRET_ROOT}/motif_ablation/<motif_label>/fold*/`.
 
+To make one box-and-points summary plot per fold after motif ablations finish,
+run this in an environment with NumPy and Matplotlib:
+
+```bash
+python scripts/plot_motif_ablation_effects.py \
+  "${INTERPRET_ROOT}/motif_ablation" \
+  --out-dir "${INTERPRET_ROOT}/motif_ablation/plots" \
+  --ylim -0.45 0.45
+```
+
+The plotting script reads each
+`${INTERPRET_ROOT}/motif_ablation/<motif_label>/fold*/effects.npy` file and
+writes one figure per fold.
+
 ## Run Motif Epistasis
 
-The default motif-pair list includes same-motif pairs and PRE/ARE/GGACU cross-pairs, plus let-7/miR-16.
+The default motif-pair list includes same-motif pairs and PRE/ARE/GGACU cross-pairs, plus let-7/miR-16. Like motif ablations, Sherlock epistasis jobs use `MOTIF_REGION="3utr"` by default.
 
 To run one SLURM job per fold:
 

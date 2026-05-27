@@ -49,6 +49,19 @@ def test_motif_ablation_known_additive_effect():
     assert result.effects[0] == -2.0
 
 
+def test_motif_ablation_region_filter_skips_nonmatching_regions():
+    X = encode_saluki_transcript("AAACCCGGGAA", length=11, cds_positions=[3, 6])[None].astype(np.float32)
+    predictor = Predictor(BaseWeightModel([1, 0, 0, 0]))
+
+    utr5 = motif_ablation(X, predictor, motif="AA", n_scrambles=0, region="5utr", progress=False)
+    utr3 = motif_ablation(X, predictor, motif="AA", n_scrambles=0, region="3'UTR", progress=False)
+    cds = motif_ablation(X, predictor, motif="AA", n_scrambles=0, region="CDS", progress=False)
+
+    assert [(inst.start, inst.end, inst.region) for inst in utr5.instances] == [(0, 2, "5utr"), (1, 3, "5utr")]
+    assert [(inst.start, inst.end, inst.region) for inst in utr3.instances] == [(9, 11, "3utr")]
+    assert cds.instances == []
+
+
 def test_context_scan_additive_model_cancels_to_zero():
     X = encode_rna_sequence("AAUUAA")[None, :, :].astype(np.float32)
     predictor = Predictor(BaseWeightModel([1, 0, 0, 0]))

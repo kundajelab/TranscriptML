@@ -35,6 +35,7 @@ for FOLD in $(seq 0 $((N_FOLDS - 1))); do
       --n-scrambles "${N_SCRAMBLES}"
       --strategy "${MOTIF_STRATEGY}"
       --seed "${MOTIF_SEED}"
+      --region "${MOTIF_REGION}"
       --max-pairs "${MAX_EPISTASIS_PAIRS}"
       --device "${DEVICE}"
       --batch-size "${PRED_BATCH_SIZE}"

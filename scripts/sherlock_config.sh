@@ -76,6 +76,9 @@ EVAL_SPLIT="${EVAL_SPLIT:-test}"
 PRED_BATCH_SIZE="${PRED_BATCH_SIZE:-128}"
 MUTATION_BATCH_SIZE="${MUTATION_BATCH_SIZE:-512}"
 DEVICE="${DEVICE:-cuda}"
+if [[ -z "${MOTIF_REGION+x}" ]]; then
+  MOTIF_REGION="3utr"
+fi
 
 # ---------------------------------------------------------------------------
 # Internal helpers: leave these alone unless you are editing the scripts.

@@ -94,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--batch-size", type=int, default=128)
         if name not in {"ism", "codon-ism"}:
             p.add_argument("--motif", required=True)
+            if name in {"motif-ablation", "epistasis"}:
+                p.add_argument(
+                    "--region",
+                    help="Optional region filter for motif sites: 5utr, cds, or 3utr",
+                )
             p.add_argument("--n-scrambles", type=int, default=10)
             p.add_argument(
                 "--strategy",
@@ -234,6 +239,8 @@ def main(argv: list[str] | None = None) -> None:
             n_scrambles=args.n_scrambles,
             strategy=args.strategy,
             seed=args.seed,
+            region=args.region,
+            schema=bundle.schema,
         )
         save_motif_ablation_result(result, args.out_dir)
     elif args.command == "motif-context":
@@ -260,6 +267,8 @@ def main(argv: list[str] | None = None) -> None:
             seed=args.seed,
             skip_overlaps=not args.include_overlaps,
             max_pairs=args.max_pairs,
+            region=args.region,
+            schema=bundle.schema,
         )
         save_epistasis_result(result, args.out_dir)
 

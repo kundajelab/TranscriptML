@@ -36,6 +36,7 @@ for spec in "${MOTIF_EPISTASIS_SPECS[@]}"; do
     --n-scrambles "${N_SCRAMBLES}"
     --strategy "${MOTIF_STRATEGY}"
     --seed "${MOTIF_SEED}"
+    --region "${MOTIF_REGION}"
     --max-pairs "${MAX_EPISTASIS_PAIRS}"
     --device "${DEVICE}"
     --batch-size "${PRED_BATCH_SIZE}"

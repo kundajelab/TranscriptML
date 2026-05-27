@@ -35,6 +35,7 @@ for spec in "${MOTIF_ABLATION_SPECS[@]}"; do
     --n-scrambles "${N_SCRAMBLES}" \
     --strategy "${MOTIF_STRATEGY}" \
     --seed "${MOTIF_SEED}" \
+    --region "${MOTIF_REGION}" \
     --device "${DEVICE}" \
     --batch-size "${PRED_BATCH_SIZE}"
 done

@@ -7,10 +7,12 @@ from typing import Sequence
 import numpy as np
 
 from transcriptml.data.encoding import infer_valid_lengths
+from transcriptml.data.schemas import SequenceSchema
 from transcriptml.interpret.edits import scramble_motif_ablating_inplace
 from transcriptml.interpret.motifs import find_motif_starts, parse_motif
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
+from transcriptml.interpret.codon_ism import find_cds_codon_starts
 from transcriptml.progress import ProgressReporter, log_progress
 
 
@@ -22,6 +24,7 @@ class MotifInstance:
     start: int
     end: int
     valid_length: int
+    region: str | None = None
 
 
 @dataclass
@@ -30,6 +33,65 @@ class MotifAblationResult:
     reference_predictions: np.ndarray
     ablation_predictions: np.ndarray
     effects: np.ndarray
+    region: str | None = None
+
+
+def normalize_motif_region(region: str | None) -> str | None:
+    """Normalize optional region filters for motif analyses."""
+
+    if region is None:
+        return None
+    key = str(region).strip().lower().replace("-", "").replace("_", "").replace("'", "")
+    if not key or key in {"all", "none", "full", "transcript", "wholetranscript"}:
+        return None
+    if key in {"5utr", "utr5", "fiveutr", "fiveprimeutr"}:
+        return "5utr"
+    if key in {"cds", "coding", "codingsequence"}:
+        return "cds"
+    if key in {"3utr", "utr3", "threeutr", "threeprimeutr"}:
+        return "3utr"
+    raise ValueError("region must be one of: 5utr, cds, 3utr")
+
+
+def motif_region_bounds(
+    x: np.ndarray,
+    *,
+    region: str | None,
+    valid_length: int,
+    schema: str | SequenceSchema = "saluki6",
+    cds_channel: str | int | None = None,
+) -> tuple[int, int] | None:
+    """Return half-open transcript-coordinate bounds for a requested region.
+
+    ``None`` means a requested region cannot be found because the sequence lacks
+    a CDS annotation or usable CDS channel.
+    """
+
+    normalized = normalize_motif_region(region)
+    if normalized is None:
+        return 0, int(valid_length)
+    if np.asarray(x).shape[0] < 5:
+        return None
+    try:
+        cds = find_cds_codon_starts(x, schema, valid_length=valid_length, cds_channel=cds_channel)
+    except ValueError:
+        return None
+    if cds.cds_length < 3 or cds.starts.size == 0:
+        return None
+    cds_start = max(0, int(cds.cds_start))
+    cds_end = min(int(valid_length), int(cds.cds_end) + 1)
+    if normalized == "5utr":
+        return 0, cds_start
+    if normalized == "cds":
+        return cds_start, cds_end
+    return cds_end, int(valid_length)
+
+
+def motif_site_in_region(start: int, end: int, bounds: tuple[int, int]) -> bool:
+    """Return whether a motif interval is fully inside a half-open region."""
+
+    region_start, region_end = bounds
+    return int(start) >= region_start and int(end) <= region_end
 
 
 def enumerate_motif_instances(
@@ -37,6 +99,9 @@ def enumerate_motif_instances(
     motif: str,
     *,
     valid_lengths: Sequence[int] | None = None,
+    region: str | None = None,
+    schema: str | SequenceSchema = "saluki6",
+    cds_channel: str | int | None = None,
     progress: bool = True,
 ) -> list[MotifInstance]:
     """Find all motif instances in a batch of encoded sequences."""
@@ -44,6 +109,7 @@ def enumerate_motif_instances(
     arr = np.asarray(X)
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
     motif_sets = parse_motif(motif)
+    normalized_region = normalize_motif_region(region)
     out: list[MotifInstance] = []
     reporter = ProgressReporter(
         f"motif scan '{motif}'",
@@ -53,16 +119,30 @@ def enumerate_motif_instances(
     )
     for seq_i in range(arr.shape[0]):
         valid_len = min(int(lengths[seq_i]), int(arr.shape[-1]))
+        bounds = motif_region_bounds(
+            arr[seq_i],
+            region=normalized_region,
+            valid_length=valid_len,
+            schema=schema,
+            cds_channel=cds_channel,
+        )
+        if bounds is None:
+            reporter.update()
+            continue
         starts = find_motif_starts(arr[seq_i, :4, :valid_len], motif_sets)
         for start in starts.tolist():
+            end = int(start + len(motif_sets))
+            if not motif_site_in_region(int(start), end, bounds):
+                continue
             out.append(
                 MotifInstance(
                     instance_index=len(out),
                     seq_index=int(seq_i),
                     motif=motif,
                     start=int(start),
-                    end=int(start + len(motif_sets)),
+                    end=end,
                     valid_length=valid_len,
+                    region=normalized_region,
                 )
             )
         reporter.update()
@@ -105,13 +185,25 @@ def motif_ablation(
     strategy: str = "random_different",
     seed: int = 123,
     valid_lengths: Sequence[int] | None = None,
+    region: str | None = None,
+    schema: str | SequenceSchema = "saluki6",
+    cds_channel: str | int | None = None,
     progress: bool = True,
 ) -> MotifAblationResult:
     """Compute motif ablation effect ``A - R`` for each motif instance."""
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
-    instances = enumerate_motif_instances(arr, motif, valid_lengths=valid_lengths, progress=progress)
+    normalized_region = normalize_motif_region(region)
+    instances = enumerate_motif_instances(
+        arr,
+        motif,
+        valid_lengths=valid_lengths,
+        region=normalized_region,
+        schema=schema,
+        cds_channel=cds_channel,
+        progress=progress,
+    )
     log_progress(f"motif-ablation: predicting {arr.shape[0]} reference sequences", enabled=progress)
     ref_by_seq = predictor.predict(arr)
     R = np.zeros(len(instances), dtype=np.float32)
@@ -137,7 +229,13 @@ def motif_ablation(
         )
         reporter.update()
     reporter.close()
-    return MotifAblationResult(instances=instances, reference_predictions=R, ablation_predictions=A, effects=A - R)
+    return MotifAblationResult(
+        instances=instances,
+        reference_predictions=R,
+        ablation_predictions=A,
+        effects=A - R,
+        region=normalized_region,
+    )
 
 
 def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path, *, progress: bool = True) -> None:
@@ -156,6 +254,7 @@ def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path,
             "analysis": "motif_ablation",
             "effect_definition": "A - R",
             "n_instances": len(result.instances),
+            "region": result.region,
         },
     )
     log_progress("motif-ablation: done", enabled=progress)
