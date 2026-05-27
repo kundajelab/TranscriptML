@@ -1,11 +1,11 @@
 # Sherlock Scripts
 
-These scripts are intentionally Sherlock-specific and deliberately small. For a new run, edit `sherlock_config.sh`, optionally edit `example_train_config.json`, then submit the workflow pieces you need.
+These scripts are intentionally Sherlock-specific and deliberately small. For a new run, keep this cloned repo clean, put run-specific settings in a separate config file, and pass that file with `TRANSCRIPTML_RUN_CONFIG`.
 
 ## Files
 
-- `sherlock_config.sh`: one place to set paths, conda environment, fold count, motifs, and runtime knobs.
-- `example_train_config.json`: base TranscriptML training config used by the CV scripts. The CV script always replaces `dataset` and `output_dir` in each generated fold config.
+- `sherlock_config.sh`: shared defaults plus the `TRANSCRIPTML_RUN_CONFIG` loader. Edit this only when changing the workflow defaults.
+- `example_train_config.json`: base TranscriptML training config template. Copy it into a run directory for per-run hyperparameters. The CV script always replaces `dataset` and `output_dir` in each generated fold config.
 - `build_saluki_gtf.sh`: builds a Saluki-style dataset bundle with `transcriptml build-saluki-gtf`.
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one job per fold.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
@@ -15,12 +15,22 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 
 ## Configure A Run
 
-Edit `scripts/sherlock_config.sh`:
+Create a run directory outside the repo, copy the train-config template there if you want run-specific model or training hyperparameters, and create a run config:
 
 ```bash
-TRANSCRIPTML_REPO="/home/users/isvock/TranscriptML"
+RUN_CONFIG="/scratch/users/isvock/transcriptml_runs/human_kdeg_saluki_exact/config.sh"
+mkdir -p "$(dirname "${RUN_CONFIG}")"
+cp scripts/example_train_config.json "$(dirname "${RUN_CONFIG}")/train_config.json"
+```
+
+Edit the copied `train_config.json` for model and training hyperparameters. Leave `dataset` and `output_dir` as placeholders for CV runs; they are rewritten per fold.
+
+Then create `config.sh`:
+
+```bash
+# /scratch/users/isvock/transcriptml_runs/human_kdeg_saluki_exact/config.sh
 CONDA_ENV="transcript-ml"
-SHERLOCK_CONDA_ROOT="$GROUP_HOME/miniconda"
+SHERLOCK_CONDA_ROOT="${GROUP_HOME:-${HOME}}/miniconda"
 
 GTF="/oak/stanford/groups/akundaje/refs/gencode.v44.annotation.gtf"
 FASTA="/oak/stanford/groups/akundaje/refs/GRCh38.primary_assembly.genome.fa"
@@ -35,9 +45,13 @@ DATASET_DIR="${RUN_ROOT}/data/saluki"
 CV_ROOT="${RUN_ROOT}/cv10"
 INTERPRET_ROOT="${RUN_ROOT}/interpret"
 DEVICE="cuda"
+
+BASE_TRAIN_CONFIG="${TRANSCRIPTML_RUN_CONFIG_DIR}/train_config.json"
 ```
 
-Then edit `scripts/example_train_config.json` for model and training hyperparameters. For example, to train a smaller fast pass:
+`TRANSCRIPTML_RUN_CONFIG_DIR` is set by `sherlock_config.sh` before it sources your run config, so paths can be relative to the run config file. You usually do not need to set `TRANSCRIPTML_REPO`; it defaults to the parent of `scripts/`. Set it only if these scripts are copied/symlinked somewhere unusual or if a run should use a different TranscriptML checkout.
+
+For example, the copied `train_config.json` could be a smaller fast pass:
 
 ```json
 {
@@ -55,7 +69,15 @@ Then edit `scripts/example_train_config.json` for model and training hyperparame
 }
 ```
 
-For the CV workflow, leave `dataset` and `output_dir` as placeholders in `example_train_config.json`. `train_eval_cv_fold.sh` calls `write_cv_fold_artifacts.py`, which reads this base config, sets `dataset` to `${CV_ROOT}/foldN/dataset`, sets `output_dir` to `${CV_ROOT}/foldN/model`, and writes `${CV_ROOT}/foldN/train_config.json`. If you edit those two keys in the base config, the CV scripts still overwrite them in the generated fold configs. Edit them only when running `transcriptml train` directly outside this CV workflow.
+For the CV workflow, `train_eval_cv_fold.sh` calls `write_cv_fold_artifacts.py`, which reads `BASE_TRAIN_CONFIG`, sets `dataset` to `${CV_ROOT}/foldN/dataset`, sets `output_dir` to `${CV_ROOT}/foldN/model`, and writes `${CV_ROOT}/foldN/train_config.json`. If you edit those two keys in the base config, the CV scripts still overwrite them in the generated fold configs. Edit them only when running `transcriptml train` directly outside this CV workflow.
+
+Pass the run config when launching any workflow piece:
+
+```bash
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" bash scripts/submit_train_eval_cv.sh
+```
+
+Variables inside `config.sh` can be plain shell assignments; they do not need `export` because each script sources the file itself.
 
 ## Build The Dataset
 
@@ -63,7 +85,7 @@ Submit the data processing job:
 
 ```bash
 cd /home/users/isvock/TranscriptML
-sbatch scripts/build_saluki_gtf.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" sbatch scripts/build_saluki_gtf.sh
 ```
 
 This writes the bundle under `${DATASET_DIR}`, including `X.npy`, `y.npy`, `ids.txt`, `schema.json`, and sidecar metadata.
@@ -73,7 +95,7 @@ This writes the bundle under `${DATASET_DIR}`, including `X.npy`, `y.npy`, `ids.
 Submit one training/evaluation job per fold:
 
 ```bash
-bash scripts/submit_train_eval_cv.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" bash scripts/submit_train_eval_cv.sh
 ```
 
 Each fold writes:
@@ -93,7 +115,7 @@ The fold split is deterministic from `CV_SEED`. For fold `i`, fold `i` is the te
 After CV finishes:
 
 ```bash
-bash scripts/submit_ism_by_fold.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" bash scripts/submit_ism_by_fold.sh
 ```
 
 Outputs go to:
@@ -107,7 +129,7 @@ ${INTERPRET_ROOT}/ism/fold1/
 ## Run Synonymous Codon ISM
 
 ```bash
-bash scripts/submit_codon_ism_by_fold.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" bash scripts/submit_codon_ism_by_fold.sh
 ```
 
 The script uses:
@@ -127,13 +149,13 @@ The default motif list in `sherlock_config.sh` includes PRE (`UGUA[A|U|C]AUA`), 
 To run one SLURM job per fold:
 
 ```bash
-bash scripts/submit_motif_ablation_by_fold.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" bash scripts/submit_motif_ablation_by_fold.sh
 ```
 
 To run all folds in one job:
 
 ```bash
-sbatch scripts/motif_ablation_all_folds.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" sbatch scripts/motif_ablation_all_folds.sh
 ```
 
 Outputs go to `${INTERPRET_ROOT}/motif_ablation/<motif_label>/fold*/`.
@@ -145,20 +167,20 @@ The default motif-pair list includes same-motif pairs and PRE/ARE/GGACU cross-pa
 To run one SLURM job per fold:
 
 ```bash
-bash scripts/submit_motif_epistasis_by_fold.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" bash scripts/submit_motif_epistasis_by_fold.sh
 ```
 
 To run all folds in one job:
 
 ```bash
-sbatch scripts/motif_epistasis_all_folds.sh
+TRANSCRIPTML_RUN_CONFIG="${RUN_CONFIG}" sbatch scripts/motif_epistasis_all_folds.sh
 ```
 
 Outputs go to `${INTERPRET_ROOT}/motif_epistasis/<pair_label>/fold*/`.
 
 ## Common Tweaks
 
-Change the ablation motif list in `sherlock_config.sh`:
+Override the ablation motif list in your run config:
 
 ```bash
 MOTIF_ABLATION_SPECS=(
@@ -170,7 +192,7 @@ MOTIF_ABLATION_SPECS=(
 )
 ```
 
-Change epistasis pairs:
+Override epistasis pairs in your run config:
 
 ```bash
 MOTIF_EPISTASIS_SPECS=(

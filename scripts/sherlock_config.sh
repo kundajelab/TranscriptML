@@ -1,9 +1,23 @@
 #!/bin/bash
 
-# Edit this file for each new TranscriptML dataset/model run.
+# Shared Sherlock defaults. For run-specific paths or knobs, set
+# TRANSCRIPTML_RUN_CONFIG to a separate config file instead of editing this file.
 
 _TRANSCRIPTML_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRANSCRIPTML_REPO="${TRANSCRIPTML_REPO:-$(cd "${_TRANSCRIPTML_SCRIPT_DIR}/.." && pwd)}"
+
+if [[ -n "${TRANSCRIPTML_RUN_CONFIG:-}" ]]; then
+  if [[ ! -f "${TRANSCRIPTML_RUN_CONFIG}" ]]; then
+    echo "TRANSCRIPTML_RUN_CONFIG does not exist: ${TRANSCRIPTML_RUN_CONFIG}" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+  TRANSCRIPTML_RUN_CONFIG_DIR="$(cd "$(dirname "${TRANSCRIPTML_RUN_CONFIG}")" && pwd)"
+  TRANSCRIPTML_RUN_CONFIG="${TRANSCRIPTML_RUN_CONFIG_DIR}/$(basename "${TRANSCRIPTML_RUN_CONFIG}")"
+  source "${TRANSCRIPTML_RUN_CONFIG}"
+else
+  TRANSCRIPTML_RUN_CONFIG_DIR=""
+fi
+
 CONDA_ENV="${CONDA_ENV:-transcript-ml}"
 SHERLOCK_CONDA_ROOT="${SHERLOCK_CONDA_ROOT:-${GROUP_HOME:-${HOME}}/miniconda}"
 
@@ -90,25 +104,29 @@ parse_motif_epistasis_spec() {
 }
 
 # Motifs used by the ablation scripts: label|motif.
-MOTIF_ABLATION_SPECS=(
-  "PRE|UGUA[A|U|C]AUA"
-  "ARE_nonamer|UUAUUUAUU"
-  "DRACH|GGACU"
-  "let7_7mer_m8|CUACCUC"
-  "miR16_7mer_m8|UGCUGCU"
-)
+if ! declare -p MOTIF_ABLATION_SPECS >/dev/null 2>&1; then
+  MOTIF_ABLATION_SPECS=(
+    "PRE|UGUA[A|U|C]AUA"
+    "ARE_nonamer|UUAUUUAUU"
+    "DRACH|GGACU"
+    "let7_7mer_m8|CUACCUC"
+    "miR16_7mer_m8|UGCUGCU"
+  )
+fi
 
 # Motif pairs used by the epistasis scripts: label|motif1|motif2.
 # Leave motif2 empty to test pairs of the same motif.
-MOTIF_EPISTASIS_SPECS=(
-  "PRE_PRE|UGUA[A|U|C]AUA|"
-  "ARE_ARE|UUAUUUAUU|"
-  "GGACU_GGACU|GGACU|"
-  "PRE_ARE|UGUA[A|U|C]AUA|UUAUUUAUU"
-  "PRE_GGACU|UGUA[A|U|C]AUA|GGACU"
-  "ARE_GGACU|UUAUUUAUU|GGACU"
-  "let7_miR16|CUACCUC|UGCUGCU"
-)
+if ! declare -p MOTIF_EPISTASIS_SPECS >/dev/null 2>&1; then
+  MOTIF_EPISTASIS_SPECS=(
+    "PRE_PRE|UGUA[A|U|C]AUA|"
+    "ARE_ARE|UUAUUUAUU|"
+    "GGACU_GGACU|GGACU|"
+    "PRE_ARE|UGUA[A|U|C]AUA|UUAUUUAUU"
+    "PRE_GGACU|UGUA[A|U|C]AUA|GGACU"
+    "ARE_GGACU|UUAUUUAUU|GGACU"
+    "let7_miR16|CUACCUC|UGCUGCU"
+  )
+fi
 
 N_SCRAMBLES="${N_SCRAMBLES:-10}"
 MOTIF_STRATEGY="${MOTIF_STRATEGY:-random_different}"
