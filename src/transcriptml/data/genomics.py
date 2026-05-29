@@ -85,7 +85,11 @@ class _ExonMap:
 
 class _FastaAccessor:
     def __init__(self, path: str | Path):
-        """Open a FASTA through pyfaidx or a small in-memory fallback."""
+        """Open a FASTA through pyfaidx or a small in-memory fallback.
+
+        Args:
+            path: Path to a plain or indexed FASTA file.
+        """
 
         self.path = Path(path)
         self._fa = None
@@ -106,7 +110,12 @@ class _FastaAccessor:
         return self._keys
 
     def has_chrom(self, chrom: str) -> bool:
-        """Return whether a chromosome can be resolved in the FASTA."""
+        """Return whether a chromosome can be resolved in the FASTA.
+
+        Args:
+            chrom: Chromosome or contig name to resolve, allowing common
+                ``chr``/no-``chr`` aliases.
+        """
 
         return _resolve_chrom_name(chrom, self.keys) is not None
 
@@ -117,7 +126,13 @@ class _FastaAccessor:
             self._fa.close()
 
     def fetch(self, chrom: str, start: int, end: int) -> str:
-        """Fetch an uppercase genomic interval using 0-based half-open coordinates."""
+        """Fetch an uppercase genomic interval using 0-based half-open coordinates.
+
+        Args:
+            chrom: Chromosome or contig name to fetch from.
+            start: Zero-based inclusive genomic start coordinate.
+            end: Zero-based exclusive genomic end coordinate.
+        """
 
         key = _resolve_chrom_name(chrom, self.keys)
         if key is None:
@@ -130,7 +145,11 @@ class _FastaAccessor:
 
 
 def _open_text(path: str | Path):
-    """Open plain or gzip-compressed text for reading."""
+    """Open plain or gzip-compressed text for reading.
+
+    Args:
+        path: Plain-text or ``.gz`` path to open for reading.
+    """
 
     p = Path(path)
     if p.suffix == ".gz":
@@ -139,7 +158,11 @@ def _open_text(path: str | Path):
 
 
 def _read_fasta_into_memory(path: Path) -> dict[str, str]:
-    """Read a small FASTA file into an uppercase sequence dictionary."""
+    """Read a small FASTA file into an uppercase sequence dictionary.
+
+    Args:
+        path: FASTA path small enough to load completely into memory.
+    """
 
     seqs: dict[str, list[str]] = {}
     current: str | None = None
@@ -159,7 +182,12 @@ def _read_fasta_into_memory(path: Path) -> dict[str, str]:
 
 
 def _resolve_chrom_name(chrom: str, keys: set[str]) -> str | None:
-    """Resolve exact and common ``chr``/no-``chr`` chromosome aliases."""
+    """Resolve exact and common ``chr``/no-``chr`` chromosome aliases.
+
+    Args:
+        chrom: Chromosome or contig name requested by the caller.
+        keys: Available sequence names from the FASTA.
+    """
 
     if chrom in keys:
         return chrom
@@ -179,7 +207,11 @@ def _resolve_chrom_name(chrom: str, keys: set[str]) -> str | None:
 
 
 def reverse_complement(seq: str) -> str:
-    """Return the reverse complement of a DNA sequence."""
+    """Return the reverse complement of a DNA sequence.
+
+    Args:
+        seq: DNA sequence string to reverse-complement.
+    """
 
     return str(seq).translate(_DNA_COMPLEMENT)[::-1]
 
@@ -190,6 +222,9 @@ def parse_gtf_attributes(text: str) -> dict[str, str]:
     The parser accepts canonical GTF attributes such as
     ``gene_id "G"; transcript_id "T";`` and common GFF3-style ``key=value``
     attributes found in converted files.
+
+    Args:
+        text: Raw ninth-column GTF/GFF attributes string.
     """
 
     attrs: dict[str, str] = {}
@@ -221,7 +256,12 @@ def iter_gtf_records(
     *,
     features: Sequence[str] | None = None,
 ) -> Iterator[GTFRecord]:
-    """Yield GTF feature records using 0-based half-open coordinates."""
+    """Yield GTF feature records using 0-based half-open coordinates.
+
+    Args:
+        path: GTF/GFF-like annotation file to read.
+        features: Optional feature names to keep, matched case-insensitively.
+    """
 
     keep = {f.lower() for f in features} if features is not None else None
     with _open_text(path) as handle:
@@ -261,7 +301,14 @@ def load_transcript_features(
     transcript_ids: set[str] | Sequence[str] | None = None,
     progress: bool = True,
 ) -> dict[str, TranscriptFeature]:
-    """Load exon/CDS structures from a GTF without using pyranges."""
+    """Load exon/CDS structures from a GTF without using pyranges.
+
+    Args:
+        gtf_path: GTF/GFF-like annotation file containing exon and CDS records.
+        transcript_ids: Optional transcript identifiers to retain. When
+            omitted, all transcripts with exon records are loaded.
+        progress: Whether to emit progress messages while parsing.
+    """
 
     wanted = {str(x) for x in transcript_ids} if transcript_ids is not None else None
     grouped: dict[str, _TranscriptMutable] = {}
@@ -307,7 +354,11 @@ def load_transcript_features(
 
 
 def _transcript_ordered_exons(feature: TranscriptFeature) -> list[GTFRecord]:
-    """Return exons ordered in transcript orientation."""
+    """Return exons ordered in transcript orientation.
+
+    Args:
+        feature: Transcript annotation whose exons should be ordered.
+    """
 
     if feature.strand == "+":
         return sorted(feature.exons, key=lambda r: (r.start, r.end))
@@ -317,7 +368,12 @@ def _transcript_ordered_exons(feature: TranscriptFeature) -> list[GTFRecord]:
 
 
 def _build_exon_map(feature: TranscriptFeature) -> list[_ExonMap]:
-    """Build transcript-coordinate spans for each ordered exon."""
+    """Build transcript-coordinate spans for each ordered exon.
+
+    Args:
+        feature: Transcript annotation to convert into transcript-coordinate
+            exon spans.
+    """
 
     offset = 0
     mapped: list[_ExonMap] = []
@@ -329,7 +385,12 @@ def _build_exon_map(feature: TranscriptFeature) -> list[_ExonMap]:
 
 
 def _sequence_for_feature(feature: TranscriptFeature, fasta: _FastaAccessor) -> str:
-    """Assemble a spliced transcript sequence from genomic exon intervals."""
+    """Assemble a spliced transcript sequence from genomic exon intervals.
+
+    Args:
+        feature: Transcript annotation defining exon intervals and strand.
+        fasta: FASTA accessor containing the transcript's genomic sequence.
+    """
 
     parts: list[str] = []
     for exon in _transcript_ordered_exons(feature):
@@ -344,7 +405,13 @@ def _map_interval_to_transcript(
     *,
     strand: str,
 ) -> list[tuple[int, int]]:
-    """Map a genomic interval onto transcript-coordinate intervals."""
+    """Map a genomic interval onto transcript-coordinate intervals.
+
+    Args:
+        interval: Genomic GTF record to intersect with transcript exons.
+        exon_map: Ordered exon spans in transcript coordinates.
+        strand: Transcript strand, either ``"+"`` or ``"-"``.
+    """
 
     mapped: list[tuple[int, int]] = []
     for exon in exon_map:
@@ -364,7 +431,12 @@ def _map_interval_to_transcript(
 
 
 def _cds_codon_positions(feature: TranscriptFeature, exon_map: Sequence[_ExonMap]) -> tuple[int, ...]:
-    """Return transcript-coordinate codon-start positions for CDS features."""
+    """Return transcript-coordinate codon-start positions for CDS features.
+
+    Args:
+        feature: Transcript annotation containing CDS intervals.
+        exon_map: Ordered exon spans in transcript coordinates.
+    """
 
     ranges: list[tuple[int, int]] = []
     for cds in feature.cds:
@@ -377,7 +449,12 @@ def _cds_codon_positions(feature: TranscriptFeature, exon_map: Sequence[_ExonMap
 
 
 def transcript_record_from_feature(feature: TranscriptFeature, fasta: _FastaAccessor) -> TranscriptRecord:
-    """Create a transcript sequence record from one annotated transcript feature."""
+    """Create a transcript sequence record from one annotated transcript feature.
+
+    Args:
+        feature: Transcript annotation to convert.
+        fasta: FASTA accessor containing the source genomic sequence.
+    """
 
     exon_map = _build_exon_map(feature)
     sequence = _sequence_for_feature(feature, fasta)
@@ -410,7 +487,15 @@ def extract_transcript_records(
     transcript_ids: set[str] | Sequence[str] | None = None,
     progress: bool = True,
 ) -> list[TranscriptRecord]:
-    """Extract transcript sequences and Saluki annotation positions from GTF/FASTA."""
+    """Extract transcript sequences and Saluki annotation positions from GTF/FASTA.
+
+    Args:
+        gtf_path: GTF/GFF-like annotation file containing transcript features.
+        fasta_path: Genome FASTA file used to assemble transcript sequences.
+        transcript_ids: Optional transcript identifiers to extract. When
+            omitted, all annotated transcripts with exons are extracted.
+        progress: Whether to emit progress messages while extracting records.
+    """
 
     features = load_transcript_features(gtf_path, transcript_ids=transcript_ids, progress=progress)
     log_progress(f"opening FASTA {fasta_path}", enabled=progress)
@@ -440,7 +525,15 @@ def write_saluki_memmap(
     dtype: np.dtype | type = np.uint8,
     progress: bool = True,
 ) -> np.memmap:
-    """Encode transcript records to a Saluki ``X.npy`` file without a RAM-sized copy."""
+    """Encode transcript records to a Saluki ``X.npy`` file without a RAM-sized copy.
+
+    Args:
+        path: Destination ``.npy`` file for the memory-mapped encoded array.
+        records: Transcript records to encode in order.
+        length: Fixed Saluki input length for each encoded transcript.
+        dtype: NumPy dtype for the stored encoded array.
+        progress: Whether to emit progress messages while encoding.
+    """
 
     from transcriptml.data.encoding import encode_saluki_transcript
 

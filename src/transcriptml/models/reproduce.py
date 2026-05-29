@@ -28,7 +28,11 @@ class SalukiExactConfig:
 
 
 def keras_he_normal_trunc_(tensor: torch.Tensor) -> torch.Tensor:
-    """Initialize a tensor with Keras-style truncated He normal weights."""
+    """Initialize a tensor with Keras-style truncated He normal weights.
+
+    Args:
+        tensor: Weight tensor to initialize in place.
+    """
 
     fan_in, _ = nn.init._calculate_fan_in_and_fan_out(tensor)
     std = math.sqrt(2.0 / fan_in)
@@ -36,7 +40,13 @@ def keras_he_normal_trunc_(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def shift_sequence_right(x: torch.Tensor, shift: int, pad_value: float = 0.0) -> torch.Tensor:
-    """Shift sequence channels right with left padding."""
+    """Shift sequence channels right with left padding.
+
+    Args:
+        x: Input tensor with shape ``(batch, channels, length)``.
+        shift: Non-negative number of positions to shift right.
+        pad_value: Value used for left padding.
+    """
 
     if shift == 0:
         return x
@@ -48,13 +58,21 @@ def shift_sequence_right(x: torch.Tensor, shift: int, pad_value: float = 0.0) ->
 
 class StochasticShift(nn.Module):
     def __init__(self, shift_max: int = 3):
-        """Create a random right-shift augmentation module."""
+        """Create a random right-shift augmentation module.
+
+        Args:
+            shift_max: Maximum non-negative right shift sampled during training.
+        """
 
         super().__init__()
         self.shift_max = int(shift_max)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply a random right shift during training."""
+        """Apply a random right shift during training.
+
+        Args:
+            x: Input tensor with shape ``(batch, channels, length)``.
+        """
 
         if (not self.training) or self.shift_max <= 0:
             return x
@@ -77,7 +95,19 @@ class SalukiExact(nn.Module):
         keras_bn_momentum: float = 0.90,
         bn_eps: float = 1e-3,
     ):
-        """Create the Saluki architecture reproduction."""
+        """Create the Saluki architecture reproduction.
+
+        Args:
+            seq_depth: Number of input sequence channels.
+            filters: Number of convolutional and recurrent feature channels.
+            kernel_size: Width of the convolution kernels.
+            num_layers: Number of repeated convolution/pooling blocks.
+            dropout: Dropout probability used in convolutional and dense layers.
+            augment_shift: Maximum stochastic right shift during training.
+            ln_epsilon: Epsilon used by channel layer normalization.
+            keras_bn_momentum: Keras-style batch-normalization momentum value.
+            bn_eps: Epsilon used by batch-normalization layers.
+        """
 
         super().__init__()
         self.seq_depth = int(seq_depth)
@@ -127,7 +157,12 @@ class SalukiExact(nn.Module):
         nn.init.zeros_(self.fc2.bias)
 
     def _to_bcl(self, x: torch.Tensor) -> torch.Tensor:
-        """Convert supported input layouts to ``(B, C, L)`` float tensors."""
+        """Convert supported input layouts to ``(B, C, L)`` float tensors.
+
+        Args:
+            x: Input tensor with channel dimension either second ``(B, C, L)``
+                or last ``(B, L, C)``.
+        """
 
         if x.ndim != 3:
             raise ValueError(f"Expected 3D input, got {tuple(x.shape)}")
@@ -138,7 +173,11 @@ class SalukiExact(nn.Module):
         raise ValueError(f"Expected channel depth {self.seq_depth}, got shape {tuple(x.shape)}")
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode an input sequence into the final Saluki feature vector."""
+        """Encode an input sequence into the final Saluki feature vector.
+
+        Args:
+            x: Input tensor with shape ``(B, C, L)`` or ``(B, L, C)``.
+        """
 
         z = self.shift(self._to_bcl(x))
         z = self.conv0(z)
@@ -154,7 +193,11 @@ class SalukiExact(nn.Module):
         return z[:, -1, :]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run a forward pass and return scalar predictions."""
+        """Run a forward pass and return scalar predictions.
+
+        Args:
+            x: Input tensor with shape ``(B, C, L)`` or ``(B, L, C)``.
+        """
 
         z = self.forward_features(x)
         z = self.fc1(torch.relu(self.bn1(z)))

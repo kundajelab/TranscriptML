@@ -23,7 +23,15 @@ def predict_array(
     device: str | torch.device = "cpu",
     progress: bool = True,
 ) -> np.ndarray:
-    """Predict scalar outputs for every example in an array."""
+    """Predict scalar outputs for every example in an array.
+
+    Args:
+        model: PyTorch model that returns one scalar prediction per example.
+        X: Encoded ``(N, C, L)`` input array.
+        batch_size: Number of examples to score per prediction batch.
+        device: Torch device used for model execution.
+        progress: Whether to emit progress messages while predicting.
+    """
 
     model = model.to(device)
     model.eval()
@@ -55,7 +63,17 @@ def _predict_indexed_array(
     progress: bool = True,
     progress_label: str = "predict indexed array",
 ) -> np.ndarray:
-    """Predict scalar outputs for selected array indices."""
+    """Predict scalar outputs for selected array indices.
+
+    Args:
+        model: PyTorch model that returns one scalar prediction per example.
+        X: Encoded ``(N, C, L)`` input array.
+        indices: Integer indices selecting examples from ``X``.
+        batch_size: Number of examples to score per prediction batch.
+        device: Torch device used for model execution.
+        progress: Whether to emit progress messages while predicting.
+        progress_label: Label shown in progress messages.
+    """
 
     model = model.to(device)
     model.eval()
@@ -85,7 +103,17 @@ def evaluate_model(
     device: str | torch.device = "cpu",
     progress: bool = True,
 ) -> dict[str, object]:
-    """Evaluate a model on a dataset bundle and optional subset indices."""
+    """Evaluate a model on a dataset bundle and optional subset indices.
+
+    Args:
+        model: PyTorch model that returns one scalar prediction per example.
+        bundle: Dataset bundle containing encoded inputs and optional targets.
+        indices: Optional example indices to evaluate. When omitted, all
+            examples are evaluated.
+        batch_size: Number of examples to score per prediction batch.
+        device: Torch device used for model execution.
+        progress: Whether to emit progress messages while evaluating.
+    """
 
     idx = np.arange(bundle.X.shape[0]) if indices is None else np.asarray(indices, dtype=int)
     preds = _predict_indexed_array(
@@ -118,7 +146,15 @@ def predict_to_csv(
     targets: Sequence[float] | None = None,
     indices: Sequence[int] | None = None,
 ) -> None:
-    """Write prediction rows, and optional targets, to a CSV file."""
+    """Write prediction rows, and optional targets, to a CSV file.
+
+    Args:
+        path: Destination CSV path.
+        ids: Example identifiers aligned to ``predictions``.
+        predictions: Scalar model predictions.
+        targets: Optional scalar targets aligned to ``predictions``.
+        indices: Optional original dataset indices aligned to ``predictions``.
+    """
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
@@ -145,7 +181,17 @@ def evaluate_checkpoint(
     device: str | torch.device = "cpu",
     progress: bool = True,
 ) -> dict[str, object]:
-    """Load a checkpoint and evaluate it on a dataset bundle."""
+    """Load a checkpoint and evaluate it on a dataset bundle.
+
+    Args:
+        checkpoint_path: TranscriptML checkpoint path to load.
+        dataset_path: Processed dataset bundle directory.
+        out_csv: Optional destination CSV path for predictions.
+        split: Optional named split from the dataset bundle to evaluate.
+        batch_size: Number of examples to score per prediction batch.
+        device: Torch device used for model execution.
+        progress: Whether to emit progress messages while evaluating.
+    """
 
     log_progress(f"evaluate: loading checkpoint {checkpoint_path}", enabled=progress)
     model, _ = load_checkpoint(checkpoint_path, map_location=device)

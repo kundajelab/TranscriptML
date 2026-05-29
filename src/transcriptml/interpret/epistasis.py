@@ -67,7 +67,22 @@ def _enumerate_pairs_for_sequence(
     skip_overlaps: bool,
     region_bounds: tuple[int, int] | None = None,
 ) -> list[tuple[Site, Site]]:
-    """Enumerate candidate motif-site pairs for one encoded sequence."""
+    """Enumerate candidate motif-site pairs for one encoded sequence.
+
+    Args:
+        x: Encoded ``(C, L)`` sequence with base channels first.
+        seq_index: Index of the sequence within the source batch.
+        valid_length: Valid transcript length to scan within ``x``.
+        motif: Primary motif string.
+        motif_sets: Parsed primary motif position sets.
+        motif2: Optional secondary motif string. When omitted, primary motif
+            sites are paired with each other.
+        motif2_sets: Parsed secondary motif position sets, required when
+            ``motif2`` is provided.
+        skip_overlaps: Whether to exclude overlapping site pairs.
+        region_bounds: Optional half-open transcript-coordinate bounds that
+            both sites must fall inside.
+    """
 
     starts1 = find_motif_starts(x[:4, :valid_length], motif_sets)
     len1 = len(motif_sets)
@@ -114,7 +129,18 @@ def _mean_multi_ablation_prediction(
     strategy: str,
     rng: np.random.Generator,
 ) -> float:
-    """Predict the mean response after applying multiple motif ablations."""
+    """Predict the mean response after applying multiple motif ablations.
+
+    Args:
+        x_ref: Reference encoded ``(C, L)`` sequence.
+        predictor: Predictor used to score multi-ablated sequences.
+        edits: Sequence of ``(motif_start, motif_sets)`` ablations to apply to
+            each mutant copy.
+        n_scrambles: Number of independently scrambled multi-ablations to
+            average.
+        strategy: Scrambling strategy name supported by the edits module.
+        rng: NumPy random generator used for reproducible scrambling.
+    """
 
     if n_scrambles <= 0:
         return float(predictor.predict(x_ref[None, :, :])[0])
@@ -148,7 +174,29 @@ def motif_epistasis(
     cds_channel: str | int | None = None,
     progress: bool = True,
 ) -> EpistasisResult:
-    """Compute pairwise epistasis ``A12 - A1 - A2 + R``."""
+    """Compute pairwise epistasis ``A12 - A1 - A2 + R``.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch with base channels first.
+        predictor: Predictor used to score reference and ablated sequences.
+        motif: Primary motif string accepted by ``parse_motif``.
+        motif2: Optional secondary motif string. When omitted, pairs are formed
+            among sites of ``motif``.
+        n_scrambles: Number of scrambled ablations to average for each single
+            or paired ablation.
+        strategy: Scrambling strategy name supported by the edits module.
+        seed: Random seed used for ablation scrambling.
+        skip_overlaps: Whether to exclude overlapping motif-site pairs.
+        max_pairs: Optional cap on the number of pairs to score.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred from ``X``.
+        region: Optional region filter limiting motif sites to ``5utr``,
+            ``cds``, or ``3utr``.
+        schema: Sequence schema name or object used for region-aware scans.
+        cds_channel: Optional CDS channel name or integer index for region
+            filtering.
+        progress: Whether to emit progress messages while running the analysis.
+    """
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
@@ -275,7 +323,13 @@ def motif_epistasis(
 
 
 def save_epistasis_result(result: EpistasisResult, out_dir: str | Path, *, progress: bool = True) -> None:
-    """Save epistasis arrays, pair table, and summary metadata."""
+    """Save epistasis arrays, pair table, and summary metadata.
+
+    Args:
+        result: Epistasis result object to serialize.
+        out_dir: Destination directory for arrays, tables, and summary JSON.
+        progress: Whether to emit progress messages while saving.
+    """
 
     log_progress(f"epistasis: saving results to {out_dir}", enabled=progress)
     save_result_dir(

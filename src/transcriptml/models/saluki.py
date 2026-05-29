@@ -49,7 +49,21 @@ class SalukiLike(nn.Module):
         head_hidden: int = 64,
         output_dim: int = 1,
     ):
-        """Create the Saluki-inspired Conv/GRU regression model."""
+        """Create the Saluki-inspired Conv/GRU regression model.
+
+        Args:
+            in_ch: Number of input channels in Saluki-style sequence tensors.
+            base_ch: Number of convolutional feature channels.
+            kernel_size: Width of each 1D convolution kernel.
+            n_convs: Number of convolution/pooling blocks.
+            pool_size: Max-pooling factor after each convolution block.
+            dropout: Dropout probability used in encoder, GRU, and head.
+            gru_hidden: Hidden size of the GRU layer.
+            gru_layers: Number of stacked GRU layers.
+            bidirectional: Whether to use a bidirectional GRU.
+            head_hidden: Hidden dimension of the regression head.
+            output_dim: Number of output units produced by the head.
+        """
 
         super().__init__()
         if n_convs < 1:
@@ -86,7 +100,12 @@ class SalukiLike(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run a forward pass on ``(B, C, L)`` Saluki-style inputs."""
+        """Run a forward pass on ``(B, C, L)`` Saluki-style inputs.
+
+        Args:
+            x: Encoded Saluki-style batch with shape
+                ``(batch, channels, length)``.
+        """
 
         z = self.encoder(x.float()).transpose(1, 2)
         _, h_n = self.gru(z)

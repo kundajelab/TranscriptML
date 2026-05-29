@@ -37,7 +37,12 @@ class MotifAblationResult:
 
 
 def normalize_motif_region(region: str | None) -> str | None:
-    """Normalize optional region filters for motif analyses."""
+    """Normalize optional region filters for motif analyses.
+
+    Args:
+        region: Optional user-supplied region label such as ``5utr``, ``cds``,
+            ``3utr``, ``all``, or ``None``.
+    """
 
     if region is None:
         return None
@@ -65,6 +70,14 @@ def motif_region_bounds(
 
     ``None`` means a requested region cannot be found because the sequence lacks
     a CDS annotation or usable CDS channel.
+
+    Args:
+        x: Encoded ``(C, L)`` transcript array.
+        region: Optional normalized or raw region label to bound.
+        valid_length: Valid transcript length within ``x``.
+        schema: Sequence schema name or object describing channel layout.
+        cds_channel: Optional CDS channel name or integer index. When omitted,
+            the CDS channel is inferred from ``schema``.
     """
 
     normalized = normalize_motif_region(region)
@@ -88,7 +101,13 @@ def motif_region_bounds(
 
 
 def motif_site_in_region(start: int, end: int, bounds: tuple[int, int]) -> bool:
-    """Return whether a motif interval is fully inside a half-open region."""
+    """Return whether a motif interval is fully inside a half-open region.
+
+    Args:
+        start: Zero-based inclusive motif start coordinate.
+        end: Zero-based exclusive motif end coordinate.
+        bounds: Half-open region bounds as ``(start, end)``.
+    """
 
     region_start, region_end = bounds
     return int(start) >= region_start and int(end) <= region_end
@@ -104,7 +123,20 @@ def enumerate_motif_instances(
     cds_channel: str | int | None = None,
     progress: bool = True,
 ) -> list[MotifInstance]:
-    """Find all motif instances in a batch of encoded sequences."""
+    """Find all motif instances in a batch of encoded sequences.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch with base channels first.
+        motif: Motif string accepted by ``parse_motif``.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred from ``X``.
+        region: Optional region filter limiting motif sites to ``5utr``,
+            ``cds``, or ``3utr``.
+        schema: Sequence schema name or object used for region-aware scans.
+        cds_channel: Optional CDS channel name or integer index for region
+            filtering.
+        progress: Whether to emit progress messages while scanning.
+    """
 
     arr = np.asarray(X)
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
@@ -160,7 +192,17 @@ def mean_ablation_prediction(
     strategy: str,
     rng: np.random.Generator,
 ) -> float:
-    """Predict the mean response after repeated motif-scrambling ablations."""
+    """Predict the mean response after repeated motif-scrambling ablations.
+
+    Args:
+        x_ref: Reference encoded ``(C, L)`` sequence.
+        predictor: Predictor used to score scrambled sequences.
+        motif_start: Zero-based motif start position in ``x_ref``.
+        motif_sets: Parsed motif position sets from ``parse_motif``.
+        n_scrambles: Number of independently scrambled ablations to average.
+        strategy: Scrambling strategy name supported by the edits module.
+        rng: NumPy random generator used for reproducible scrambling.
+    """
 
     if n_scrambles <= 0:
         return float(predictor.predict(x_ref[None, :, :])[0])
@@ -190,7 +232,25 @@ def motif_ablation(
     cds_channel: str | int | None = None,
     progress: bool = True,
 ) -> MotifAblationResult:
-    """Compute motif ablation effect ``A - R`` for each motif instance."""
+    """Compute motif ablation effect ``A - R`` for each motif instance.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch with base channels first.
+        predictor: Predictor used to score reference and ablated sequences.
+        motif: Motif string accepted by ``parse_motif``.
+        n_scrambles: Number of scrambled ablations to average per motif
+            instance.
+        strategy: Scrambling strategy name supported by the edits module.
+        seed: Random seed used for ablation scrambling.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred from ``X``.
+        region: Optional region filter limiting motif sites to ``5utr``,
+            ``cds``, or ``3utr``.
+        schema: Sequence schema name or object used for region-aware scans.
+        cds_channel: Optional CDS channel name or integer index for region
+            filtering.
+        progress: Whether to emit progress messages while running the scan.
+    """
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
@@ -239,7 +299,13 @@ def motif_ablation(
 
 
 def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path, *, progress: bool = True) -> None:
-    """Save motif ablation arrays, instance table, and summary metadata."""
+    """Save motif ablation arrays, instance table, and summary metadata.
+
+    Args:
+        result: Motif ablation result object to serialize.
+        out_dir: Destination directory for arrays, tables, and summary JSON.
+        progress: Whether to emit progress messages while saving.
+    """
 
     log_progress(f"motif-ablation: saving results to {out_dir}", enabled=progress)
     save_result_dir(

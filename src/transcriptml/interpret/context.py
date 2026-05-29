@@ -38,7 +38,25 @@ def motif_context_scan(
     valid_lengths: Sequence[int] | None = None,
     progress: bool = True,
 ) -> MotifContextResult:
-    """Scan context windows with effect ``(MA - M) - (A - R)``."""
+    """Scan context windows with effect ``(MA - M) - (A - R)``.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch with base channels first.
+        predictor: Predictor used to score reference, motif-ablated, and
+            context-scrambled sequences.
+        motif: Motif string accepted by ``parse_motif``.
+        window_size: Width of each context window to scramble.
+        context_width: Maximum distance from the motif to scan. When ``None``,
+            the full sequence length is considered.
+        n_motif_scrambles: Number of motif ablations to average per context
+            estimate.
+        n_window_scrambles: Number of context-window scrambles to average.
+        strategy: Scrambling strategy name supported by the edits module.
+        seed: Random seed used for motif and context scrambling.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred during motif enumeration.
+        progress: Whether to emit progress messages while scanning.
+    """
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
@@ -133,7 +151,13 @@ def motif_context_scan(
 
 
 def save_motif_context_result(result: MotifContextResult, out_dir: str | Path, *, progress: bool = True) -> None:
-    """Save motif context scan arrays, instance table, and summary metadata."""
+    """Save motif context scan arrays, instance table, and summary metadata.
+
+    Args:
+        result: Motif context scan result object to serialize.
+        out_dir: Destination directory for arrays, tables, and summary JSON.
+        progress: Whether to emit progress messages while saving.
+    """
 
     log_progress(f"motif-context: saving results to {out_dir}", enabled=progress)
     save_result_dir(

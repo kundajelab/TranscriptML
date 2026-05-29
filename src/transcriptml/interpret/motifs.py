@@ -10,7 +10,12 @@ ALL_BASES: Set[int] = {0, 1, 2, 3}
 
 
 def parse_motif(motif: str) -> list[set[int]]:
-    """Parse motifs with A/C/G/U/T, bracket alternatives, and N/./X wildcards."""
+    """Parse motifs with A/C/G/U/T, bracket alternatives, and N/./X wildcards.
+
+    Args:
+        motif: Motif string containing base letters, ``[A|C]``-style
+            alternatives, or wildcard characters ``N``, ``.``, and ``X``.
+    """
 
     s = motif.strip().upper()
     out: list[set[int]] = []
@@ -52,13 +57,22 @@ def parse_motif(motif: str) -> list[set[int]]:
 
 
 def motif_length(motif: str | Sequence[Set[int]]) -> int:
-    """Return motif length after expanding motif syntax."""
+    """Return motif length after expanding motif syntax.
+
+    Args:
+        motif: Motif string or already parsed sequence of allowed-base sets.
+    """
 
     return len(parse_motif(motif)) if isinstance(motif, str) else len(motif)
 
 
 def base_indices_from_ohe(ohe_4_by_L: np.ndarray) -> np.ndarray:
-    """Return base index per position, or -1 for all-zero/ambiguous columns."""
+    """Return base index per position, or -1 for all-zero/ambiguous columns.
+
+    Args:
+        ohe_4_by_L: One-hot-like array with at least four base channels and
+            shape ``(C, L)``.
+    """
 
     arr = np.asarray(ohe_4_by_L)
     if arr.ndim != 2 or arr.shape[0] < 4:
@@ -72,7 +86,13 @@ def base_indices_from_ohe(ohe_4_by_L: np.ndarray) -> np.ndarray:
 
 
 def region_matches_motif(base_region: np.ndarray, motif_sets: Sequence[Set[int]]) -> bool:
-    """Return whether base indices match parsed motif position sets."""
+    """Return whether base indices match parsed motif position sets.
+
+    Args:
+        base_region: Base-index vector for a candidate sequence region.
+        motif_sets: Parsed motif position sets describing allowed bases at each
+            position.
+    """
 
     if len(base_region) != len(motif_sets):
         return False
@@ -83,7 +103,13 @@ def region_matches_motif(base_region: np.ndarray, motif_sets: Sequence[Set[int]]
 
 
 def find_motif_starts(ohe_4_by_L: np.ndarray, motif: str | Sequence[Set[int]]) -> np.ndarray:
-    """Find start positions where a motif matches one-hot base channels."""
+    """Find start positions where a motif matches one-hot base channels.
+
+    Args:
+        ohe_4_by_L: One-hot-like array with at least four base channels and
+            shape ``(C, L)``.
+        motif: Motif string or already parsed sequence of allowed-base sets.
+    """
 
     motif_sets = parse_motif(motif) if isinstance(motif, str) else [set(x) for x in motif]
     m = len(motif_sets)
@@ -99,6 +125,13 @@ def find_motif_starts(ohe_4_by_L: np.ndarray, motif: str | Sequence[Set[int]]) -
 
 
 def intervals_overlap(a0: int, a1: int, b0: int, b1: int) -> bool:
-    """Return whether two half-open intervals overlap."""
+    """Return whether two half-open intervals overlap.
+
+    Args:
+        a0: Zero-based inclusive start of the first interval.
+        a1: Zero-based exclusive end of the first interval.
+        b0: Zero-based inclusive start of the second interval.
+        b1: Zero-based exclusive end of the second interval.
+    """
 
     return int(a0) < int(b1) and int(b0) < int(a1)

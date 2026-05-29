@@ -35,7 +35,12 @@ class DatasetBundle:
 
 
 def _json_default(obj: Any) -> Any:
-    """Convert common NumPy and path objects to JSON-serializable values."""
+    """Convert common NumPy and path objects to JSON-serializable values.
+
+    Args:
+        obj: Object passed by ``json.dumps`` when the standard encoder cannot
+            serialize it.
+    """
 
     if isinstance(obj, np.ndarray):
         return obj.tolist()
@@ -47,7 +52,14 @@ def _json_default(obj: Any) -> Any:
 
 
 def save_bundle_metadata(bundle: DatasetBundle, out_dir: str | Path) -> None:
-    """Write dataset sidecar metadata files for an existing ``X.npy``."""
+    """Write dataset sidecar metadata files for an existing ``X.npy``.
+
+    Args:
+        bundle: Dataset bundle whose identifiers, schema, metadata, splits, and
+            config should be serialized.
+        out_dir: Directory that already contains or will sit beside the bundle
+            arrays.
+    """
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -70,7 +82,13 @@ def save_bundle_metadata(bundle: DatasetBundle, out_dir: str | Path) -> None:
 
 
 def save_bundle(bundle: DatasetBundle, out_dir: str | Path) -> None:
-    """Write a complete dataset bundle, including arrays and sidecars."""
+    """Write a complete dataset bundle, including arrays and sidecars.
+
+    Args:
+        bundle: Dataset bundle containing ``X`` and optional ``y`` arrays plus
+            sidecar metadata.
+        out_dir: Destination directory for the complete on-disk bundle.
+    """
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -81,7 +99,12 @@ def save_bundle(bundle: DatasetBundle, out_dir: str | Path) -> None:
 
 
 def load_bundle(path: str | Path, *, mmap_mode: str | None = None) -> DatasetBundle:
-    """Load a processed dataset bundle from disk."""
+    """Load a processed dataset bundle from disk.
+
+    Args:
+        path: Directory containing ``X.npy`` and TranscriptML sidecar files.
+        mmap_mode: Optional NumPy memory-map mode to pass when loading arrays.
+    """
 
     root = Path(path)
     X = np.load(root / "X.npy", mmap_mode=mmap_mode)

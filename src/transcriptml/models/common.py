@@ -8,31 +8,55 @@ class ChannelLayerNorm(nn.Module):
     """LayerNorm over channels for ``(B, C, L)`` tensors."""
 
     def __init__(self, channels: int, eps: float = 1e-5):
-        """Create channel-wise layer normalization."""
+        """Create channel-wise layer normalization.
+
+        Args:
+            channels: Number of channels in the ``(B, C, L)`` input tensor.
+            eps: Numerical epsilon passed to ``nn.LayerNorm``.
+        """
 
         super().__init__()
         self.norm = nn.LayerNorm(channels, eps=eps)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply layer normalization while preserving ``(B, C, L)`` layout."""
+        """Apply layer normalization while preserving ``(B, C, L)`` layout.
+
+        Args:
+            x: Input tensor with shape ``(batch, channels, length)``.
+        """
 
         return self.norm(x.transpose(1, 2)).transpose(1, 2)
 
 
 def dropout_or_identity(p: float) -> nn.Module:
-    """Return ``Dropout`` when ``p`` is positive, otherwise ``Identity``."""
+    """Return ``Dropout`` when ``p`` is positive, otherwise ``Identity``.
+
+    Args:
+        p: Dropout probability. Values less than or equal to zero disable
+            dropout.
+    """
 
     return nn.Dropout(float(p)) if p and p > 0 else nn.Identity()
 
 
 def dropout1d_or_identity(p: float) -> nn.Module:
-    """Return ``Dropout1d`` when ``p`` is positive, otherwise ``Identity``."""
+    """Return ``Dropout1d`` when ``p`` is positive, otherwise ``Identity``.
+
+    Args:
+        p: Dropout probability. Values less than or equal to zero disable
+            channel dropout.
+    """
 
     return nn.Dropout1d(float(p)) if p and p > 0 else nn.Identity()
 
 
 def squeeze_prediction(y: torch.Tensor) -> torch.Tensor:
-    """Normalize model output to one scalar prediction per example."""
+    """Normalize model output to one scalar prediction per example.
+
+    Args:
+        y: Model output tensor or first element of a tuple/list output, expected
+            to contain one scalar prediction per batch element.
+    """
 
     if isinstance(y, (tuple, list)):
         y = y[0]

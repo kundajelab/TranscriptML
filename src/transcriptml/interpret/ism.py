@@ -31,6 +31,16 @@ def compute_ism(
     The returned ``deltas`` array has shape ``(N, 4, L)``. At each valid base
     position, the three alternative base channels store mutant-reference
     deltas; the original-base channel remains zero.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch with at least four base
+            channels.
+        predictor: Predictor used to score reference and mutant sequences.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred from ``X``.
+        mutation_batch_size: Maximum number of mutant sequences to score in one
+            prediction batch.
+        progress: Whether to emit progress messages while scanning.
     """
 
     arr = np.asarray(X)
@@ -82,13 +92,23 @@ def compute_ism(
 
 
 def max_abs_effect_per_position(deltas: np.ndarray) -> np.ndarray:
-    """Summarize ISM effects by maximum absolute base substitution effect."""
+    """Summarize ISM effects by maximum absolute base substitution effect.
+
+    Args:
+        deltas: ISM delta array with shape ``(N, 4, L)``.
+    """
 
     return np.max(np.abs(np.asarray(deltas)), axis=1)
 
 
 def save_ism_result(result: ISMResult, out_dir: str | Path, *, progress: bool = True) -> None:
-    """Save ISM result arrays and a small JSON summary."""
+    """Save ISM result arrays and a small JSON summary.
+
+    Args:
+        result: ISM result object to serialize.
+        out_dir: Destination directory for arrays and summary JSON.
+        progress: Whether to emit progress messages while saving.
+    """
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

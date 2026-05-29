@@ -4,7 +4,13 @@ import numpy as np
 
 
 def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Compute mean squared error for flattened arrays."""
+    """Compute mean squared error for flattened arrays.
+
+    Args:
+        y_true: Ground-truth target values.
+        y_pred: Predicted target values with the same flattened shape as
+            ``y_true``.
+    """
 
     y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
@@ -14,7 +20,12 @@ def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def pearson_corr(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Compute Pearson correlation, returning NaN when undefined."""
+    """Compute Pearson correlation, returning NaN when undefined.
+
+    Args:
+        y_true: Ground-truth target values.
+        y_pred: Predicted target values to compare with ``y_true``.
+    """
 
     y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)

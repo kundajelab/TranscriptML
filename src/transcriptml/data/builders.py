@@ -15,7 +15,13 @@ from transcriptml.progress import ProgressReporter, log_progress
 
 
 def _infer_delimiter(path: str | Path, delimiter: str | None) -> str:
-    """Return the explicit delimiter or infer CSV/TSV from the filename."""
+    """Return the explicit delimiter or infer CSV/TSV from the filename.
+
+    Args:
+        path: Source table path whose suffix is used for delimiter inference.
+        delimiter: Explicit delimiter to use, or ``None`` to infer from
+            ``path``.
+    """
 
     if delimiter is not None:
         return delimiter
@@ -23,7 +29,13 @@ def _infer_delimiter(path: str | Path, delimiter: str | None) -> str:
 
 
 def _read_rows(path: str | Path, *, delimiter: str | None = None) -> list[dict[str, str]]:
-    """Read a delimited table into dictionaries keyed by header names."""
+    """Read a delimited table into dictionaries keyed by header names.
+
+    Args:
+        path: CSV/TSV-like table with a header row.
+        delimiter: Optional delimiter override. When ``None``, the delimiter is
+            inferred from ``path``.
+    """
 
     delim = _infer_delimiter(path, delimiter)
     with Path(path).open("r", newline="", encoding="utf-8") as handle:
@@ -34,14 +46,26 @@ def _read_rows(path: str | Path, *, delimiter: str | None = None) -> list[dict[s
 
 
 def _metadata_for_row(row: Mapping[str, str], exclude: set[str], metadata_cols: Sequence[str] | None) -> dict[str, Any]:
-    """Select metadata fields from a source row."""
+    """Select metadata fields from a source row.
+
+    Args:
+        row: Source table row keyed by column name.
+        exclude: Column names that should not be copied into metadata when
+            ``metadata_cols`` is not provided.
+        metadata_cols: Optional explicit column names to keep as metadata.
+    """
 
     cols = metadata_cols if metadata_cols is not None else [c for c in row if c not in exclude]
     return {c: row.get(c) for c in cols if c in row}
 
 
 def _parse_positions(value: str | None) -> list[int]:
-    """Parse transcript-coordinate positions from JSON or delimiter-separated text."""
+    """Parse transcript-coordinate positions from JSON or delimiter-separated text.
+
+    Args:
+        value: Optional string containing positions as a JSON list or comma,
+            semicolon, or pipe-separated integers.
+    """
 
     if value is None:
         return []
@@ -57,7 +81,12 @@ def _parse_positions(value: str | None) -> list[int]:
 
 
 def _dedupe_target_rows(rows: Sequence[Mapping[str, str]], id_col: str) -> dict[str, Mapping[str, str]]:
-    """Index target rows by transcript id and reject duplicate ids."""
+    """Index target rows by transcript id and reject duplicate ids.
+
+    Args:
+        rows: Target table rows keyed by column name.
+        id_col: Column containing the transcript identifier for each row.
+    """
 
     out: dict[str, Mapping[str, str]] = {}
     for row in rows:
@@ -69,7 +98,13 @@ def _dedupe_target_rows(rows: Sequence[Mapping[str, str]], id_col: str) -> dict[
 
 
 def _splits_from_rows(rows: Sequence[Mapping[str, str]], split_col: str | None) -> dict[str, list[int]] | None:
-    """Build train/validation/test index lists from a table split column."""
+    """Build train/validation/test index lists from a table split column.
+
+    Args:
+        rows: Source rows whose order defines dataset indices.
+        split_col: Optional column containing split labels such as ``train``,
+            ``val``, ``valid``, ``validation``, or ``test``.
+    """
 
     if split_col is None:
         return None
@@ -99,7 +134,24 @@ def build_mpra_dataset(
     delimiter: str | None = None,
     progress: bool = True,
 ) -> DatasetBundle:
-    """Build an RNA4 MPRA dataset from a delimited table."""
+    """Build an RNA4 MPRA dataset from a delimited table.
+
+    Args:
+        table_path: Input CSV/TSV-like table containing sequences and optional
+            targets.
+        out_dir: Directory where the processed dataset bundle is written.
+        sequence_col: Column containing RNA or DNA sequence strings.
+        target_col: Optional column containing scalar regression targets.
+        id_col: Optional column containing stable example identifiers. Row
+            indices are used when omitted.
+        length: Fixed encoded sequence length. When ``None``, the longest input
+            sequence length is used.
+        metadata_cols: Optional columns to copy into bundle metadata. When
+            omitted, non-sequence, non-target, and non-id columns are kept.
+        split_col: Optional column with train/validation/test split labels.
+        delimiter: Optional table delimiter override.
+        progress: Whether to emit progress messages while building the bundle.
+    """
 
     log_progress(f"build-mpra: reading {table_path}", enabled=progress)
     rows = _read_rows(table_path, delimiter=delimiter)
@@ -169,6 +221,23 @@ def build_saluki_dataset(
     transcript-coordinate annotation positions. Use
     :func:`build_saluki_dataset_from_gtf` when starting from a genome FASTA and
     transcript annotation GTF.
+
+    Args:
+        table_path: Input CSV/TSV-like table containing transcript sequences.
+        out_dir: Directory where ``X.npy`` and bundle sidecars are written.
+        sequence_col: Column containing transcript sequence strings.
+        id_col: Column containing transcript or example identifiers.
+        target_col: Optional column containing scalar regression targets.
+        cds_positions_col: Optional column containing CDS position lists in
+            transcript coordinates.
+        splice_positions_col: Optional column containing splice position lists
+            in transcript coordinates.
+        length: Fixed Saluki input length to encode for every transcript.
+        metadata_cols: Optional columns to copy into bundle metadata. When
+            omitted, non-input and non-target columns are kept.
+        split_col: Optional column with train/validation/test split labels.
+        delimiter: Optional table delimiter override.
+        progress: Whether to emit progress messages while building the bundle.
     """
 
     log_progress(f"build-saluki: reading {table_path}", enabled=progress)
@@ -247,6 +316,26 @@ def build_saluki_dataset_from_gtf(
     GTF parsing is implemented in pure Python to avoid pyranges/rtracklayer GTF
     compatibility issues. FASTA access uses ``pyfaidx`` when installed and falls
     back to a small in-memory reader for tests or tiny toy genomes.
+
+    Args:
+        gtf_path: GTF annotation file containing transcript exon and CDS
+            features.
+        fasta_path: Genome FASTA file used to assemble spliced transcript
+            sequences.
+        out_dir: Directory where ``X.npy`` and bundle sidecars are written.
+        targets_path: Optional CSV/TSV-like target table used to select
+            transcripts and provide labels or metadata.
+        target_col: Optional target-table column containing scalar regression
+            targets.
+        target_id_col: Target-table column containing transcript identifiers
+            that match GTF ``transcript_id`` attributes.
+        length: Fixed Saluki input length to encode for every transcript.
+        metadata_cols: Optional target-table columns to copy into bundle
+            metadata.
+        split_col: Optional target-table column with train/validation/test split
+            labels.
+        delimiter: Optional target-table delimiter override.
+        progress: Whether to emit progress messages while building the bundle.
     """
 
     out = Path(out_dir)

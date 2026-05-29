@@ -43,7 +43,11 @@ class TrainConfig:
 
 
 def _seed_everything(seed: int) -> None:
-    """Seed Python, NumPy, and PyTorch random number generators."""
+    """Seed Python, NumPy, and PyTorch random number generators.
+
+    Args:
+        seed: Integer seed applied across supported random number generators.
+    """
 
     random.seed(seed)
     np.random.seed(seed)
@@ -53,7 +57,11 @@ def _seed_everything(seed: int) -> None:
 
 
 def _load_config(path: str | Path) -> dict[str, Any]:
-    """Load a JSON or TOML training configuration file."""
+    """Load a JSON or TOML training configuration file.
+
+    Args:
+        path: Path to a ``.json`` or ``.toml`` config file.
+    """
 
     p = Path(path)
     if p.suffix.lower() == ".toml":
@@ -67,7 +75,11 @@ def _load_config(path: str | Path) -> dict[str, Any]:
 
 
 def _as_train_config(config: TrainConfig | Mapping[str, Any]) -> TrainConfig:
-    """Normalize mapping-like training config to ``TrainConfig``."""
+    """Normalize mapping-like training config to ``TrainConfig``.
+
+    Args:
+        config: Existing ``TrainConfig`` or mapping of constructor fields.
+    """
 
     if isinstance(config, TrainConfig):
         return config
@@ -75,7 +87,11 @@ def _as_train_config(config: TrainConfig | Mapping[str, Any]) -> TrainConfig:
 
 
 def _select_device(name: str) -> torch.device:
-    """Resolve ``auto`` or explicit torch device names."""
+    """Resolve ``auto`` or explicit torch device names.
+
+    Args:
+        name: ``"auto"`` or any string accepted by ``torch.device``.
+    """
 
     if name == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -83,7 +99,12 @@ def _select_device(name: str) -> torch.device:
 
 
 def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
-    """Choose dataset splits from the bundle or training config."""
+    """Choose dataset splits from the bundle or training config.
+
+    Args:
+        bundle: Dataset bundle that may already contain predefined splits.
+        cfg: Training configuration containing split strategy settings.
+    """
 
     if bundle.splits:
         return normalize_splits(bundle.splits)
@@ -107,7 +128,12 @@ def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]
 
 class _ArrayRegressionDataset(Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray):
-        """Wrap NumPy arrays as a PyTorch regression dataset."""
+        """Wrap NumPy arrays as a PyTorch regression dataset.
+
+        Args:
+            X: Encoded input array with examples on axis 0.
+            y: Scalar target array aligned to ``X``.
+        """
 
         self.X = X
         self.y = y
@@ -118,13 +144,22 @@ class _ArrayRegressionDataset(Dataset):
         return int(self.X.shape[0])
 
     def __getitem__(self, idx: int) -> tuple[np.ndarray, np.float32]:
-        """Return one input array and scalar target."""
+        """Return one input array and scalar target.
+
+        Args:
+            idx: Integer example index to retrieve.
+        """
 
         return np.asarray(self.X[int(idx)]), np.float32(self.y[int(idx)])
 
 
 def _collate_regression(batch: list[tuple[np.ndarray, np.float32]]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Stack NumPy regression examples into tensors."""
+    """Stack NumPy regression examples into tensors.
+
+    Args:
+        batch: List of ``(input_array, scalar_target)`` examples from the
+            dataset.
+    """
 
     xs, ys = zip(*batch)
     return torch.as_tensor(np.stack(xs, axis=0)), torch.as_tensor(np.asarray(ys, dtype=np.float32))
@@ -139,7 +174,16 @@ def _loader(
     num_workers: int = 0,
     pin_memory: bool = False,
 ) -> DataLoader | None:
-    """Create a DataLoader for a split, or ``None`` for empty splits."""
+    """Create a DataLoader for a split, or ``None`` for empty splits.
+
+    Args:
+        dataset: PyTorch dataset containing all examples.
+        indices: Example indices assigned to the split.
+        batch_size: Number of examples per batch.
+        shuffle: Whether to shuffle the split each epoch.
+        num_workers: Number of worker processes used by the DataLoader.
+        pin_memory: Whether the DataLoader should pin host memory.
+    """
 
     if not indices:
         return None
@@ -165,7 +209,19 @@ def _run_loader(
     progress: bool = True,
     progress_label: str | None = None,
 ) -> dict[str, float]:
-    """Run one train or evaluation pass over a loader."""
+    """Run one train or evaluation pass over a loader.
+
+    Args:
+        model: PyTorch model to train or evaluate.
+        loader: DataLoader for a split, or ``None`` for an empty split.
+        device: Torch device used for tensors and model execution.
+        loss_fn: Loss module used to compare predictions and targets.
+        optimizer: Optional optimizer. When provided, gradients are updated.
+        gradient_clip_norm: Optional positive norm for gradient clipping during
+            training.
+        progress: Whether to emit progress messages while iterating.
+        progress_label: Optional label shown in progress messages.
+    """
 
     if loader is None:
         return {"loss": float("nan"), "pearson": float("nan")}
@@ -208,7 +264,13 @@ def _run_loader(
 
 
 def _is_better(value: float, best: float | None, monitor: str) -> bool:
-    """Return whether a monitored metric improved."""
+    """Return whether a monitored metric improved.
+
+    Args:
+        value: Current metric value.
+        best: Previous best metric value, or ``None`` if unset.
+        monitor: Metric name used to decide whether lower or higher is better.
+    """
 
     if np.isnan(value):
         return False
@@ -220,7 +282,11 @@ def _is_better(value: float, best: float | None, monitor: str) -> bool:
 
 
 def _monitor_names(monitor: str | Sequence[str]) -> tuple[str, ...]:
-    """Normalize one or more monitored metric names."""
+    """Normalize one or more monitored metric names.
+
+    Args:
+        monitor: Comma-separated metric string or sequence of metric names.
+    """
 
     if isinstance(monitor, str):
         names = [part.strip() for part in monitor.split(",") if part.strip()]
@@ -232,7 +298,11 @@ def _monitor_names(monitor: str | Sequence[str]) -> tuple[str, ...]:
 
 
 def _format_best_metrics(best_metrics: Mapping[str, float | None]) -> str:
-    """Format monitored best values for progress output."""
+    """Format monitored best values for progress output.
+
+    Args:
+        best_metrics: Mapping from monitor names to their current best values.
+    """
 
     return ", ".join(f"best_{name}={value}" for name, value in best_metrics.items())
 
@@ -242,7 +312,13 @@ def _monitor_improved(
     monitors: Sequence[str],
     best_metrics: Mapping[str, float | None],
 ) -> tuple[bool, dict[str, float]]:
-    """Return whether any monitored metric improved over the current best epoch."""
+    """Return whether any monitored metric improved over the current best epoch.
+
+    Args:
+        row: Current epoch metrics keyed by metric name.
+        monitors: Metric names to compare against ``best_metrics``.
+        best_metrics: Previous best values for each monitored metric.
+    """
 
     missing_monitors = [name for name in monitors if name not in row]
     if missing_monitors:
@@ -253,7 +329,12 @@ def _monitor_improved(
 
 
 def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) -> dict[str, Any]:
-    """Train a model from an in-memory dataset bundle and config."""
+    """Train a model from an in-memory dataset bundle and config.
+
+    Args:
+        bundle: Dataset bundle containing encoded inputs and regression targets.
+        config: Training configuration object or mapping of config fields.
+    """
 
     cfg = _as_train_config(config)
     if bundle.y is None:
@@ -403,7 +484,12 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
 
 
 def train_from_config(config_path: str | Path, *, progress: bool | None = None) -> dict[str, Any]:
-    """Load a training config and train its requested model."""
+    """Load a training config and train its requested model.
+
+    Args:
+        config_path: Path to a JSON or TOML training configuration file.
+        progress: Optional override for whether progress messages are emitted.
+    """
 
     cfg = TrainConfig(**_load_config(config_path))
     if progress is not None:

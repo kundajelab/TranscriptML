@@ -42,7 +42,12 @@ class SequenceSchema:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "SequenceSchema":
-        """Deserialize a schema from a dictionary."""
+        """Deserialize a schema from a dictionary.
+
+        Args:
+            data: Mapping containing at least ``name`` and ``channels`` entries,
+                with optional ``base_channels`` and ``description`` entries.
+        """
 
         return cls(
             name=str(data["name"]),
@@ -70,7 +75,12 @@ SCHEMAS: Dict[str, SequenceSchema] = {s.name: s for s in (RNA4, SALUKI6)}
 
 
 def get_schema(schema: str | SequenceSchema) -> SequenceSchema:
-    """Resolve a schema name or return an existing schema object."""
+    """Resolve a schema name or return an existing schema object.
+
+    Args:
+        schema: Registered schema name or an already constructed
+            ``SequenceSchema`` instance.
+    """
 
     if isinstance(schema, SequenceSchema):
         return schema

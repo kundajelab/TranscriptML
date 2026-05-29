@@ -6,7 +6,13 @@ from typing import TextIO
 
 
 def log_progress(message: str, *, enabled: bool = True, stream: TextIO | None = None) -> None:
-    """Print a simple TranscriptML progress message."""
+    """Print a simple TranscriptML progress message.
+
+    Args:
+        message: Human-readable progress text to emit.
+        enabled: Whether to print the message.
+        stream: Optional text stream to write to. Defaults to ``sys.stderr``.
+    """
 
     if not enabled:
         return
@@ -28,6 +34,19 @@ class ProgressReporter:
         percent_step: float = 5.0,
         stream: TextIO | None = None,
     ):
+        """Create a throttled progress reporter.
+
+        Args:
+            label: Prefix label shown in each progress line.
+            total: Optional total item count used for percentage reporting.
+            unit: Human-readable unit name for counted items.
+            enabled: Whether to emit progress lines.
+            min_interval: Minimum seconds between non-forced progress lines.
+            percent_step: Percentage increment that triggers progress emission
+                when ``total`` is known.
+            stream: Optional text stream to write to. Defaults to ``sys.stderr``.
+        """
+
         self.label = label
         self.total = int(total) if total is not None else None
         self.unit = unit
@@ -46,6 +65,12 @@ class ProgressReporter:
                 self._emit(f"started (0/{self.total} {self.unit})")
 
     def _emit(self, text: str) -> None:
+        """Emit one formatted progress line.
+
+        Args:
+            text: Progress status text appended after the reporter label.
+        """
+
         self._last_emit = time.monotonic()
         print(f"[transcriptml] {self.label}: {text}", file=self.stream, flush=True)
 
@@ -57,7 +82,15 @@ class ProgressReporter:
         extra: str | None = None,
         force: bool = False,
     ) -> None:
-        """Advance progress and emit a line when enough work has accumulated."""
+        """Advance progress and emit a line when enough work has accumulated.
+
+        Args:
+            advance: Amount to add to the current count when ``current`` is not
+                supplied.
+            current: Optional absolute current count to set.
+            extra: Optional text appended to the emitted progress line.
+            force: Whether to emit a line regardless of throttling thresholds.
+        """
 
         if current is None:
             self.current += int(advance)
@@ -89,7 +122,11 @@ class ProgressReporter:
             self._emit(text)
 
     def close(self, *, extra: str | None = None) -> None:
-        """Emit a final progress line."""
+        """Emit a final progress line.
+
+        Args:
+            extra: Optional text appended to the final progress line.
+        """
 
         if not self.enabled or self._closed:
             return

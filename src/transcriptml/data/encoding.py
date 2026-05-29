@@ -21,6 +21,12 @@ def fixed_length_sequence(seq: str, length: int, *, truncate_from: str = "5prime
     ``truncate_from="5prime"`` preserves the 3-prime-most bases, matching the
     Saluki-style legacy pipeline. The returned offset is the number of original
     bases removed from the 5-prime side.
+
+    Args:
+        seq: Input nucleotide sequence. Values are coerced to ``str``.
+        length: Positive fixed output length.
+        truncate_from: Side to truncate when ``seq`` is longer than ``length``;
+            accepts ``"5prime"``/``"left"`` or ``"3prime"``/``"right"``.
     """
 
     if length <= 0:
@@ -48,6 +54,14 @@ def encode_rna_sequence(
     """Encode RNA sequence as ``(4, L)`` A/C/G/U one-hot.
 
     T is treated as U. N and all unknown symbols are encoded as all-zero columns.
+
+    Args:
+        seq: Input RNA or DNA sequence string.
+        length: Optional fixed length. When provided, the sequence is padded or
+            truncated before encoding.
+        dtype: NumPy dtype for the returned one-hot array.
+        truncate_from: Side to truncate when ``length`` is provided and ``seq``
+            is too long.
     """
 
     if length is not None:
@@ -76,7 +90,16 @@ def encode_sequences(
     dtype: np.dtype | type = np.uint8,
     truncate_from: str = "5prime",
 ) -> np.ndarray:
-    """Encode a collection of RNA sequences as ``(N, 4, L)``."""
+    """Encode a collection of RNA sequences as ``(N, 4, L)``.
+
+    Args:
+        seqs: Sequence of RNA or DNA sequence strings to encode.
+        length: Optional fixed length for every encoded sequence. When omitted,
+            the maximum input sequence length is used.
+        dtype: NumPy dtype for the returned one-hot array.
+        truncate_from: Side to truncate when fixed-length encoding shortens a
+            sequence.
+    """
 
     seqs = list(seqs)
     if length is None:
@@ -96,7 +119,15 @@ def _adjust_positions(
     length: int,
     original_length: int,
 ) -> list[int]:
-    """Shift original transcript positions into a truncated fixed-length window."""
+    """Shift original transcript positions into a truncated fixed-length window.
+
+    Args:
+        positions: Optional iterable of original transcript-coordinate
+            positions.
+        offset: Number of original bases removed from the 5-prime side.
+        length: Fixed encoded sequence length.
+        original_length: Length of the original untruncated transcript.
+    """
 
     if positions is None:
         return []
@@ -125,6 +156,15 @@ def encode_saluki_transcript(
     are truncated from the 5-prime side so the represented window is the
     3-prime-most ``length`` bases. Annotation positions are expected in original
     transcript coordinates and are shifted by the same truncation offset.
+
+    Args:
+        seq: Input transcript sequence.
+        length: Fixed Saluki input length.
+        cds_positions: Optional CDS annotation positions in original transcript
+            coordinates.
+        splice_positions: Optional splice annotation positions in original
+            transcript coordinates.
+        dtype: NumPy dtype for the returned encoded array.
     """
 
     original_len = len(str(seq))
@@ -144,6 +184,11 @@ def infer_valid_length(x: np.ndarray, *, base_channels: int | None = None) -> in
     This follows the legacy convention that N-padding is contiguous all-zero
     padding at the right edge. Unknown all-zero bases inside a valid transcript
     are allowed; they do not by themselves end the sequence.
+
+    Args:
+        x: Encoded ``(C, L)`` sequence array.
+        base_channels: Optional number of leading channels to inspect. When
+            ``None``, all channels are considered.
     """
 
     arr = np.asarray(x)
@@ -156,7 +201,13 @@ def infer_valid_length(x: np.ndarray, *, base_channels: int | None = None) -> in
 
 
 def infer_valid_lengths(X: np.ndarray, *, base_channels: int | None = None) -> np.ndarray:
-    """Infer valid sequence lengths for a batch of encoded arrays."""
+    """Infer valid sequence lengths for a batch of encoded arrays.
+
+    Args:
+        X: Encoded ``(N, C, L)`` batch array.
+        base_channels: Optional number of leading channels to inspect for each
+            sequence. When ``None``, all channels are considered.
+    """
 
     arr = np.asarray(X)
     if arr.ndim != 3:
@@ -165,7 +216,13 @@ def infer_valid_lengths(X: np.ndarray, *, base_channels: int | None = None) -> n
 
 
 def decode_rna_one_hot(x: np.ndarray, *, unknown: str = "N") -> str:
-    """Decode base channels without treating all-zero columns as A."""
+    """Decode base channels without treating all-zero columns as A.
+
+    Args:
+        x: Encoded array with at least four leading base channels and shape
+            ``(C, L)``.
+        unknown: Character to emit for ambiguous or all-zero columns.
+    """
 
     arr = np.asarray(x)
     if arr.ndim != 2 or arr.shape[0] < 4:

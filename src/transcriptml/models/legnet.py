@@ -31,14 +31,23 @@ class LegNetConfig:
 
 class SELayer(nn.Module):
     def __init__(self, inp: int, reduction: int = 4):
-        """Create a squeeze-excitation block for 1D sequence channels."""
+        """Create a squeeze-excitation block for 1D sequence channels.
+
+        Args:
+            inp: Number of input channels to reweight.
+            reduction: Channel reduction factor for the hidden excitation layer.
+        """
 
         super().__init__()
         hidden = max(1, int(inp) // int(reduction))
         self.fc = nn.Sequential(nn.Linear(inp, hidden), nn.SiLU(), nn.Linear(hidden, inp), nn.Sigmoid())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply channel reweighting to a ``(B, C, L)`` tensor."""
+        """Apply channel reweighting to a ``(B, C, L)`` tensor.
+
+        Args:
+            x: Input tensor with shape ``(batch, channels, length)``.
+        """
 
         b, c, _ = x.size()
         y = x.mean(dim=2)
@@ -48,7 +57,14 @@ class SELayer(nn.Module):
 
 class LocalBlock(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, ks: int, dropout: float = 0.0):
-        """Create a local convolution, normalization, activation, and dropout block."""
+        """Create a local convolution, normalization, activation, and dropout block.
+
+        Args:
+            in_ch: Number of input channels.
+            out_ch: Number of output channels.
+            ks: Convolution kernel size.
+            dropout: Dropout probability after activation.
+        """
 
         super().__init__()
         self.block = nn.Sequential(
@@ -59,14 +75,25 @@ class LocalBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply the local convolutional block."""
+        """Apply the local convolutional block.
+
+        Args:
+            x: Input tensor with shape ``(batch, channels, length)``.
+        """
 
         return self.block(x)
 
 
 class EffBlock(nn.Module):
     def __init__(self, in_ch: int, ks: int, resize_factor: int, dropout: float = 0.0):
-        """Create a LegNet efficient residual-style convolutional block."""
+        """Create a LegNet efficient residual-style convolutional block.
+
+        Args:
+            in_ch: Number of input and output channels for the block.
+            ks: Depthwise convolution kernel size.
+            resize_factor: Expansion factor for the internal channel dimension.
+            dropout: Dropout probability inside the block.
+        """
 
         super().__init__()
         inner = int(in_ch) * int(resize_factor)
@@ -87,20 +114,33 @@ class EffBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply the efficient block."""
+        """Apply the efficient block.
+
+        Args:
+            x: Input tensor with shape ``(batch, channels, length)``.
+        """
 
         return self.block(x)
 
 
 class ResidualConcat(nn.Module):
     def __init__(self, fn: nn.Module):
-        """Wrap a module whose output is concatenated with its input."""
+        """Wrap a module whose output is concatenated with its input.
+
+        Args:
+            fn: Module applied to the input before channel-wise concatenation.
+        """
 
         super().__init__()
         self.fn = fn
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Concatenate transformed and original channels."""
+        """Concatenate transformed and original channels.
+
+        Args:
+            x: Input tensor passed through ``fn`` and concatenated with the
+                result.
+        """
 
         return torch.cat([self.fn(x), x], dim=1)
 
@@ -122,7 +162,21 @@ class LegNet(nn.Module):
         stem_dropout: float = 0.0,
         output_dim: int = 1,
     ):
-        """Create the compact LegNet regression model."""
+        """Create the compact LegNet regression model.
+
+        Args:
+            in_ch: Number of input channels in encoded sequence tensors.
+            stem_ch: Number of channels produced by the stem block.
+            stem_ks: Kernel size for the stem convolution.
+            ef_ks: Kernel size for efficient and local blocks after the stem.
+            ef_block_sizes: Output channel sizes for successive LegNet stages.
+            pool_sizes: Pooling factors for successive LegNet stages.
+            resize_factor: Expansion factor inside efficient blocks.
+            block_dropout: Dropout probability inside convolutional blocks.
+            head_dropout: Dropout probability in the regression head.
+            stem_dropout: Dropout probability in the stem block.
+            output_dim: Number of output units produced by the head.
+        """
 
         super().__init__()
         if len(pool_sizes) != len(ef_block_sizes):
@@ -150,7 +204,11 @@ class LegNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run a forward pass on ``(B, C, L)`` encoded sequences."""
+        """Run a forward pass on ``(B, C, L)`` encoded sequences.
+
+        Args:
+            x: Encoded sequence batch with shape ``(batch, channels, length)``.
+        """
 
         z = self.stem(x.float())
         z = self.main(z)

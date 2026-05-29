@@ -92,7 +92,11 @@ class MutationTableWriter(Protocol):
     """Streaming sink for long-form codon mutation rows."""
 
     def write(self, rows: Sequence[CodonMutation]) -> None:
-        """Write a chunk of mutation rows."""
+        """Write a chunk of mutation rows.
+
+        Args:
+            rows: Sequence of long-form codon mutation records to append.
+        """
 
     def close(self) -> None:
         """Flush and close the writer."""
@@ -121,6 +125,12 @@ _ROW_FIELDS = tuple(field.name for field in fields(CodonMutation))
 
 
 def _normalise_policy(policy: str) -> Literal["synonymous", "all"]:
+    """Normalize mutation-policy aliases to internal policy names.
+
+    Args:
+        policy: User-facing mutation policy string.
+    """
+
     key = str(policy).lower().replace("_", "-")
     if key in {"synonymous", "synonymous-only", "synonymousonly"}:
         return "synonymous"
@@ -135,7 +145,14 @@ def codon_alternates(
     mutation_policy: MutationPolicy = "synonymous-only",
     include_stop_codons: bool = True,
 ) -> tuple[str, ...]:
-    """Return alternate codons for a reference codon under a mutation policy."""
+    """Return alternate codons for a reference codon under a mutation policy.
+
+    Args:
+        reference_codon: Three-base reference codon using RNA or DNA alphabet.
+        mutation_policy: Alternate-codon policy, either synonymous-only or all
+            codons.
+        include_stop_codons: Whether all-codon mode may include stop codons.
+    """
 
     ref = reference_codon.upper().replace("T", "U")
     policy = _normalise_policy(mutation_policy)
@@ -149,6 +166,12 @@ def codon_alternates(
 
 
 def _as_numpy_tensor(X: np.ndarray | torch.Tensor) -> np.ndarray:
+    """Convert supported tensor inputs to a NumPy array.
+
+    Args:
+        X: NumPy array or torch tensor to convert.
+    """
+
     if isinstance(X, torch.Tensor):
         return X.detach().cpu().numpy()
     return np.asarray(X)
@@ -160,6 +183,16 @@ def _predict(
     *,
     batch_size: int | None = None,
 ) -> np.ndarray:
+    """Run prediction through a Predictor-like object or callable.
+
+    Args:
+        predictor: Predictor-like object with ``predict`` or callable accepting
+            a NumPy batch.
+        X: Encoded batch array to score.
+        batch_size: Optional prediction batch-size hint for Predictor-like
+            objects.
+    """
+
     if hasattr(predictor, "predict"):
         try:
             pred = predictor.predict(X, batch_size=batch_size)  # type: ignore[attr-defined]
@@ -171,6 +204,14 @@ def _predict(
 
 
 def _resolve_cds_channel(schema: SequenceSchema, cds_channel: str | int | None) -> int:
+    """Resolve a CDS channel selector to an integer channel index.
+
+    Args:
+        schema: Sequence schema describing available channels.
+        cds_channel: Optional explicit CDS channel index or name. When omitted,
+            a CDS-like channel is inferred from ``schema``.
+    """
+
     if isinstance(cds_channel, int):
         if cds_channel < 0 or cds_channel >= schema.n_channels:
             raise ValueError(f"cds_channel index {cds_channel} is outside schema with {schema.n_channels} channels")
@@ -194,6 +235,13 @@ def _resolve_cds_channel(schema: SequenceSchema, cds_channel: str | int | None) 
 
 
 def _base_channels(schema: SequenceSchema) -> tuple[np.ndarray, tuple[str, ...], dict[str, int], dict[str, int]]:
+    """Resolve base-channel metadata from a sequence schema.
+
+    Args:
+        schema: Sequence schema expected to contain exactly one A, C, G, and U/T
+            base channel.
+    """
+
     channel_indices: list[int] = []
     letters: list[str] = []
     for base_name in schema.base_channels:
@@ -224,6 +272,14 @@ def find_cds_codon_starts(
     supported. The dense/sparse choice is inferred from annotation spacing,
     matching the behavior of the legacy script while keeping the schema lookup
     explicit.
+
+    Args:
+        x: Encoded ``(C, L)`` transcript as a NumPy array or torch tensor.
+        schema: Sequence schema name or object describing channel layout.
+        valid_length: Optional valid transcript length to inspect. When omitted,
+            the full encoded length is used.
+        cds_channel: Optional CDS channel name or integer index. When omitted,
+            the CDS channel is inferred from ``schema``.
     """
 
     seq = _as_numpy_tensor(x)
@@ -270,6 +326,15 @@ def _decode_codon(
     base_channel_indices: np.ndarray,
     base_letters: Sequence[str],
 ) -> tuple[str, tuple[int, int, int]] | None:
+    """Decode one unambiguous codon from base channels.
+
+    Args:
+        x: Encoded ``(C, L)`` sequence array.
+        start: Zero-based codon start position.
+        base_channel_indices: Channel indices corresponding to A/C/G/U bases.
+        base_letters: Base letters aligned to ``base_channel_indices``.
+    """
+
     letters: list[str] = []
     offsets: list[int] = []
     for pos in range(int(start), int(start) + 3):
@@ -294,6 +359,16 @@ def _write_codon_inplace(
     base_channel_indices: np.ndarray,
     base_to_channel: dict[str, int],
 ) -> None:
+    """Overwrite one codon in an encoded sequence in place.
+
+    Args:
+        x: Encoded ``(C, L)`` sequence array to modify.
+        start: Zero-based codon start position.
+        codon: Three-base RNA codon to write.
+        base_channel_indices: Channel indices for all base channels to clear.
+        base_to_channel: Mapping from base letter to channel index.
+    """
+
     x[base_channel_indices, int(start) : int(start) + 3] = 0
     for j, base in enumerate(codon):
         x[base_to_channel[base], int(start) + j] = 1
@@ -318,6 +393,12 @@ class _PendingMutation:
 
 
 def _rows_to_structured(rows: Sequence[CodonMutation]) -> np.ndarray:
+    """Convert mutation rows to the structured NumPy mutation dtype.
+
+    Args:
+        rows: Codon mutation records to convert.
+    """
+
     arr = np.empty(len(rows), dtype=_MUTATION_DTYPE)
     for i, row in enumerate(rows):
         arr[i] = tuple(getattr(row, name) for name in _ROW_FIELDS)
@@ -325,11 +406,23 @@ def _rows_to_structured(rows: Sequence[CodonMutation]) -> np.ndarray:
 
 
 def _rows_to_columns(rows: Sequence[CodonMutation]) -> dict[str, np.ndarray]:
+    """Convert mutation rows to a column dictionary.
+
+    Args:
+        rows: Codon mutation records to convert.
+    """
+
     structured = _rows_to_structured(rows)
     return {name: np.asarray(structured[name]) for name in structured.dtype.names or ()}
 
 
 def _structured_to_columns(table: np.ndarray) -> dict[str, np.ndarray]:
+    """Convert a structured mutation table to a column dictionary.
+
+    Args:
+        table: Structured NumPy mutation table matching ``_MUTATION_DTYPE``.
+    """
+
     arr = np.asarray(table, dtype=_MUTATION_DTYPE)
     return {name: np.asarray(arr[name]) for name in arr.dtype.names or ()}
 
@@ -338,6 +431,12 @@ class CsvMutationTableWriter:
     """Stream codon mutation rows to a CSV file."""
 
     def __init__(self, path: str | Path):
+        """Create a CSV mutation-table writer.
+
+        Args:
+            path: Destination CSV path.
+        """
+
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("w", newline="", encoding="utf-8")
@@ -345,6 +444,12 @@ class CsvMutationTableWriter:
         self._writer.writeheader()
 
     def write(self, rows: Sequence[CodonMutation]) -> None:
+        """Append mutation rows to the CSV file.
+
+        Args:
+            rows: Codon mutation records to write.
+        """
+
         for row in rows:
             self._writer.writerow(asdict(row))
 
@@ -356,6 +461,14 @@ class NpzMutationTableWriter:
     """Stream codon mutation rows to a directory of compressed NPZ shards."""
 
     def __init__(self, path: str | Path, *, rows_per_shard: int = 100_000, compressed: bool = True):
+        """Create a sharded NPZ mutation-table writer.
+
+        Args:
+            path: Destination directory for NPZ shards and manifest.
+            rows_per_shard: Maximum number of mutation rows per shard.
+            compressed: Whether to write compressed NPZ shards.
+        """
+
         if rows_per_shard <= 0:
             raise ValueError("rows_per_shard must be positive")
         self.path = Path(path)
@@ -367,12 +480,24 @@ class NpzMutationTableWriter:
         self._parts: list[dict[str, Any]] = []
 
     def write(self, rows: Sequence[CodonMutation]) -> None:
+        """Buffer and write mutation rows to NPZ shards.
+
+        Args:
+            rows: Codon mutation records to append.
+        """
+
         self._buffer.extend(rows)
         while len(self._buffer) >= self.rows_per_shard:
             self._write_shard(self._buffer[: self.rows_per_shard])
             del self._buffer[: self.rows_per_shard]
 
     def _write_shard(self, rows: Sequence[CodonMutation]) -> None:
+        """Write one NPZ shard from buffered mutation rows.
+
+        Args:
+            rows: Codon mutation records for a single shard.
+        """
+
         filename = f"part-{self._part:06d}.npz"
         arrays = _rows_to_columns(rows)
         save = np.savez_compressed if self.compressed else np.savez
@@ -395,6 +520,12 @@ class NpzMutationTableWriter:
 
 
 def _arrow_schema(pa: Any) -> Any:
+    """Build the Arrow schema for codon mutation rows.
+
+    Args:
+        pa: Imported ``pyarrow`` module.
+    """
+
     return pa.schema(
         [
             ("sequence_index", pa.int64()),
@@ -417,6 +548,13 @@ def _arrow_schema(pa: Any) -> Any:
 
 
 def _rows_to_arrow_table(rows: Sequence[CodonMutation], pa: Any) -> Any:
+    """Convert mutation rows to a PyArrow table.
+
+    Args:
+        rows: Codon mutation records to convert.
+        pa: Imported ``pyarrow`` module.
+    """
+
     columns = _rows_to_columns(rows)
     data = {name: columns[name] for name in _ROW_FIELDS}
     return pa.table(data, schema=_arrow_schema(pa))
@@ -426,6 +564,13 @@ class ParquetMutationTableWriter:
     """Stream codon mutation rows to a Parquet file using pyarrow."""
 
     def __init__(self, path: str | Path, *, compression: str = "zstd"):
+        """Create a Parquet mutation-table writer.
+
+        Args:
+            path: Destination Parquet path.
+            compression: PyArrow compression codec name.
+        """
+
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.compression = compression
@@ -445,6 +590,12 @@ class ParquetMutationTableWriter:
         return self._pa, self._pq
 
     def write(self, rows: Sequence[CodonMutation]) -> None:
+        """Append mutation rows to the Parquet file.
+
+        Args:
+            rows: Codon mutation records to write.
+        """
+
         if not rows:
             return
         pa, pq = self._imports()
@@ -466,6 +617,12 @@ class ArrowMutationTableWriter:
     """Stream codon mutation rows to an Arrow IPC file using pyarrow."""
 
     def __init__(self, path: str | Path):
+        """Create an Arrow IPC mutation-table writer.
+
+        Args:
+            path: Destination Arrow IPC path.
+        """
+
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._pa: Any | None = None
@@ -482,6 +639,12 @@ class ArrowMutationTableWriter:
         return self._pa
 
     def write(self, rows: Sequence[CodonMutation]) -> None:
+        """Append mutation rows to the Arrow IPC file.
+
+        Args:
+            rows: Codon mutation records to write.
+        """
+
         if not rows:
             return
         pa = self._import_pa()
@@ -509,7 +672,15 @@ def mutation_table_writer(
     format: Literal["auto", "csv", "npz", "parquet", "arrow"] = "auto",
     rows_per_shard: int = 100_000,
 ) -> MutationTableWriter:
-    """Create a streaming mutation-table writer from a path and format."""
+    """Create a streaming mutation-table writer from a path and format.
+
+    Args:
+        path: Output file path or NPZ shard directory, depending on format.
+        format: Output format. ``auto`` infers from ``path`` suffix and falls
+            back to chunked NPZ.
+        rows_per_shard: Maximum rows per NPZ shard when ``format`` is ``npz``
+            or resolves to NPZ.
+    """
 
     out = Path(path)
     fmt = format
@@ -559,6 +730,30 @@ def compute_codon_ism(
     ``result.mutations``. For large analyses, pass a ``writer`` and
     ``collect=False`` to stream chunks without retaining every mutation row in
     memory.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch as a NumPy array or torch tensor.
+        predictor: Predictor, PyTorch module, or callable used to score
+            reference and mutant sequences.
+        schema: Sequence schema name or object describing channel layout.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred from ``X``.
+        cds_channel: Optional CDS channel name or integer index. When omitted,
+            the CDS channel is inferred from ``schema``.
+        mutation_policy: Alternate-codon policy, either synonymous-only or all
+            codons.
+        include_stop_codons: Whether all-codon mode may include stop-codon
+            alternates.
+        reference_batch_size: Optional batch size for reference predictions.
+        mutation_batch_size: Maximum number of mutant sequences to score in one
+            prediction batch.
+        compute_position_scores: Whether to compute per-position max-absolute
+            codon effects.
+        writer: Optional streaming writer for long-form mutation rows.
+        collect: Whether to retain mutation rows in ``result.mutations``.
+        sequence_indices: Optional subset of sequence indices to analyze.
+        device: Torch device used when ``predictor`` is a raw PyTorch module.
+        progress: Whether to emit progress messages while scanning.
     """
 
     arr = _as_numpy_tensor(X)
@@ -621,6 +816,12 @@ def compute_codon_ism(
     n_codons = 0
 
     def emit_rows(rows: list[CodonMutation]) -> None:
+        """Collect and/or stream completed mutation rows.
+
+        Args:
+            rows: Completed codon mutation records from one prediction flush.
+        """
+
         if not rows:
             return
         if collect:
@@ -771,7 +972,15 @@ def save_codon_ism_result(
     save_mutations: bool = True,
     progress: bool = True,
 ) -> None:
-    """Save codon ISM arrays and, optionally, the in-memory mutation table."""
+    """Save codon ISM arrays and, optionally, the in-memory mutation table.
+
+    Args:
+        result: Codon ISM result object to serialize.
+        out_dir: Destination directory for arrays and summary JSON.
+        save_mutations: Whether to save in-memory mutation rows as compressed
+            NPZ columns.
+        progress: Whether to emit progress messages while saving.
+    """
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

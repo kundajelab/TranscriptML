@@ -40,7 +40,12 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
 
 
 def normalize_model_config(config: ModelConfig | Mapping[str, Any] | str) -> ModelConfig:
-    """Normalize supported model config forms to ``ModelConfig``."""
+    """Normalize supported model config forms to ``ModelConfig``.
+
+    Args:
+        config: ModelConfig instance, mapping with ``name``/``model`` and
+            optional ``params``/``kwargs``, or registered model name string.
+    """
 
     if isinstance(config, ModelConfig):
         return config
@@ -56,7 +61,11 @@ def normalize_model_config(config: ModelConfig | Mapping[str, Any] | str) -> Mod
 
 
 def build_model(config: ModelConfig | Mapping[str, Any] | str) -> nn.Module:
-    """Instantiate a registered model from configuration."""
+    """Instantiate a registered model from configuration.
+
+    Args:
+        config: ModelConfig instance, mapping, or registered model name string.
+    """
 
     cfg = normalize_model_config(config)
     try:
@@ -70,7 +79,12 @@ def build_model(config: ModelConfig | Mapping[str, Any] | str) -> nn.Module:
 
 
 def _strip_module_prefix(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Remove a leading DataParallel ``module.`` prefix when present."""
+    """Remove a leading DataParallel ``module.`` prefix when present.
+
+    Args:
+        state_dict: Model state dictionary whose keys may begin with
+            ``"module."``.
+    """
 
     if not state_dict:
         return dict(state_dict)
@@ -90,7 +104,17 @@ def save_checkpoint(
     optimizer_state: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> None:
-    """Save model weights, model config, metrics, and optional training state."""
+    """Save model weights, model config, metrics, and optional training state.
+
+    Args:
+        path: Destination checkpoint path.
+        model: PyTorch module whose state dictionary should be saved.
+        model_config: Model configuration used to reconstruct ``model``.
+        epoch: Optional epoch number associated with the checkpoint.
+        metrics: Optional metrics mapping to include in the checkpoint.
+        optimizer_state: Optional optimizer state dictionary to include.
+        extra: Optional additional top-level checkpoint fields.
+    """
 
     cfg = normalize_model_config(model_config).to_dict()
     obj: dict[str, Any] = {
@@ -108,7 +132,12 @@ def save_checkpoint(
 
 
 def _torch_load(path: str | Path, map_location: str | torch.device = "cpu") -> Any:
-    """Load a PyTorch object while supporting older torch versions."""
+    """Load a PyTorch object while supporting older torch versions.
+
+    Args:
+        path: Checkpoint or torch object path to load.
+        map_location: Torch map-location argument for device remapping.
+    """
 
     try:
         return torch.load(path, map_location=map_location, weights_only=False)
@@ -122,7 +151,13 @@ def load_checkpoint(
     map_location: str | torch.device = "cpu",
     strict: bool = True,
 ) -> tuple[nn.Module, dict[str, Any]]:
-    """Load a TranscriptML checkpoint and rebuild its model."""
+    """Load a TranscriptML checkpoint and rebuild its model.
+
+    Args:
+        path: TranscriptML checkpoint path.
+        map_location: Torch map-location argument for device remapping.
+        strict: Whether to require an exact state-dictionary key match.
+    """
 
     ckpt = _torch_load(path, map_location=map_location)
     if not isinstance(ckpt, dict):

@@ -37,7 +37,17 @@ class SmallCNN(nn.Module):
         head_hidden: int = 64,
         output_dim: int = 1,
     ):
-        """Create the compact CNN regression model."""
+        """Create the compact CNN regression model.
+
+        Args:
+            in_ch: Number of input channels in encoded sequence tensors.
+            n_filters: Number of convolutional filters in each encoder layer.
+            kernel_size: Width of each 1D convolution kernel.
+            n_layers: Number of convolutional encoder layers.
+            dropout: Dropout probability used in encoder and head layers.
+            head_hidden: Hidden dimension of the regression head.
+            output_dim: Number of output units produced by the head.
+        """
 
         super().__init__()
         if n_layers < 1:
@@ -64,7 +74,11 @@ class SmallCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run a forward pass on ``(B, C, L)`` encoded sequences."""
+        """Run a forward pass on ``(B, C, L)`` encoded sequences.
+
+        Args:
+            x: Encoded sequence batch with shape ``(batch, channels, length)``.
+        """
 
         z = self.encoder(x.float())
         pooled = torch.cat([z.amax(dim=-1), z.mean(dim=-1)], dim=1)

@@ -10,7 +10,11 @@ import numpy as np
 
 
 def _row_dict(row: Any) -> dict[str, Any]:
-    """Convert a dataclass or mapping-like row to a plain dictionary."""
+    """Convert a dataclass or mapping-like row to a plain dictionary.
+
+    Args:
+        row: Dataclass instance or mapping-like row object.
+    """
 
     if is_dataclass(row):
         return asdict(row)
@@ -18,7 +22,12 @@ def _row_dict(row: Any) -> dict[str, Any]:
 
 
 def save_table(path: str | Path, rows: Sequence[Any]) -> None:
-    """Save a sequence of dataclass or mapping rows as CSV."""
+    """Save a sequence of dataclass or mapping rows as CSV.
+
+    Args:
+        path: Destination CSV path.
+        rows: Sequence of dataclass instances or mapping-like row objects.
+    """
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     row_dicts = [_row_dict(row) for row in rows]
@@ -39,7 +48,16 @@ def save_result_dir(
     tables: Mapping[str, Sequence[Any]] | None = None,
     summary: Mapping[str, Any] | None = None,
 ) -> None:
-    """Save arrays, optional tables, and optional summary into a result directory."""
+    """Save arrays, optional tables, and optional summary into a result directory.
+
+    Args:
+        out_dir: Destination directory for result files.
+        arrays: Mapping of array stem names to arrays saved as ``.npy`` files.
+        tables: Optional mapping of table stem names to row sequences saved as
+            CSV files.
+        summary: Optional JSON-serializable summary mapping saved as
+            ``summary.json``.
+    """
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

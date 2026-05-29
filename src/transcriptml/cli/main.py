@@ -19,7 +19,12 @@ from transcriptml.training.trainer import train_from_config
 
 
 def _csv_list(value: str | None) -> list[str] | None:
-    """Parse a comma-separated CLI value into a list of strings."""
+    """Parse a comma-separated CLI value into a list of strings.
+
+    Args:
+        value: Optional raw CLI string containing comma-separated values. ``None``
+            is returned unchanged.
+    """
 
     if value is None:
         return None
@@ -136,7 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the TranscriptML command-line interface."""
+    """Run the TranscriptML command-line interface.
+
+    Args:
+        argv: Optional argument vector to parse instead of ``sys.argv``. Pass
+            ``None`` to use the process command-line arguments.
+    """
 
     args = build_parser().parse_args(argv)
     if args.command == "build-mpra":
