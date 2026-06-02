@@ -34,4 +34,4 @@ transcriptml codon-ism \
   --batch-size "${PRED_BATCH_SIZE}" \
   --mutation-batch-size "${MUTATION_BATCH_SIZE}" \
   --mutation-policy all \
-  --table-format parquet
+  --table-format npz
