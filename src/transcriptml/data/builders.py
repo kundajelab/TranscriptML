@@ -343,13 +343,30 @@ def build_saluki_dataset_from_gtf(
     target_rows: list[dict[str, str]] | None = None
     target_by_id: dict[str, Mapping[str, str]] | None = None
     transcript_ids: set[str] | None = None
+
+    # Read table of values to predict (e.g., log(kdeg)'s)
     if targets_path is not None:
         log_progress(f"build-saluki-gtf: reading targets {targets_path}", enabled=progress)
+        
+        # target table as a Sequence of dicts, one per row
         target_rows = _read_rows(targets_path, delimiter=delimiter)
+
+        # dict where key = transcript_id and value = other columns in target table
         target_by_id = _dedupe_target_rows(target_rows, target_id_col)
+
+        # A bit cutesy: set() on dict returns set of keys
         transcript_ids = set(target_by_id)
 
+    # Parse GTF
     features_by_id = load_transcript_features(gtf_path, transcript_ids=transcript_ids, progress=progress)
+        # Dictionary with keys = transcript ID and values = TranscriptFeature class
+        # TranscriptFeature class has attributes:
+            # i) transcript_id
+            # ii) chrom
+            # iii) strand
+            # iv) exons: tuple of GTF info (GTFRecord class) for each exon in transcript
+            # v) cds: tuple of GTF info for each exonic CDS poritions in transcript
+
     if target_rows is None:
         selected_ids = list(features_by_id)
         selected_target_rows = None
@@ -360,6 +377,7 @@ def build_saluki_dataset_from_gtf(
         raise ValueError("No transcripts with exon annotations were found for the requested inputs")
     n_missing_gtf_transcripts = len(target_rows) - len(selected_ids) if target_rows is not None else None
 
+    # Make the sequence/CDS/splice-site tensor
     log_progress(f"build-saluki-gtf: opening FASTA {fasta_path}", enabled=progress)
     fasta = _FastaAccessor(fasta_path)
     try:
@@ -372,6 +390,8 @@ def build_saluki_dataset_from_gtf(
             unit="transcripts",
             enabled=progress,
         )
+
+        # Filter for chromosomes in GTF
         for i, tid in enumerate(selected_ids):
             chrom = features_by_id[tid].chrom
             if not fasta.has_chrom(chrom):
@@ -386,6 +406,8 @@ def build_saluki_dataset_from_gtf(
         if not kept_ids:
             raise ValueError("No transcripts remained after filtering to chromosomes present in the FASTA")
 
+        # Create encoding tensor
+            # Memmapped output 
         selected_ids = kept_ids
         selected_target_rows = kept_target_rows
         X = np.lib.format.open_memmap(
@@ -402,6 +424,8 @@ def build_saluki_dataset_from_gtf(
             unit="transcripts",
             enabled=progress,
         )
+
+        # Go transcript by transcript and generate its encoding
         for i, tid in enumerate(selected_ids):
             record = transcript_record_from_feature(features_by_id[tid], fasta)
             X[i] = encode_saluki_transcript(
@@ -425,6 +449,7 @@ def build_saluki_dataset_from_gtf(
     finally:
         fasta.close()
 
+    # Generate target tensor if relevant
     y = None
     if target_col is not None:
         if selected_target_rows is None:
@@ -433,6 +458,8 @@ def build_saluki_dataset_from_gtf(
         y = np.array([float(row[target_col]) for row in selected_target_rows], dtype=np.float32)
         np.save(out / "y.npy", y)
     splits = _splits_from_rows(selected_target_rows, split_col) if selected_target_rows is not None else None
+
+    # Save metadata
     bundle = DatasetBundle(
         X=X,
         y=y,
