@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 import torch
 
 from transcriptml.data.encoding import encode_rna_sequence, encode_saluki_transcript
@@ -166,3 +167,63 @@ def test_codon_ism_streams_to_npz_without_collecting(tmp_path):
     assert [part["n_rows"] for part in manifest["parts"]] == [2, 1]
     first = np.load(tmp_path / "mutations_npz" / manifest["parts"][0]["path"])
     assert first["reference_codon"].tolist() == ["GCU", "GCU"]
+
+
+def test_codon_ism_sequence_slice_preserves_original_indices():
+    X = np.stack(
+        [
+            encode_saluki_transcript("GCU", length=3, cds_positions=[0]),
+            encode_saluki_transcript("GCC", length=3, cds_positions=[0]),
+            encode_saluki_transcript("GCA", length=3, cds_positions=[0]),
+        ]
+    ).astype(np.float32)
+    predictor = Predictor(BaseWeightModel([1, 2, 4, 8]))
+
+    result = compute_codon_ism(
+        X,
+        predictor,
+        sequence_start=1,
+        sequence_end=3,
+        mutation_batch_size=2,
+        progress=False,
+    )
+
+    assert result.sequence_indices.tolist() == [1, 2]
+    assert result.reference_predictions.shape == (2,)
+    assert sorted(set(result.mutations["sequence_index"].tolist())) == [1, 2]
+
+
+def test_codon_ism_sequence_shards_are_contiguous_and_exclusive():
+    X = np.stack(
+        [encode_saluki_transcript("GCU", length=3, cds_positions=[0]) for _ in range(7)]
+    ).astype(np.float32)
+    predictor = Predictor(BaseWeightModel([1, 2, 4, 8]))
+
+    middle = compute_codon_ism(
+        X,
+        predictor,
+        sequence_shard_index=1,
+        sequence_shards=3,
+        mutation_batch_size=8,
+        progress=False,
+    )
+    last = compute_codon_ism(
+        X,
+        predictor,
+        sequence_shard_index=2,
+        sequence_shards=3,
+        mutation_batch_size=8,
+        progress=False,
+    )
+
+    assert middle.sequence_indices.tolist() == [2, 3]
+    assert last.sequence_indices.tolist() == [4, 5, 6]
+    with pytest.raises(ValueError, match="Pass only one"):
+        compute_codon_ism(
+            X,
+            predictor,
+            sequence_start=0,
+            sequence_shard_index=0,
+            sequence_shards=3,
+            progress=False,
+        )

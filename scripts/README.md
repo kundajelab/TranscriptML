@@ -10,6 +10,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one job per fold.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
 - `codon_ism_by_fold.sh` and `submit_codon_ism_by_fold.sh`: synonymous codon ISM, one job per trained fold.
+- `all_codon_ism_shard_by_fold.sh` and `submit_all_codon_ism_shard_by_fold.sh`: all-codon ISM, one 10-task job array per fold by default.
 - `motif_ablation_by_fold.sh` and `motif_ablation_all_folds.sh`: motif ablations across the configured motif list.
 - `motif_epistasis_by_fold.sh` and `motif_epistasis_all_folds.sh`: motif epistasis across the configured motif-pair list.
 
@@ -178,6 +179,25 @@ The script uses:
 ```
 
 Outputs go to `${INTERPRET_ROOT}/codon_ism/fold*/`.
+
+## Run Sharded All-Codon ISM
+
+```bash
+bash scripts/submit_all_codon_ism_shard_by_fold.sh
+```
+
+This submits one SLURM job array per fold. Each fold array has
+`${CODON_ISM_SHARDS_PER_FOLD:-10}` tasks, and task `i` runs all-codon ISM on a
+contiguous transcript shard using:
+
+```bash
+--mutation-policy all
+--table-format parquet
+--sequence-shard-index "${SLURM_ARRAY_TASK_ID}"
+--sequence-shards "${CODON_ISM_SHARDS_PER_FOLD:-10}"
+```
+
+Outputs go to `${INTERPRET_ROOT}/all_codon_ism/fold*/shard*/`.
 
 ## Run Motif Ablations
 

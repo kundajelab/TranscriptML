@@ -705,6 +705,70 @@ def mutation_table_writer(
     raise ValueError(f"Unknown mutation table format '{format}'")
 
 
+def _resolve_analysis_indices(
+    n_sequences: int,
+    *,
+    sequence_indices: Sequence[int] | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+    sequence_shard_index: int | None = None,
+    sequence_shards: int | None = None,
+) -> np.ndarray:
+    """Resolve sequence-index selectors to an explicit index array.
+
+    Args:
+        n_sequences: Number of sequences in the input array.
+        sequence_indices: Optional explicit sequence indices.
+        sequence_start: Optional inclusive start index for a contiguous slice.
+        sequence_end: Optional exclusive end index for a contiguous slice.
+        sequence_shard_index: Optional zero-based shard index.
+        sequence_shards: Optional total number of sequence shards.
+    """
+
+    has_slice = sequence_start is not None or sequence_end is not None
+    has_shard = sequence_shard_index is not None or sequence_shards is not None
+    selectors = sum([sequence_indices is not None, has_slice, has_shard])
+    if selectors > 1:
+        raise ValueError(
+            "Pass only one of sequence_indices, sequence_start/sequence_end, "
+            "or sequence shard options"
+        )
+
+    if sequence_indices is not None:
+        indices = np.asarray(sequence_indices, dtype=np.int64)
+        if np.any(indices < 0) or np.any(indices >= n_sequences):
+            raise ValueError("sequence_indices contains indices outside X")
+        return indices
+
+    if has_slice:
+        start = 0 if sequence_start is None else int(sequence_start)
+        end = n_sequences if sequence_end is None else int(sequence_end)
+        if start < 0:
+            raise ValueError("sequence_start must be non-negative")
+        if end < 0:
+            raise ValueError("sequence_end must be non-negative")
+        if start > end:
+            raise ValueError("sequence_start must be <= sequence_end")
+        if end > n_sequences:
+            raise ValueError("sequence_end cannot exceed X.shape[0]")
+        return np.arange(start, end, dtype=np.int64)
+
+    if has_shard:
+        if sequence_shard_index is None or sequence_shards is None:
+            raise ValueError("sequence_shard_index and sequence_shards must be passed together")
+        shard_index = int(sequence_shard_index)
+        shards = int(sequence_shards)
+        if shards <= 0:
+            raise ValueError("sequence_shards must be positive")
+        if shard_index < 0 or shard_index >= shards:
+            raise ValueError("sequence_shard_index must be in [0, sequence_shards)")
+        start = (n_sequences * shard_index) // shards
+        end = (n_sequences * (shard_index + 1)) // shards
+        return np.arange(start, end, dtype=np.int64)
+
+    return np.arange(n_sequences, dtype=np.int64)
+
+
 @torch.no_grad()
 def compute_codon_ism(
     X: np.ndarray | torch.Tensor,
@@ -721,6 +785,10 @@ def compute_codon_ism(
     writer: MutationTableWriter | None = None,
     collect: bool = True,
     sequence_indices: Sequence[int] | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+    sequence_shard_index: int | None = None,
+    sequence_shards: int | None = None,
     device: str | torch.device = "cpu",
     progress: bool = True,
 ) -> CodonISMResult:
@@ -752,6 +820,13 @@ def compute_codon_ism(
         writer: Optional streaming writer for long-form mutation rows.
         collect: Whether to retain mutation rows in ``result.mutations``.
         sequence_indices: Optional subset of sequence indices to analyze.
+        sequence_start: Optional inclusive sequence index for starting a
+            contiguous input slice.
+        sequence_end: Optional exclusive sequence index for ending a contiguous
+            input slice.
+        sequence_shard_index: Optional zero-based shard index for splitting the
+            input sequences into equal contiguous chunks.
+        sequence_shards: Optional total number of sequence shards.
         device: Torch device used when ``predictor`` is a raw PyTorch module.
         progress: Whether to emit progress messages while scanning.
     """
@@ -772,29 +847,47 @@ def compute_codon_ism(
         predictor = Predictor(predictor, device=device, batch_size=reference_batch_size or 128)
 
     N, _, L = arr.shape
-    lengths = (
-        infer_valid_lengths(arr)
-        if valid_lengths is None
-        else np.asarray(valid_lengths, dtype=np.int64)
+    analysis_indices = _resolve_analysis_indices(
+        N,
+        sequence_indices=sequence_indices,
+        sequence_start=sequence_start,
+        sequence_end=sequence_end,
+        sequence_shard_index=sequence_shard_index,
+        sequence_shards=sequence_shards,
     )
-    if lengths.shape[0] != N:
+    base_channel_indices, base_letters, base_to_channel, _ = _base_channels(resolved_schema)
+    full_lengths = None if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
+    if full_lengths is not None and full_lengths.shape[0] != N:
         raise ValueError("valid_lengths length must match X.shape[0]")
 
-    analysis_indices = (
-        np.arange(N, dtype=np.int64)
-        if sequence_indices is None
-        else np.asarray(sequence_indices, dtype=np.int64)
+    if analysis_indices.size == 0:
+        if writer is not None:
+            writer.close()
+        return CodonISMResult(
+            mutations=np.empty((0,), dtype=_MUTATION_DTYPE),
+            reference_predictions=np.empty((0,), dtype=np.float32),
+            valid_lengths=np.empty((0,), dtype=np.int64),
+            sequence_indices=analysis_indices,
+            position_scores=(
+                np.zeros((0, len(base_channel_indices), L), dtype=np.float32)
+                if compute_position_scores
+                else None
+            ),
+        )
+    elif np.array_equal(analysis_indices, np.arange(int(analysis_indices[0]), int(analysis_indices[-1]) + 1)):
+        X_ref = arr[int(analysis_indices[0]) : int(analysis_indices[-1]) + 1]
+    else:
+        X_ref = arr[analysis_indices]
+    analysis_lengths = (
+        infer_valid_lengths(X_ref)
+        if full_lengths is None
+        else full_lengths[analysis_indices]
     )
-    if np.any(analysis_indices < 0) or np.any(analysis_indices >= N):
-        raise ValueError("sequence_indices contains indices outside X")
-
-    X_ref = arr if sequence_indices is None else arr[analysis_indices]
     log_progress(f"codon-ism: predicting {analysis_indices.shape[0]} reference sequences", enabled=progress)
     reference_predictions = _predict(predictor, X_ref, batch_size=reference_batch_size)
     if reference_predictions.shape[0] != analysis_indices.shape[0]:
         raise ValueError("predictor must return one scalar prediction per input sequence")
 
-    base_channel_indices, base_letters, base_to_channel, _ = _base_channels(resolved_schema)
     position_scores = (
         np.zeros((analysis_indices.shape[0], len(base_channel_indices), L), dtype=np.float32)
         if compute_position_scores
@@ -873,7 +966,7 @@ def compute_codon_ism(
         for local_i, seq_i_raw in enumerate(analysis_indices):
             seq_i = int(seq_i_raw)
             seq = np.asarray(arr[seq_i])
-            valid_len = min(int(lengths[seq_i]), L)
+            valid_len = min(int(analysis_lengths[local_i]), L)
             cds = find_cds_codon_starts(
                 seq,
                 resolved_schema,
@@ -959,7 +1052,7 @@ def compute_codon_ism(
     return CodonISMResult(
         mutations=mutation_table,
         reference_predictions=reference_predictions.astype(np.float32, copy=False),
-        valid_lengths=lengths[analysis_indices].astype(np.int64, copy=False),
+        valid_lengths=analysis_lengths.astype(np.int64, copy=False),
         sequence_indices=analysis_indices.astype(np.int64, copy=False),
         position_scores=position_scores,
     )

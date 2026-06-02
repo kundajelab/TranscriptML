@@ -123,6 +123,26 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--cds-channel", help="CDS annotation channel name or integer index")
             p.add_argument("--position-scores", action="store_true", help="Also save max-absolute codon effects")
             p.add_argument(
+                "--sequence-start",
+                type=int,
+                help="Inclusive transcript index for a contiguous codon-ISM slice",
+            )
+            p.add_argument(
+                "--sequence-end",
+                type=int,
+                help="Exclusive transcript index for a contiguous codon-ISM slice",
+            )
+            p.add_argument(
+                "--sequence-shard-index",
+                type=int,
+                help="Zero-based transcript shard index for codon ISM",
+            )
+            p.add_argument(
+                "--sequence-shards",
+                type=int,
+                help="Total transcript shards for codon ISM",
+            )
+            p.add_argument(
                 "--table-format",
                 default="npz",
                 choices=["csv", "npz", "parquet", "arrow"],
@@ -209,7 +229,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     log_progress(f"{args.command}: loading dataset {args.dataset}")
-    bundle = load_bundle(args.dataset)
+    bundle = load_bundle(args.dataset, mmap_mode="r" if args.command == "codon-ism" else None)
     log_progress(f"{args.command}: loading checkpoint {args.checkpoint}")
     predictor = Predictor.from_checkpoint(args.checkpoint, device=args.device, batch_size=args.batch_size)
     if args.command == "ism":
@@ -239,6 +259,10 @@ def main(argv: list[str] | None = None) -> None:
             compute_position_scores=args.position_scores,
             writer=writer,
             collect=False,
+            sequence_start=args.sequence_start,
+            sequence_end=args.sequence_end,
+            sequence_shard_index=args.sequence_shard_index,
+            sequence_shards=args.sequence_shards,
         )
         save_codon_ism_result(result, args.out_dir, save_mutations=False)
     elif args.command == "motif-ablation":
