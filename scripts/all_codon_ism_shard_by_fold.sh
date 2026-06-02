@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --partition=akundaje
+#SBATCH --partition=akundaje,gpu
 #SBATCH --job-name=tml_all_codon_ism_shard
 #SBATCH --cpus-per-task=4
 #SBATCH --gpus=1
 #SBATCH --mem=32G
-#SBATCH --time=7-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH -C GPU_MEM:48GB
 #SBATCH --output=slurm_output/%x_%A_%a.out
 #SBATCH --error=slurm_output/%x_%A_%a.err
