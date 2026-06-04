@@ -63,6 +63,10 @@ DATASET_DIR="${DATASET_DIR:-${RUN_ROOT}/data/saluki}"
 CV_ROOT="${CV_ROOT:-${RUN_ROOT}/cv10}"
 INTERPRET_ROOT="${INTERPRET_ROOT:-${RUN_ROOT}/interpret}"
 INTERPRET_DATASET_DIR="${INTERPRET_DATASET_DIR:-${DATASET_DIR}}"
+TRAIN_OUTPUT_ROOT="${TRAIN_OUTPUT_ROOT:-${RUN_ROOT}/train_eval}"
+MODEL_DIR="${MODEL_DIR:-${TRAIN_OUTPUT_ROOT}/model}"
+EVAL_DIR="${EVAL_DIR:-${TRAIN_OUTPUT_ROOT}/eval}"
+GENERATED_TRAIN_CONFIG="${GENERATED_TRAIN_CONFIG:-${TRAIN_OUTPUT_ROOT}/train_config.json}"
 
 # ---------------------------------------------------------------------------
 # User settings: CV and runtime knobs.
@@ -71,6 +75,8 @@ N_FOLDS="${N_FOLDS:-10}"
 CV_SEED="${CV_SEED:-42}"
 BASE_TRAIN_CONFIG="${BASE_TRAIN_CONFIG:-${SCRIPT_CONFIG_DIR}/example_train_config.json}"
 EVAL_SPLIT="${EVAL_SPLIT:-test}"
+TRAIN_SEED="${TRAIN_SEED:-}"
+REQUIRE_SPLIT_FILE="${REQUIRE_SPLIT_FILE:-1}"
 
 # Runtime settings.
 PRED_BATCH_SIZE="${PRED_BATCH_SIZE:-128}"

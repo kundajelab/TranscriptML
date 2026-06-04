@@ -5,8 +5,9 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 ## Files
 
 - `sherlock_config.sh`: per-run shell config after you copy `scripts/`; set paths, conda environment, fold count, motifs, and runtime knobs in the copied file.
-- `example_train_config.json`: per-run training config after you copy `scripts/`; edit model and training hyperparameters in the copied file. The CV script always replaces `dataset` and `output_dir` in each generated fold config.
+- `example_train_config.json`: per-run training config after you copy `scripts/`; edit model and training hyperparameters in the copied file. The training scripts replace `dataset` and `output_dir` in generated configs.
 - `build_saluki_gtf.sh`: builds a Saluki-style dataset bundle with `transcriptml build-saluki-gtf`.
+- `train_eval_split.sh` and `submit_train_eval_split.sh`: train and evaluate one predefined train/validation/test split from the dataset bundle.
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one job per fold.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
 - `codon_ism_by_fold.sh` and `submit_codon_ism_by_fold.sh`: synonymous codon ISM, one job per trained fold.
@@ -58,6 +59,7 @@ SPLIT_COL=""
 RUN_NAME="human_kdeg_saluki_exact"
 RUN_ROOT="/scratch/users/isvock/TranscriptML/${RUN_NAME}"
 DATASET_DIR="${RUN_ROOT}/data/saluki"
+TRAIN_OUTPUT_ROOT="${RUN_ROOT}/train_eval"
 CV_ROOT="${RUN_ROOT}/cv10"
 INTERPRET_ROOT="${RUN_ROOT}/interpret"
 
@@ -76,8 +78,9 @@ What each group means:
 | `GTF`, `FASTA`, `TARGETS` | Set these to your annotation GTF, genome FASTA, and target table. |
 | `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
 | `RUN_NAME`, `RUN_ROOT` | Pick a run name and scratch/OAK location where outputs should be written. |
-| `DATASET_DIR`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
+| `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
 | `N_FOLDS`, `CV_SEED`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior. |
+| `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
 | `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
 | `MOTIF_ABLATION_SPECS`, `MOTIF_EPISTASIS_SPECS` | Edit only when running motif ablation or motif epistasis with a custom motif list. |
@@ -92,8 +95,8 @@ Then edit the copied `scripts/example_train_config.json` for model and training 
 
 ```json
 {
-  "dataset": "CV_SCRIPT_OVERWRITES_THIS_FROM_DATASET_DIR",
-  "output_dir": "CV_SCRIPT_OVERWRITES_THIS_PER_FOLD",
+  "dataset": "SCRIPT_OVERWRITES_THIS_FROM_DATASET_DIR",
+  "output_dir": "SCRIPT_OVERWRITES_THIS_OUTPUT_DIR",
   "model": {"name": "saluki_exact", "params": {"seq_depth": 6, "filters": 32}},
   "batch_size": 64,
   "epochs": 10,
@@ -107,7 +110,7 @@ Then edit the copied `scripts/example_train_config.json` for model and training 
 }
 ```
 
-For the CV workflow, leave `dataset` and `output_dir` as placeholders in `scripts/example_train_config.json`. `train_eval_cv_fold.sh` calls `write_cv_fold_artifacts.py`, which reads the copied `scripts/example_train_config.json`, sets `dataset` to `${CV_ROOT}/foldN/dataset`, sets `output_dir` to `${CV_ROOT}/foldN/model`, and writes `${CV_ROOT}/foldN/train_config.json`. If you edit those two keys in the copied base config, the CV scripts still overwrite them in the generated fold configs. Edit them only when running `transcriptml train` directly outside this CV workflow.
+For the script workflows, leave `dataset` and `output_dir` as placeholders in `scripts/example_train_config.json`. `train_eval_split.sh` and `train_eval_cv_fold.sh` both generate a per-run train config and overwrite those two fields. If you edit those two keys in the copied base config, the script-generated configs still replace them. Edit them only when running `transcriptml train` directly outside these workflows.
 
 Training early stopping can monitor one metric or a list of metrics. With
 `"monitor": ["val_loss", "val_pearson"]`, an epoch counts as improved if the
@@ -127,6 +130,38 @@ Submit `sbatch` commands from the run directory that contains the copied
 matching copied `scripts/sherlock_config.sh`.
 
 This writes the bundle under `${DATASET_DIR}`, including `X.npy`, `y.npy`, `ids.txt`, `schema.json`, and sidecar metadata.
+
+If you want to train from a target-table split column, set `SPLIT_COL` in the
+copied `scripts/sherlock_config.sh` before building the dataset. The split
+column values should include `train`, `val` or `validation`, and `test`. The
+builder writes those row assignments to `${DATASET_DIR}/splits.json`, and
+`transcriptml train` uses that file automatically.
+
+## Train And Evaluate One Predefined Split
+
+Use this workflow when the dataset bundle already has a `splits.json`, for
+example because you built it from a target table with `SPLIT_COL="split"`.
+
+```bash
+cd /scratch/users/isvock/transcriptml_runs/human_kdeg_saluki_exact
+bash scripts/submit_train_eval_split.sh
+```
+
+This submits one SLURM job. It writes:
+
+```text
+${TRAIN_OUTPUT_ROOT}/train_config.json
+${MODEL_DIR}/best.pt
+${EVAL_DIR}/test_predictions.csv
+${EVAL_DIR}/test_predictions.summary.json
+```
+
+For a manual 4-fold CV workaround, make four run directories, copy `scripts/`
+into each, and give each directory a different target table whose `split`
+column contains that fold's train/val/test labels. In each copied
+`scripts/sherlock_config.sh`, set `TARGETS` to that fold's target table,
+`SPLIT_COL` to the split column name, and choose a fold-specific `RUN_ROOT`.
+Then run the build job and `submit_train_eval_split.sh` in each directory.
 
 ## Train And Evaluate 10-Fold CV
 

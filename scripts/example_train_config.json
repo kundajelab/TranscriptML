@@ -1,6 +1,6 @@
 {
-  "dataset": "CV_SCRIPT_OVERWRITES_THIS_FROM_DATASET_DIR",
-  "output_dir": "CV_SCRIPT_OVERWRITES_THIS_PER_FOLD",
+  "dataset": "SCRIPT_OVERWRITES_THIS_FROM_DATASET_DIR",
+  "output_dir": "SCRIPT_OVERWRITES_THIS_OUTPUT_DIR",
   "model": {
     "name": "saluki_exact",
     "params": {
