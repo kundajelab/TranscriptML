@@ -427,6 +427,13 @@ def build_saluki_dataset_from_gtf(
 
         # Go transcript by transcript and generate its encoding
         for i, tid in enumerate(selected_ids):
+            # This is the money function that does all the interesting heavy lifting
+                # Builds an exon map from the TranscriptFeature object
+                # Gets the transcript isoform RNA sequence
+                # Identifies splice positions
+                # Identifies codon positions
+                # Gets any and all metadata
+                # Stores it in TranscriptRecord object
             record = transcript_record_from_feature(features_by_id[tid], fasta)
             X[i] = encode_saluki_transcript(
                 record.sequence,
