@@ -246,6 +246,31 @@ Training is config-driven. Example `train_saluki.json`:
 `gradient_clip_norm` clips gradients by global norm during training. It defaults
 to `0.5`; set it to `null` or a non-positive value to disable clipping.
 
+Optional Saluki sequence controls can be applied at training time:
+
+```json
+{
+  "sequence_controls": {
+    "seed": 42,
+    "operations": [
+      {"operation": "shuffle_nucleotides", "regions": ["5utr", "3utr"]},
+      {"operation": "shuffle_codons", "regions": ["cds"]}
+    ],
+    "save_dir": "data/saluki_shuffle_control"
+  }
+}
+```
+
+Supported operations are `shuffle_nucleotides`, `shuffle_codons`, and
+`randomize_nucleotides`. Regions are `5utr`, `cds`, `3utr`, `all`, or
+`transcript`; `all` means the three annotated regions independently. Only A/C/G/U
+base channels are edited, so Saluki codon-start and splice-junction channels are
+preserved. Controls are applied to the loaded bundle before split selection, so
+train/validation/test examples in that run use the same controlled
+representation. Use at most one operation per region. If `save` is `true` without
+`save_dir`, training writes the controlled bundle under
+`<output_dir>/sequence_controlled_dataset`.
+
 Then run:
 
 ```bash

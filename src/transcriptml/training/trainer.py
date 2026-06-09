@@ -12,6 +12,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle
+from transcriptml.data.controls import apply_sequence_controls_to_bundle
 from transcriptml.models.common import squeeze_prediction
 from transcriptml.models.registry import build_model, normalize_model_config, save_checkpoint
 from transcriptml.training.evaluation import evaluate_model, predict_to_csv
@@ -37,6 +38,7 @@ class TrainConfig:
     mmap_mode: str | None = "r"
     seed: int = 123
     progress: bool = True
+    sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     split: Mapping[str, Any] = field(
         default_factory=lambda: {"method": "random", "val_frac": 0.1, "test_frac": 0.1}
     )
@@ -343,6 +345,14 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     device = _select_device(cfg.device)
     out = Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    sequence_control_stats: dict[str, Any] | None = None
+    if cfg.sequence_controls:
+        bundle, sequence_control_stats = apply_sequence_controls_to_bundle(
+            bundle,
+            cfg.sequence_controls,
+            default_save_dir=out / "sequence_controlled_dataset",
+            progress=cfg.progress,
+        )
     splits = _make_splits(bundle, cfg)
     model_config = normalize_model_config(cfg.model)
     log_progress(
@@ -448,6 +458,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             break
     (out / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     (out / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
+
+    # Well there's a chance there is none, so kind of weird...
+    # Not that a user should ever not want to include a test split
     log_progress("training: evaluating test split", enabled=cfg.progress)
     test_result = evaluate_model(
         model,
@@ -475,11 +488,15 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "test_loss": test_result.get("loss"),
         "test_pearson": test_result.get("pearson"),
     }
+    if sequence_control_stats is not None:
+        summary["sequence_controls"] = sequence_control_stats
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     log_progress(
         f"training: done; best_epoch={best_epoch}, summary={out / 'summary.json'}",
         enabled=cfg.progress,
     )
+
+    # Not sure this return value ever gets used anywhere
     return {"model": model, "history": history, "splits": splits, "summary": summary}
 
 

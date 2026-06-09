@@ -1,6 +1,13 @@
 """Data processing utilities."""
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle, save_bundle
+from transcriptml.data.controls import (
+    SequenceControlConfig,
+    SequenceControlOperation,
+    apply_sequence_controls_array,
+    apply_sequence_controls_to_bundle,
+    normalize_sequence_control_config,
+)
 from transcriptml.data.encoding import (
     DEFAULT_SALUKI_LENGTH,
     encode_rna_sequence,
@@ -25,8 +32,12 @@ __all__ = [
     "RNA4",
     "SALUKI6",
     "SequenceSchema",
+    "SequenceControlConfig",
+    "SequenceControlOperation",
     "TranscriptFeature",
     "TranscriptRecord",
+    "apply_sequence_controls_array",
+    "apply_sequence_controls_to_bundle",
     "encode_rna_sequence",
     "encode_saluki_transcript",
     "encode_sequences",
@@ -37,6 +48,7 @@ __all__ = [
     "iter_gtf_records",
     "load_bundle",
     "load_transcript_features",
+    "normalize_sequence_control_config",
     "parse_gtf_attributes",
     "save_bundle",
 ]
