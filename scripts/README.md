@@ -116,6 +116,94 @@ Training early stopping can monitor one metric or a list of metrics. With
 `"monitor": ["val_loss", "val_pearson"]`, an epoch counts as improved if the
 validation loss decreases or the validation Pearson correlation increases.
 
+### Alternative Loss Functions
+
+The training scripts preserve any `loss` block you add to the copied
+`scripts/example_train_config.json`. `dataset` and `output_dir` are still
+overwritten by `train_eval_split.sh` and `train_eval_cv_fold.sh`; the loss
+configuration is not overwritten.
+
+TranscriptML uses ordinary unweighted MSE when the config has no `loss` block.
+To train with weighted MSE, first make sure the target table column named by
+`TARGET_COL` is the scalar target you want to predict, usually `log_kdeg`.
+Then make sure the weight or standard-error column is written to bundle
+metadata:
+
+```bash
+# scripts/sherlock_config.sh
+TARGET_COL="log_kdeg"
+
+# Leave METADATA_COLS empty to keep all non-target target-table columns, or list
+# the exact columns you need.
+METADATA_COLS="log_kdeg_se,split"
+```
+
+If your target table already contains the final per-transcript weights, add a
+`weight_col` loss block to `scripts/example_train_config.json`:
+
+```json
+{
+  "loss": {
+    "name": "weighted_mse",
+    "weight_col": "log_kdeg_weight",
+    "min_weight": 0.01,
+    "max_weight": 100.0
+  }
+}
+```
+
+If your target table contains a standard error for `log_kdeg`, use `se_col`
+instead. TranscriptML derives weights as `1 / (se^2 + eps)` and clips them to
+avoid extreme influence from tiny or huge uncertainty estimates:
+
+```json
+{
+  "loss": {
+    "name": "weighted_mse",
+    "se_col": "log_kdeg_se",
+    "eps": 1e-8,
+    "min_weight": 0.01,
+    "max_weight": 100.0
+  }
+}
+```
+
+To train with the binomial count likelihood, the target table must contain one
+row per transcript with total reads, new reads, and pulse duration in hours.
+The model output is interpreted as natural-log `kdeg`, and the likelihood uses
+`new_reads ~ Binomial(total_reads, 1 - exp(-kdeg * pulse_hours))`.
+
+```bash
+# scripts/sherlock_config.sh
+TARGET_COL="log_kdeg"
+METADATA_COLS="total_reads,new_reads,pulse_hours,split"
+```
+
+Keeping `TARGET_COL="log_kdeg"` is recommended because it writes `y.npy` for
+Pearson/MSE reporting, even though `binomial_nll` trains from the count columns.
+Then add this to `scripts/example_train_config.json`:
+
+```json
+{
+  "loss": {
+    "name": "binomial_nll",
+    "total_reads_col": "total_reads",
+    "new_reads_col": "new_reads",
+    "pulse_hours_col": "pulse_hours"
+  }
+}
+```
+
+After changing `METADATA_COLS` or any target-table columns, rerun the dataset
+build job before submitting training jobs:
+
+```bash
+sbatch scripts/build_saluki_gtf.sh
+bash scripts/submit_train_eval_split.sh
+# or
+bash scripts/submit_train_eval_cv.sh
+```
+
 ## Build The Dataset
 
 Submit the data processing job:
