@@ -16,7 +16,8 @@ from transcriptml.data.controls import apply_sequence_controls_to_bundle
 from transcriptml.models.common import squeeze_prediction
 from transcriptml.models.registry import build_model, normalize_model_config, save_checkpoint
 from transcriptml.training.evaluation import evaluate_model, predict_to_csv
-from transcriptml.training.metrics import mse, pearson_corr
+from transcriptml.training.losses import TrainingLoss, build_training_loss
+from transcriptml.training.metrics import pearson_corr
 from transcriptml.training.splits import normalize_splits, predefined_split_indices, random_split_indices
 from transcriptml.progress import ProgressReporter, log_progress
 
@@ -33,6 +34,7 @@ class TrainConfig:
     gradient_clip_norm: float | None = 0.5
     patience: int = 5
     monitor: str | Sequence[str] = "val_loss"
+    loss: str | Mapping[str, Any] | None = field(default_factory=lambda: {"name": "mse"})
     device: str = "cpu"
     num_workers: int = 0
     mmap_mode: str | None = "r"
@@ -129,42 +131,54 @@ def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]
 
 
 class _ArrayRegressionDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray):
+    def __init__(self, X: np.ndarray, y: np.ndarray, aux_arrays: Mapping[str, np.ndarray] | None = None):
         """Wrap NumPy arrays as a PyTorch regression dataset.
 
         Args:
             X: Encoded input array with examples on axis 0.
             y: Scalar target array aligned to ``X``.
+            aux_arrays: Optional per-example auxiliary arrays used by
+                metadata-aware losses.
         """
 
         self.X = X
         self.y = y
+        self.aux_arrays = dict(aux_arrays or {})
 
     def __len__(self) -> int:
         """Return the number of examples."""
 
         return int(self.X.shape[0])
 
-    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.float32]:
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.float32, dict[str, np.float32]]:
         """Return one input array and scalar target.
 
         Args:
             idx: Integer example index to retrieve.
         """
 
-        return np.asarray(self.X[int(idx)]), np.float32(self.y[int(idx)])
+        i = int(idx)
+        aux = {name: np.float32(values[i]) for name, values in self.aux_arrays.items()}
+        return np.asarray(self.X[i]), np.float32(self.y[i]), aux
 
 
-def _collate_regression(batch: list[tuple[np.ndarray, np.float32]]) -> tuple[torch.Tensor, torch.Tensor]:
+def _collate_regression(
+    batch: list[tuple[np.ndarray, np.float32, Mapping[str, np.float32]]],
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
     """Stack NumPy regression examples into tensors.
 
     Args:
-        batch: List of ``(input_array, scalar_target)`` examples from the
+        batch: List of ``(input_array, scalar_target, aux)`` examples from the
             dataset.
     """
 
-    xs, ys = zip(*batch)
-    return torch.as_tensor(np.stack(xs, axis=0)), torch.as_tensor(np.asarray(ys, dtype=np.float32))
+    xs, ys, auxs = zip(*batch)
+    aux_keys = auxs[0].keys() if auxs else []
+    aux = {
+        key: torch.as_tensor(np.asarray([item[key] for item in auxs], dtype=np.float32))
+        for key in aux_keys
+    }
+    return torch.as_tensor(np.stack(xs, axis=0)), torch.as_tensor(np.asarray(ys, dtype=np.float32)), aux
 
 
 def _loader(
@@ -205,9 +219,10 @@ def _run_loader(
     loader: DataLoader | None,
     *,
     device: torch.device,
-    loss_fn: nn.Module,
+    loss_fn: TrainingLoss,
     optimizer: torch.optim.Optimizer | None = None,
     gradient_clip_norm: float | None = None,
+    target_metrics: bool = True,
     progress: bool = True,
     progress_label: str | None = None,
 ) -> dict[str, float]:
@@ -221,6 +236,8 @@ def _run_loader(
         optimizer: Optional optimizer. When provided, gradients are updated.
         gradient_clip_norm: Optional positive norm for gradient clipping during
             training.
+        target_metrics: Whether to compute target-based metrics such as
+            Pearson correlation.
         progress: Whether to emit progress messages while iterating.
         progress_label: Optional label shown in progress messages.
     """
@@ -229,7 +246,8 @@ def _run_loader(
         return {"loss": float("nan"), "pearson": float("nan")}
     training = optimizer is not None
     model.train(training)
-    losses: list[float] = []
+    loss_numerator = 0.0
+    loss_denominator = 0.0
     preds: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     reporter = ProgressReporter(
@@ -239,29 +257,33 @@ def _run_loader(
         enabled=progress,
         percent_step=25.0,
     )
-    for xb, yb in loader:
+    for xb, yb, auxb in loader:
         xb = xb.to(device)
         yb = yb.to(device).float().reshape(-1)
+        auxb = {name: values.to(device).float().reshape(-1) for name, values in auxb.items()}
         if training:
             optimizer.zero_grad(set_to_none=True)
         with torch.set_grad_enabled(training):
             yhat = squeeze_prediction(model(xb)).reshape(-1)
-            loss = loss_fn(yhat, yb)
+            loss_output = loss_fn(yhat, yb, auxb)
+            loss = loss_output.loss
             if training:
                 loss.backward()
                 if gradient_clip_norm is not None and float(gradient_clip_norm) > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(gradient_clip_norm))
                 optimizer.step()
-        losses.append(float(loss.detach().cpu().item()) * int(yb.numel()))
+        loss_numerator += float(loss_output.numerator.detach().cpu().item())
+        loss_denominator += float(loss_output.denominator.detach().cpu().item())
         preds.append(yhat.detach().cpu().numpy())
-        targets.append(yb.detach().cpu().numpy())
+        if target_metrics:
+            targets.append(yb.detach().cpu().numpy())
         reporter.update()
     reporter.close()
     y_pred = np.concatenate(preds) if preds else np.array([])
     y_true = np.concatenate(targets) if targets else np.array([])
     return {
-        "loss": float(np.sum(losses) / max(1, y_true.size)),
-        "pearson": pearson_corr(y_true, y_pred),
+        "loss": float(loss_numerator / max(loss_denominator, 1e-12)),
+        "pearson": pearson_corr(y_true, y_pred) if target_metrics else float("nan"),
     }
 
 
@@ -339,8 +361,6 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     """
 
     cfg = _as_train_config(config)
-    if bundle.y is None:
-        raise ValueError("Training requires bundle.y")
     _seed_everything(cfg.seed)
     device = _select_device(cfg.device)
     out = Path(cfg.output_dir)
@@ -353,12 +373,24 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             default_save_dir=out / "sequence_controlled_dataset",
             progress=cfg.progress,
         )
+    loss_fn, aux_arrays, normalized_loss_config = build_training_loss(
+        cfg.loss,
+        metadata=bundle.metadata,
+        n_examples=int(bundle.X.shape[0]),
+    )
+    has_targets = bundle.y is not None
+    if bundle.y is None:
+        if loss_fn.requires_target:
+            raise ValueError(f"Training loss '{loss_fn.name}' requires bundle.y")
+        y_train = np.zeros(int(bundle.X.shape[0]), dtype=np.float32)
+    else:
+        y_train = bundle.y
     splits = _make_splits(bundle, cfg)
     model_config = normalize_model_config(cfg.model)
     log_progress(
         (
             "training: "
-            f"device={device}, output={out}, "
+            f"device={device}, output={out}, loss={normalized_loss_config['name']}, "
             f"train={len(splits.get('train', []))}, val={len(splits.get('val', []))}, "
             f"test={len(splits.get('test', []))}"
         ),
@@ -366,8 +398,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     )
     model = build_model(model_config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
-    loss_fn = nn.MSELoss()
-    dataset = _ArrayRegressionDataset(bundle.X, bundle.y)
+    dataset = _ArrayRegressionDataset(bundle.X, y_train, aux_arrays)
     pin_memory = device.type == "cuda"
     train_loader = _loader(
         dataset,
@@ -399,6 +430,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             loss_fn=loss_fn,
             optimizer=optimizer,
             gradient_clip_norm=cfg.gradient_clip_norm,
+            target_metrics=has_targets,
             progress=cfg.progress,
             progress_label=f"epoch {epoch} train",
         )
@@ -408,6 +440,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             device=device,
             loss_fn=loss_fn,
             optimizer=None,
+            target_metrics=has_targets,
             progress=cfg.progress,
             progress_label=f"epoch {epoch} val",
         )
@@ -431,7 +464,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
                 epoch=epoch,
                 metrics=row,
                 optimizer_state=optimizer.state_dict(),
-                extra={"splits": splits, "train_config": asdict(cfg)},
+                extra={"splits": splits, "train_config": asdict(cfg), "loss_config": normalized_loss_config},
             )
         else:
             stale += 1
@@ -442,7 +475,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             epoch=epoch,
             metrics=row,
             optimizer_state=optimizer.state_dict(),
-            extra={"splits": splits, "train_config": asdict(cfg)},
+            extra={"splits": splits, "train_config": asdict(cfg), "loss_config": normalized_loss_config},
         )
         log_progress(
             (
@@ -462,6 +495,24 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     # Well there's a chance there is none, so kind of weird...
     # Not that a user should ever not want to include a test split
     log_progress("training: evaluating test split", enabled=cfg.progress)
+    test_loader = _loader(
+        dataset,
+        splits.get("test", []),
+        cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=pin_memory,
+    )
+    test_loss_metrics = _run_loader(
+        model,
+        test_loader,
+        device=device,
+        loss_fn=loss_fn,
+        optimizer=None,
+        target_metrics=has_targets,
+        progress=cfg.progress,
+        progress_label="test loss",
+    )
     test_result = evaluate_model(
         model,
         bundle,
@@ -485,7 +536,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "best_monitor": best_metrics[monitors[0]] if len(monitors) == 1 else best_metrics,
         "best_monitors": best_metrics,
         "epochs_run": len(history),
-        "test_loss": test_result.get("loss"),
+        "loss": normalized_loss_config,
+        "test_loss": test_loss_metrics.get("loss"),
+        "test_mse": test_result.get("loss"),
         "test_pearson": test_result.get("pearson"),
     }
     if sequence_control_stats is not None:

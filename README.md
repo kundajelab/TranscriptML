@@ -246,6 +246,50 @@ Training is config-driven. Example `train_saluki.json`:
 `gradient_clip_norm` clips gradients by global norm during training. It defaults
 to `0.5`; set it to `null` or a non-positive value to disable clipping.
 
+Training uses unweighted MSE by default. To weight scalar `log_kdeg` targets by
+a metadata column, add a `loss` block:
+
+```json
+{
+  "loss": {
+    "name": "weighted_mse",
+    "weight_col": "log_kdeg_weight",
+    "min_weight": 0.01,
+    "max_weight": 100.0
+  }
+}
+```
+
+Alternatively, provide a standard-error column and weights are derived as
+`1 / (se^2 + eps)` before clipping:
+
+```json
+{
+  "loss": {
+    "name": "weighted_mse",
+    "se_col": "log_kdeg_se"
+  }
+}
+```
+
+For pulse-labeling count data, the binomial objective interprets model outputs
+as natural-log `kdeg` predictions and uses metadata columns for read counts and
+pulse duration:
+
+```json
+{
+  "loss": {
+    "name": "binomial_nll",
+    "total_reads_col": "total_reads",
+    "new_reads_col": "new_reads",
+    "pulse_hours_col": "pulse_hours"
+  }
+}
+```
+
+Metadata columns come from non-input, non-target table columns by default. If
+you pass `--metadata-cols`, include any columns required by the configured loss.
+
 Optional Saluki sequence controls can be applied at training time:
 
 ```json
