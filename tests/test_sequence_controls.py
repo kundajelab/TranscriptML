@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle
 from transcriptml.data.controls import (
@@ -73,6 +74,33 @@ def test_randomize_nucleotides_preserves_region_length_annotations_and_padding()
     assert np.all(out[0, :, 20:] == 0)
     np.testing.assert_array_equal(out[0, 4:], X[0, 4:])
     assert stats["edited"]["randomize_nucleotides"]["3utr"] == 1
+
+
+def test_cds_frameshift_shifts_cds_channel_only():
+    X = _example_saluki_batch()
+    out, stats = apply_sequence_controls_array(X, {"cds_frameshift": 1}, progress=False)
+
+    np.testing.assert_array_equal(out[0, :4], X[0, :4])
+    np.testing.assert_array_equal(out[0, 5], X[0, 5])
+    assert np.flatnonzero(X[0, 4]).tolist() == [4, 7, 10, 13]
+    assert np.flatnonzero(out[0, 4]).tolist() == [5, 8, 11, 14]
+    assert stats["edited"]["cds_frameshift"]["cds"] == 1
+
+
+def test_cds_frameshift_explicit_operation_accepts_shift_two():
+    X = _example_saluki_batch()
+    out, _ = apply_sequence_controls_array(
+        X,
+        {"operations": [{"operation": "cds_frameshift", "shift": 2}]},
+        progress=False,
+    )
+
+    assert np.flatnonzero(out[0, 4]).tolist() == [6, 9, 12, 15]
+
+
+def test_cds_frameshift_rejects_invalid_shift():
+    with pytest.raises(ValueError):
+        normalize_sequence_control_config({"cds_frameshift": 3})
 
 
 def test_legacy_ablation_names_normalize_to_explicit_operations():

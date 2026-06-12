@@ -305,14 +305,27 @@ Optional Saluki sequence controls can be applied at training time:
 }
 ```
 
-Supported operations are `shuffle_nucleotides`, `shuffle_codons`, and
-`randomize_nucleotides`. Regions are `5utr`, `cds`, `3utr`, `all`, or
-`transcript`; `all` means the three annotated regions independently. Only A/C/G/U
-base channels are edited, so Saluki codon-start and splice-junction channels are
-preserved. Controls are applied to the loaded bundle before split selection, so
-train/validation/test examples in that run use the same controlled
-representation. Use at most one operation per region. If `save` is `true` without
-`save_dir`, training writes the controlled bundle under
+Supported operations are `shuffle_nucleotides`, `shuffle_codons`,
+`randomize_nucleotides`, and `cds_frameshift`. The `cds_frameshift` operation
+shifts all positive positions in the CDS codon-start channel by 1 or 2
+nucleotides in the 3-prime direction:
+
+```json
+{
+  "sequence_controls": {
+    "cds_frameshift": 1
+  }
+}
+```
+
+Regions are `5utr`, `cds`, `3utr`, `all`, or `transcript`; `all` means the
+three annotated regions independently. Base perturbations edit only A/C/G/U
+channels, while `cds_frameshift` edits only the CDS annotation channel and leaves
+the splice-junction channel unchanged. Controls are applied to the loaded bundle
+before split selection, so train/validation/test examples in that run use the
+same controlled representation. Use at most one base-sequence operation per
+region. If `save` is `true` without `save_dir`, training writes the controlled
+bundle under
 `<output_dir>/sequence_controlled_dataset`.
 
 Then run:

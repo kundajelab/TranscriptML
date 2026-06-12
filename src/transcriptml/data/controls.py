@@ -15,13 +15,14 @@ from transcriptml.interpret.codon_ism import CDSCodonStarts, find_cds_codon_star
 from transcriptml.progress import ProgressReporter, log_progress
 
 RegionName = Literal["5utr", "cds", "3utr", "transcript"]
-OperationName = Literal["shuffle_nucleotides", "shuffle_codons", "randomize_nucleotides"]
+OperationName = Literal["shuffle_nucleotides", "shuffle_codons", "randomize_nucleotides", "cds_frameshift"]
 
 _ANNOTATED_REGIONS: tuple[RegionName, ...] = ("5utr", "cds", "3utr")
 _ALL_REGIONS_BY_OPERATION: dict[OperationName, tuple[RegionName, ...]] = {
     "shuffle_nucleotides": _ANNOTATED_REGIONS,
     "shuffle_codons": ("cds",),
     "randomize_nucleotides": _ANNOTATED_REGIONS,
+    "cds_frameshift": ("cds",),
 }
 
 _OPERATION_ALIASES = {
@@ -42,6 +43,10 @@ _OPERATION_ALIASES = {
     "random_nt": "randomize_nucleotides",
     "replace_random": "randomize_nucleotides",
     "ablate": "randomize_nucleotides",
+    "cds_frameshift": "cds_frameshift",
+    "cds_frame_shift": "cds_frameshift",
+    "frameshift": "cds_frameshift",
+    "frame_shift": "cds_frameshift",
 }
 
 _REGION_ALIASES: dict[str, RegionName | tuple[RegionName, ...]] = {
@@ -97,9 +102,13 @@ class SequenceControlOperation:
 
     operation: OperationName
     regions: tuple[RegionName, ...]
+    shift: int | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {"operation": self.operation, "regions": list(self.regions)}
+        out: dict[str, object] = {"operation": self.operation, "regions": list(self.regions)}
+        if self.operation == "cds_frameshift":
+            out["shift"] = self.shift
+        return out
 
 
 @dataclass(frozen=True)
@@ -142,7 +151,7 @@ def _operation_name(value: str) -> OperationName:
     except KeyError as exc:
         raise ValueError(
             "sequence control operation must be one of: "
-            "shuffle_nucleotides, shuffle_codons, randomize_nucleotides"
+            "shuffle_nucleotides, shuffle_codons, randomize_nucleotides, cds_frameshift"
         ) from exc
 
 
@@ -217,17 +226,39 @@ def _regions_from_value(
     raise TypeError(f"Unsupported regions value: {value!r}")
 
 
+def _frameshift_from_value(value: object) -> int:
+    if isinstance(value, MappingABC):
+        for key in ("shift", "frameshift", "frame_shift", "amount"):
+            if key in value:
+                return _frameshift_from_value(value[key])
+        raise ValueError("cds_frameshift requires a shift of 1 or 2")
+    if value is None or isinstance(value, bool):
+        raise ValueError("cds_frameshift requires a shift of 1 or 2")
+    try:
+        shift = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("cds_frameshift requires a shift of 1 or 2") from exc
+    if shift not in {1, 2}:
+        raise ValueError("cds_frameshift shift must be 1 or 2")
+    return shift
+
+
 def _operation_from_entry(entry: Mapping[str, object]) -> SequenceControlOperation:
     raw_operation = entry.get("operation", entry.get("type", entry.get("op")))
     if raw_operation is None:
         raise ValueError("Each sequence control operation needs an 'operation' or 'type' field")
     operation = _operation_name(str(raw_operation))
+    shift = None
+    if operation == "cds_frameshift":
+        shift = _frameshift_from_value(
+            entry.get("shift", entry.get("frameshift", entry.get("frame_shift", entry.get("amount"))))
+        )
     regions = _regions_from_value(
         entry.get("regions", entry.get("region", True)),
         default_regions=_ALL_REGIONS_BY_OPERATION[operation],
         all_regions=_ALL_REGIONS_BY_OPERATION[operation],
     )
-    return SequenceControlOperation(operation=operation, regions=regions)
+    return SequenceControlOperation(operation=operation, regions=regions, shift=shift)
 
 
 def _legacy_operation(region: RegionName, mode: object) -> SequenceControlOperation | None:
@@ -250,19 +281,31 @@ def _legacy_operation(region: RegionName, mode: object) -> SequenceControlOperat
 
 
 def _merge_operations(operations: Sequence[SequenceControlOperation]) -> tuple[SequenceControlOperation, ...]:
-    merged: dict[OperationName, list[RegionName]] = {}
+    merged: dict[OperationName, SequenceControlOperation] = {}
     for operation in operations:
         if not operation.regions:
             continue
-        if operation.operation == "shuffle_codons" and any(region != "cds" for region in operation.regions):
-            raise ValueError("shuffle_codons only supports the CDS region")
-        bucket = merged.setdefault(operation.operation, [])
+        if operation.operation in {"shuffle_codons", "cds_frameshift"} and any(
+            region != "cds" for region in operation.regions
+        ):
+            raise ValueError(f"{operation.operation} only supports the CDS region")
+        existing = merged.get(operation.operation)
+        if existing is not None and operation.operation == "cds_frameshift" and existing.shift != operation.shift:
+            raise ValueError("Duplicate cds_frameshift operations must use the same shift")
+        bucket = list(existing.regions) if existing is not None else []
         for region in operation.regions:
             if region not in bucket:
                 bucket.append(region)
-    out = tuple(SequenceControlOperation(operation=op, regions=tuple(regions)) for op, regions in merged.items())
+        merged[operation.operation] = SequenceControlOperation(
+            operation=operation.operation,
+            regions=tuple(bucket),
+            shift=operation.shift if operation.operation == "cds_frameshift" else None,
+        )
+    out = tuple(merged.values())
     owners: dict[RegionName, OperationName] = {}
     for operation in out:
+        if operation.operation == "cds_frameshift":
+            continue
         for region in operation.regions:
             if region == "transcript" and owners:
                 raise ValueError("The transcript region cannot be combined with other sequence-control regions")
@@ -287,7 +330,8 @@ def normalize_sequence_control_config(config: object) -> SequenceControlConfig:
           "seed": 42,
           "operations": [
             {"operation": "shuffle_nucleotides", "regions": ["5utr", "3utr"]},
-            {"operation": "shuffle_codons", "regions": ["cds"]}
+            {"operation": "shuffle_codons", "regions": ["cds"]},
+            {"operation": "cds_frameshift", "shift": 1}
           ],
           "save_dir": "data/saluki_control"
         }
@@ -353,9 +397,26 @@ def normalize_sequence_control_config(config: object) -> SequenceControlConfig:
         ("randomize_nt", "randomize_nucleotides"),
         ("random_nucleotides", "randomize_nucleotides"),
         ("replace_random", "randomize_nucleotides"),
+        ("cds_frameshift", "cds_frameshift"),
+        ("cds_frame_shift", "cds_frameshift"),
     )
     for key, operation in shortcut_keys:
         if key not in config:
+            continue
+        if operation == "cds_frameshift":
+            value = config[key]
+            regions = _regions_from_value(
+                value.get("regions", value.get("region", True)) if isinstance(value, MappingABC) else True,
+                default_regions=_ALL_REGIONS_BY_OPERATION[operation],
+                all_regions=_ALL_REGIONS_BY_OPERATION[operation],
+            )
+            entries.append(
+                SequenceControlOperation(
+                    operation=operation,
+                    regions=regions,
+                    shift=_frameshift_from_value(value),
+                )
+            )
             continue
         regions = _regions_from_value(
             config[key],
@@ -395,6 +456,29 @@ def _base_channel_indices(schema: SequenceSchema) -> np.ndarray:
     if set(letters) != {"A", "C", "G", "U"} or len(letters) != 4:
         raise ValueError("sequence_controls requires exactly one A, C, G, and U/T base channel")
     return np.asarray(indices, dtype=np.int64)
+
+
+def _resolve_cds_channel(schema: SequenceSchema, cds_channel: str | int | None) -> int:
+    if isinstance(cds_channel, int):
+        if cds_channel < 0 or cds_channel >= schema.n_channels:
+            raise ValueError(f"cds_channel index {cds_channel} is outside schema with {schema.n_channels} channels")
+        return int(cds_channel)
+    if isinstance(cds_channel, str):
+        try:
+            return schema.channels.index(cds_channel)
+        except ValueError as exc:
+            raise ValueError(f"cds_channel '{cds_channel}' is not in schema channels {schema.channels}") from exc
+
+    preferred = ("CDS_codon_start", "cds_codon_start", "codon_start", "CDS", "cds")
+    lower_to_index = {name.lower(): i for i, name in enumerate(schema.channels)}
+    for name in preferred:
+        if name.lower() in lower_to_index:
+            return lower_to_index[name.lower()]
+    for i, name in enumerate(schema.channels):
+        lowered = name.lower()
+        if "cds" in lowered or "coding" in lowered or "codon_start" in lowered:
+            return i
+    raise ValueError("Could not infer CDS channel from schema; pass cds_channel explicitly")
 
 
 def _infer_valid_length(x: np.ndarray, base_channels: np.ndarray) -> int:
@@ -496,6 +580,28 @@ def _randomize_nucleotides(
     _write_base_symbols(x, start, end, symbols, base_channels)
 
 
+def _frameshift_cds_channel(
+    x: np.ndarray,
+    *,
+    valid_length: int,
+    cds_channel: int,
+    shift: int,
+) -> bool:
+    if valid_length <= 0:
+        return False
+    channel = int(cds_channel)
+    end = min(int(valid_length), int(x.shape[-1]))
+    locs = np.flatnonzero(np.asarray(x[channel, :end]) > 0)
+    if locs.size == 0:
+        return False
+    shifted = locs + int(shift)
+    shifted = shifted[shifted < end]
+    x[channel, :end] = 0
+    if shifted.size:
+        x[channel, shifted] = 1
+    return True
+
+
 def _shuffle_codons(
     x: np.ndarray,
     *,
@@ -519,6 +625,7 @@ def _empty_nested_counts() -> dict[str, dict[str, int]]:
         "shuffle_nucleotides": {region: 0 for region in _ANNOTATED_REGIONS + ("transcript",)},
         "shuffle_codons": {region: 0 for region in _ANNOTATED_REGIONS + ("transcript",)},
         "randomize_nucleotides": {region: 0 for region in _ANNOTATED_REGIONS + ("transcript",)},
+        "cds_frameshift": {region: 0 for region in _ANNOTATED_REGIONS + ("transcript",)},
     }
 
 
@@ -551,8 +658,9 @@ def apply_sequence_controls_array(
 ) -> tuple[np.ndarray, dict[str, object]]:
     """Apply RNA sequence controls to an encoded array.
 
-    Only base channels are rewritten. Annotation channels, including Saluki CDS
-    codon-start and splice-junction channels, are copied through unchanged.
+    Base perturbations rewrite only base channels. ``cds_frameshift`` rewrites
+    only the CDS/codon-start channel. The splice-junction channel is copied
+    through unchanged.
     """
 
     cfg = normalize_sequence_control_config(config)
@@ -569,6 +677,8 @@ def apply_sequence_controls_array(
             f"X has {arr.shape[1]} channels, but schema '{resolved.name}' expects {resolved.n_channels}"
         )
     base_channels = _base_channel_indices(resolved)
+    needs_frameshift = any(op.operation == "cds_frameshift" for op in cfg.operations)
+    cds_channel_index = _resolve_cds_channel(resolved, cfg.cds_channel) if needs_frameshift else None
 
     if out_path is None:
         out = np.array(arr, copy=True)
@@ -577,7 +687,11 @@ def apply_sequence_controls_array(
         path.parent.mkdir(parents=True, exist_ok=True)
         out = np.lib.format.open_memmap(path, mode="w+", dtype=arr.dtype, shape=arr.shape)
 
-    needs_cds = any(region != "transcript" for op in cfg.operations for region in op.regions)
+    needs_cds = any(
+        op.operation != "cds_frameshift" and region != "transcript"
+        for op in cfg.operations
+        for region in op.regions
+    )
     reporter = ProgressReporter(
         "sequence-controls: edit transcripts",
         total=int(arr.shape[0]),
@@ -610,8 +724,25 @@ def apply_sequence_controls_array(
                 ) from exc
             if cds.starts.size == 0 or cds.cds_length < 3:
                 stats["skipped_no_cds"] = int(stats["skipped_no_cds"]) + 1
+        elif needs_frameshift and cds_channel_index is not None:
+            if not np.any(np.asarray(x_one[cds_channel_index, :valid_length]) > 0):
+                stats["skipped_no_cds"] = int(stats["skipped_no_cds"]) + 1
 
         for op in cfg.operations:
+            if op.operation == "cds_frameshift":
+                if cds_channel_index is None:
+                    continue
+                if op.shift is None:
+                    raise ValueError("cds_frameshift requires a shift of 1 or 2")
+                shifted = _frameshift_cds_channel(
+                    x_one,
+                    valid_length=valid_length,
+                    cds_channel=cds_channel_index,
+                    shift=op.shift,
+                )
+                if shifted:
+                    _increment(stats, "edited", op.operation, "cds")
+                continue
             for region in op.regions:
                 bounds = _region_bounds(region, valid_length=valid_length, cds=cds)
                 if bounds is None:
