@@ -189,6 +189,7 @@ def _loader(
     shuffle: bool,
     num_workers: int = 0,
     pin_memory: bool = False,
+    drop_last: bool = False,
 ) -> DataLoader | None:
     """Create a DataLoader for a split, or ``None`` for empty splits.
 
@@ -199,6 +200,7 @@ def _loader(
         shuffle: Whether to shuffle the split each epoch.
         num_workers: Number of worker processes used by the DataLoader.
         pin_memory: Whether the DataLoader should pin host memory.
+        drop_last: Whether to drop the final incomplete batch.
     """
 
     if not indices:
@@ -211,7 +213,18 @@ def _loader(
         pin_memory=pin_memory,
         persistent_workers=int(num_workers) > 0,
         collate_fn=_collate_regression,
+        drop_last=drop_last,
     )
+
+
+def _would_create_singleton_batch(n_examples: int, batch_size: int) -> bool:
+    """Return whether batching would leave one training example by itself."""
+
+    n = int(n_examples)
+    bs = int(batch_size)
+    if bs <= 1 or n <= bs:
+        return False
+    return n % bs == 1
 
 
 def _run_loader(
@@ -400,6 +413,15 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
     dataset = _ArrayRegressionDataset(bundle.X, y_train, aux_arrays)
     pin_memory = device.type == "cuda"
+    drop_last_train = _would_create_singleton_batch(len(splits["train"]), cfg.batch_size)
+    if drop_last_train:
+        log_progress(
+            (
+                "training: train split would end with a singleton batch; "
+                "dropping the final shuffled training example each epoch"
+            ),
+            enabled=cfg.progress,
+        )
     train_loader = _loader(
         dataset,
         splits["train"],
@@ -407,6 +429,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         shuffle=True,
         num_workers=cfg.num_workers,
         pin_memory=pin_memory,
+        drop_last=drop_last_train,
     )
     val_loader = _loader(
         dataset,

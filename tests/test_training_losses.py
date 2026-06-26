@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+import transcriptml.training.trainer as trainer
 from transcriptml.data.bundle import DatasetBundle
 from transcriptml.training.losses import build_training_loss
 from transcriptml.training.trainer import train_model
@@ -95,6 +96,17 @@ def _tiny_model_config() -> dict[str, object]:
     }
 
 
+class _BatchNormRegressionModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.bn = torch.nn.BatchNorm1d(4)
+        self.fc = torch.nn.Linear(4, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        z = x.float().mean(dim=-1)
+        return self.fc(self.bn(z)).squeeze(-1)
+
+
 def test_train_model_default_mse_remains_compatible(tmp_path):
     bundle = DatasetBundle(
         X=_tiny_x(6),
@@ -118,6 +130,32 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
 
     assert result["summary"]["loss"] == {"name": "mse"}
     assert result["summary"]["test_loss"] == pytest.approx(result["summary"]["test_mse"])
+    assert (tmp_path / "best.pt").exists()
+
+
+def test_train_model_drops_singleton_training_batch_for_batchnorm(tmp_path, monkeypatch):
+    bundle = DatasetBundle(
+        X=_tiny_x(8),
+        y=np.linspace(-1.0, 1.0, 8, dtype=np.float32),
+        schema="rna4",
+        splits={"train": [0, 1, 2, 3, 4], "val": [5, 6], "test": [7]},
+    )
+    monkeypatch.setattr(trainer, "build_model", lambda _config: _BatchNormRegressionModel())
+
+    result = train_model(
+        bundle,
+        {
+            "dataset": "unused",
+            "output_dir": str(tmp_path),
+            "model": _tiny_model_config(),
+            "batch_size": 2,
+            "epochs": 1,
+            "patience": 0,
+            "progress": False,
+        },
+    )
+
+    assert np.isfinite(result["history"][0]["train_loss"])
     assert (tmp_path / "best.pt").exists()
 
 
