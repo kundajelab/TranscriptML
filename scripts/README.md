@@ -14,6 +14,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `all_codon_ism_shard_by_fold.sh` and `submit_all_codon_ism_shard_by_fold.sh`: all-codon ISM, one 10-task job array per fold by default.
 - `motif_ablation_by_fold.sh` and `motif_ablation_all_folds.sh`: motif ablations across the configured motif list.
 - `motif_epistasis_by_fold.sh` and `motif_epistasis_all_folds.sh`: motif epistasis across the configured motif-pair list.
+- `mpra/`: MPRA 3-prime UTR insert workflows for building 4-channel LegNet input, training LegNet, and running single-nucleotide ISM. See `mpra/README.md`.
 
 ## Configure A Run
 

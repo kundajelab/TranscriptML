@@ -1,0 +1,31 @@
+{
+  "dataset": "SCRIPT_OVERWRITES_THIS_FROM_DATASET_DIR",
+  "output_dir": "SCRIPT_OVERWRITES_THIS_OUTPUT_DIR",
+  "model": {
+    "name": "legnet",
+    "params": {
+      "in_ch": 4,
+      "stem_ch": 64,
+      "stem_ks": 7,
+      "ef_ks": 5,
+      "ef_block_sizes": [64, 96, 128],
+      "pool_sizes": [2, 2, 2],
+      "resize_factor": 4,
+      "block_dropout": 0.0,
+      "head_dropout": 0.1,
+      "stem_dropout": 0.0
+    }
+  },
+  "batch_size": 64,
+  "epochs": 50,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0,
+  "gradient_clip_norm": 0.5,
+  "patience": 8,
+  "monitor": ["val_loss", "val_pearson"],
+  "device": "auto",
+  "num_workers": 0,
+  "mmap_mode": "r",
+  "seed": 42,
+  "split": {"method": "random", "val_frac": 0.1, "test_frac": 0.1}
+}
