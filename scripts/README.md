@@ -9,6 +9,8 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `build_saluki_gtf.sh`: builds a Saluki-style dataset bundle with `transcriptml build-saluki-gtf`.
 - `train_eval_split.sh` and `submit_train_eval_split.sh`: train and evaluate one predefined train/validation/test split from the dataset bundle.
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one job per fold.
+- `make_saluki_hparam_grid.py`, `submit_hparam_sweep_cv.sh`, and `hparam_sweep_cv_combo.sh`: generate or consume a hyperparameter table and run one CV sweep combo per SLURM array task.
+- `summarize_hparam_sweep.py`: aggregate completed sweep combo/fold summaries into `${SWEEP_ROOT}/sweep_summary.tsv`.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
 - `codon_ism_by_fold.sh` and `submit_codon_ism_by_fold.sh`: synonymous codon ISM, one job per trained fold.
 - `all_codon_ism_shard_by_fold.sh` and `submit_all_codon_ism_shard_by_fold.sh`: all-codon ISM, one 10-task job array per fold by default.
@@ -80,7 +82,8 @@ What each group means:
 | `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
 | `RUN_NAME`, `RUN_ROOT` | Pick a run name and scratch/OAK location where outputs should be written. |
 | `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
-| `N_FOLDS`, `CV_SEED`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior. |
+| `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/saluki_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |
+| `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior. |
 | `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
 | `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
@@ -271,6 +274,47 @@ ${CV_ROOT}/fold0/eval/test_predictions.summary.json
 ```
 
 The fold split is deterministic from `CV_SEED`. For fold `i`, fold `i` is the test split, fold `i + 1` is validation, and the remaining folds are training.
+
+## Hyperparameter Sweep CV
+
+Use this when you want one SLURM job per hyperparameter combo, with all CV
+folds run sequentially inside that job.
+
+Generate a starter table, or provide your own CSV/TSV with one row per combo:
+
+```bash
+python scripts/make_saluki_hparam_grid.py --preset smoke --out scripts/saluki_hparams.tsv
+```
+
+Sweep-table columns can be top-level training config fields such as
+`learning_rate`, `batch_size`, `epochs`, `patience`, or `weight_decay`; Saluki
+model params such as `filters`, `dropout`, and `kernel_size`; or dotted config
+paths such as `model.params.filters`. Values are parsed as JSON when possible,
+so arrays and booleans can be written as `[64,96,128]` and `true`.
+
+Submit the sweep:
+
+```bash
+bash scripts/submit_hparam_sweep_cv.sh
+```
+
+Each SLURM array task writes one combo under `${SWEEP_ROOT}`:
+
+```text
+${SWEEP_ROOT}/sweep_table.tsv
+${SWEEP_ROOT}/combo_0000/hparams.json
+${SWEEP_ROOT}/combo_0000/fold0/train_config.json
+${SWEEP_ROOT}/combo_0000/fold0/model/summary.json
+${SWEEP_ROOT}/combo_0000/fold0/eval/test_predictions.summary.json
+${SWEEP_ROOT}/combo_0000/combo_summary.json
+${SWEEP_ROOT}/sweep_summary.tsv
+```
+
+To refresh the aggregate table after manual edits or partial reruns:
+
+```bash
+python scripts/summarize_hparam_sweep.py --sweep-root "${SWEEP_ROOT}"
+```
 
 ## Run ISM
 

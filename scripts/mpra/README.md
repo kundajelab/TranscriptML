@@ -12,6 +12,8 @@ from the copied scripts.
 - `example_legnet_train_config.json`: per-run training config after you copy `scripts/mpra/`; edit LegNet and training hyperparameters in the copied file. The training scripts replace `dataset` and `output_dir` in generated configs.
 - `build_legnet_input.sh`: builds a 4-channel RNA MPRA dataset bundle with `transcriptml build-mpra`.
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one LegNet training/evaluation job per fold.
+- `make_legnet_hparam_grid.py`, `submit_hparam_sweep_cv.sh`, and `hparam_sweep_cv_combo.sh`: generate or consume a hyperparameter table and run one CV sweep combo per SLURM array task.
+- `summarize_hparam_sweep.py`: aggregate completed sweep combo/fold summaries into `${SWEEP_ROOT}/sweep_summary.tsv`.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
 - `train_legnet.sh` and `submit_train_legnet.sh`: optional helper to train one LegNet model from the MPRA bundle.
 - `run_legnet_ism.sh` and `submit_legnet_ism.sh`: optional helper to run ISM on one trained checkpoint.
@@ -70,6 +72,7 @@ Important config values:
 | `RUN_ROOT`, `DATASET_DIR`, `CV_ROOT`, `INTERPRET_ROOT` | Output locations for the dataset, fold model/evaluation files, and ISM files. |
 | `BASE_TRAIN_CONFIG` | Base JSON training config. Defaults to `scripts/mpra/example_legnet_train_config.json`. |
 | `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET` | CV controls. By default, fold `i` is the test split and fold `i + 1` is validation. |
+| `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/mpra/legnet_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |
 | `RUN_SPLIT_EVALUATION` | `auto` runs the extra `transcriptml evaluate --split` step only when the built dataset has `splits.json`. Set `1` to require it or `0` to skip it. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for prediction and ISM. |
 
@@ -169,6 +172,48 @@ remaining folds are training.
 The CV workflow ignores any `SPLIT_COL` from the source MPRA table. If you want
 to train/evaluate a single predefined split instead, use the optional
 `train_legnet.sh` helper below.
+
+## Hyperparameter Sweep CV
+
+Use this when you want one SLURM job per LegNet hyperparameter combo, with all
+CV folds run sequentially inside that job.
+
+Generate a starter table, or provide your own CSV/TSV with one row per combo:
+
+```bash
+python scripts/mpra/make_legnet_hparam_grid.py --preset smoke --out scripts/mpra/legnet_hparams.tsv
+```
+
+Sweep-table columns can be top-level training config fields such as
+`learning_rate`, `batch_size`, `epochs`, `patience`, or `weight_decay`; LegNet
+model params such as `stem_ch`, `block_dropout`, `head_dropout`, and
+`ef_block_sizes`; or dotted config paths such as `model.params.stem_ch`. Values
+are parsed as JSON when possible, so arrays and booleans can be written as
+`[64,96,128]` and `true`.
+
+Submit the sweep:
+
+```bash
+bash scripts/mpra/submit_hparam_sweep_cv.sh
+```
+
+Each SLURM array task writes one combo under `${SWEEP_ROOT}`:
+
+```text
+${SWEEP_ROOT}/sweep_table.tsv
+${SWEEP_ROOT}/combo_0000/hparams.json
+${SWEEP_ROOT}/combo_0000/fold0/train_config.json
+${SWEEP_ROOT}/combo_0000/fold0/model/summary.json
+${SWEEP_ROOT}/combo_0000/fold0/eval/test_predictions.summary.json
+${SWEEP_ROOT}/combo_0000/combo_summary.json
+${SWEEP_ROOT}/sweep_summary.tsv
+```
+
+To refresh the aggregate table after manual edits or partial reruns:
+
+```bash
+python scripts/mpra/summarize_hparam_sweep.py --sweep-root "${SWEEP_ROOT}"
+```
 
 ## Run ISM By Fold
 

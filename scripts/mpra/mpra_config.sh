@@ -66,6 +66,8 @@ MODEL_DIR="${MODEL_DIR:-${TRAIN_OUTPUT_ROOT}/model}"
 EVAL_DIR="${EVAL_DIR:-${TRAIN_OUTPUT_ROOT}/eval}"
 GENERATED_TRAIN_CONFIG="${GENERATED_TRAIN_CONFIG:-${TRAIN_OUTPUT_ROOT}/train_config.json}"
 CV_ROOT="${CV_ROOT:-${RUN_ROOT}/cv10}"
+SWEEP_ROOT="${SWEEP_ROOT:-${RUN_ROOT}/hparam_sweep}"
+SWEEP_TABLE="${SWEEP_TABLE:-${SCRIPT_CONFIG_DIR}/legnet_hparams.tsv}"
 INTERPRET_ROOT="${INTERPRET_ROOT:-${RUN_ROOT}/interpret}"
 INTERPRET_DATASET_DIR="${INTERPRET_DATASET_DIR:-${DATASET_DIR}}"
 ISM_OUT_DIR="${ISM_OUT_DIR:-${INTERPRET_ROOT}/ism}"
@@ -80,6 +82,8 @@ TRAIN_SEED="${TRAIN_SEED:-}"
 N_FOLDS="${N_FOLDS:-10}"
 CV_SEED="${CV_SEED:-42}"
 CV_VAL_OFFSET="${CV_VAL_OFFSET:-1}"
+SWEEP_SKIP_COMPLETED="${SWEEP_SKIP_COMPLETED:-1}"
+SWEEP_MAX_CONCURRENT="${SWEEP_MAX_CONCURRENT:-}"
 
 # auto: run the extra transcriptml evaluate step only when DATASET_DIR has
 # splits.json. Training itself always writes test predictions from the chosen
