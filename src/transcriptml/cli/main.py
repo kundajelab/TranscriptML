@@ -4,20 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from transcriptml.data.bundle import load_bundle
-from transcriptml.data.builders import build_mpra_dataset, build_saluki_dataset, build_saluki_dataset_from_gtf
-from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH
-from transcriptml.interpret.ablation import motif_ablation, save_motif_ablation_result
-from transcriptml.interpret.context import motif_context_scan, save_motif_context_result
-from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_writer, save_codon_ism_result
-from transcriptml.interpret.epistasis import motif_epistasis, save_epistasis_result
-from transcriptml.interpret.ism import compute_ism, save_ism_result
-from transcriptml.interpret.predictor import Predictor
-from transcriptml.models.registry import list_models, model_default_params
-from transcriptml.progress import log_progress
-from transcriptml.training.evaluation import evaluate_checkpoint
-from transcriptml.training.trainer import train_from_config
-from transcriptml.workflows import init_run, prepare_cv_fold
+DEFAULT_SALUKI_LENGTH = 12288
 
 
 def _csv_list(value: str | None) -> list[str] | None:
@@ -264,10 +251,14 @@ def main(argv: list[str] | None = None) -> None:
 
     args = build_parser().parse_args(argv)
     if args.command == "init-run":
+        from transcriptml.workflows import init_run
+
         out = init_run(args.workflow, args.out_dir, force=args.force)
         print(f"Wrote starter run configs to {out}")
         return
     if args.command == "models":
+        from transcriptml.models.registry import list_models, model_default_params
+
         if args.models_command == "list":
             models = list_models()
             if args.json:
@@ -287,6 +278,8 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"{key}\t{value}")
             return
     if args.command == "cv":
+        from transcriptml.workflows import prepare_cv_fold
+
         if args.cv_command == "prepare-fold":
             config_path = prepare_cv_fold(
                 dataset=args.dataset,
@@ -342,6 +335,8 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"Missing {missing}. {_analysis_install_message()}") from exc
         return
     if args.command == "build-mpra":
+        from transcriptml.data.builders import build_mpra_dataset
+
         build_mpra_dataset(
             args.table,
             args.out_dir,
@@ -355,6 +350,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     if args.command == "build-saluki":
+        from transcriptml.data.builders import build_saluki_dataset
+
         build_saluki_dataset(
             table_path=args.table,
             out_dir=args.out_dir,
@@ -370,6 +367,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     if args.command == "build-saluki-gtf":
+        from transcriptml.data.builders import build_saluki_dataset_from_gtf
+
         build_saluki_dataset_from_gtf(
             gtf_path=args.gtf,
             fasta_path=args.fasta,
@@ -384,9 +383,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     if args.command == "train":
+        from transcriptml.training.trainer import train_from_config
+
         train_from_config(args.config)
         return
     if args.command == "evaluate":
+        from transcriptml.progress import log_progress
+        from transcriptml.training.evaluation import evaluate_checkpoint
+
         result = evaluate_checkpoint(
             args.checkpoint,
             args.dataset,
@@ -400,15 +404,23 @@ def main(argv: list[str] | None = None) -> None:
         Path(args.out_csv).with_suffix(".summary.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         return
 
+    from transcriptml.data.bundle import load_bundle
+    from transcriptml.interpret.predictor import Predictor
+    from transcriptml.progress import log_progress
+
     log_progress(f"{args.command}: loading dataset {args.dataset}")
     bundle = load_bundle(args.dataset, mmap_mode="r" if args.command == "codon-ism" else None)
     log_progress(f"{args.command}: loading checkpoint {args.checkpoint}")
     predictor = Predictor.from_checkpoint(args.checkpoint, device=args.device, batch_size=args.batch_size)
     cds_channel = _maybe_int(getattr(args, "cds_channel", None))
     if args.command == "ism":
+        from transcriptml.interpret.ism import compute_ism, save_ism_result
+
         result = compute_ism(bundle.X, predictor, mutation_batch_size=args.mutation_batch_size)
         save_ism_result(result, args.out_dir)
     elif args.command == "codon-ism":
+        from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_writer, save_codon_ism_result
+
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         if args.table_format == "csv":
@@ -438,6 +450,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         save_codon_ism_result(result, args.out_dir, save_mutations=False)
     elif args.command == "motif-ablation":
+        from transcriptml.interpret.ablation import motif_ablation, save_motif_ablation_result
+
         result = motif_ablation(
             bundle.X,
             predictor,
@@ -451,6 +465,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         save_motif_ablation_result(result, args.out_dir)
     elif args.command == "motif-context":
+        from transcriptml.interpret.context import motif_context_scan, save_motif_context_result
+
         result = motif_context_scan(
             bundle.X,
             predictor,
@@ -467,6 +483,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         save_motif_context_result(result, args.out_dir)
     elif args.command == "epistasis":
+        from transcriptml.interpret.epistasis import motif_epistasis, save_epistasis_result
+
         result = motif_epistasis(
             bundle.X,
             predictor,
