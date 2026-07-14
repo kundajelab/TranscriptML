@@ -23,11 +23,10 @@ def test_init_run_cli_writes_templates(tmp_path):
     out_dir = tmp_path / "run"
     main(["init-run", "--workflow", "saluki", "--out-dir", str(out_dir)])
 
-    run_config = json.loads((out_dir / "run_config.json").read_text(encoding="utf-8"))
     train_config = json.loads((out_dir / "train_config.json").read_text(encoding="utf-8"))
-    assert run_config["workflow"] == "saluki"
     assert train_config["model"]["name"] == "saluki_exact"
     assert train_config["split_source"] == "auto"
+    assert not (out_dir / "run_config.json").exists()
     assert (out_dir / "README.md").exists()
 
 

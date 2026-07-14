@@ -49,30 +49,14 @@ def _train_config(workflow: str) -> dict[str, Any]:
     raise ValueError("workflow must be one of: saluki, legnet")
 
 
-def _run_config(workflow: str, out_dir: Path) -> dict[str, Any]:
-    model_name = "saluki_exact" if workflow == "saluki" else "legnet"
-    return {
-        "workflow": workflow,
-        "run_dir": str(out_dir),
-        "dataset_dir": "__EDIT_ME_DATASET_DIR__",
-        "model": model_name,
-        "train_config": str(out_dir / "train_config.json"),
-        "notes": "Edit dataset_dir and output_dir placeholders before training.",
-    }
-
-
 def _readme(workflow: str) -> str:
     return f"""# TranscriptML {workflow} Run
 
 This directory was created by `transcriptml init-run`.
 
-Edit:
-- `run_config.json` for human-readable run metadata.
-- `train_config.json` for the config consumed by `transcriptml train`.
+Edit `train_config.json`, then run:
 
-Minimal command:
-
-```bash
+```sh
 transcriptml train train_config.json
 ```
 
@@ -97,7 +81,6 @@ def init_run(workflow: str, out_dir: str | Path, *, force: bool = False) -> Path
     if out.exists() and any(out.iterdir()) and not force:
         raise FileExistsError(f"Output directory is not empty: {out}. Use --force to overwrite template files.")
     out.mkdir(parents=True, exist_ok=True)
-    (out / "run_config.json").write_text(json.dumps(_run_config(workflow, out), indent=2) + "\n", encoding="utf-8")
     (out / "train_config.json").write_text(json.dumps(_train_config(workflow), indent=2) + "\n", encoding="utf-8")
     (out / "README.md").write_text(_readme(workflow), encoding="utf-8")
     return out
