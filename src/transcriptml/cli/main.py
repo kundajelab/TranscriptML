@@ -17,7 +17,7 @@ from transcriptml.models.registry import list_models, model_default_params
 from transcriptml.progress import log_progress
 from transcriptml.training.evaluation import evaluate_checkpoint
 from transcriptml.training.trainer import train_from_config
-from transcriptml.workflows import init_run
+from transcriptml.workflows import init_run, prepare_cv_fold
 
 
 def _csv_list(value: str | None) -> list[str] | None:
@@ -63,6 +63,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = model_sub.add_parser("show", help="Show default parameters for a model")
     p_show.add_argument("model")
     p_show.add_argument("--json", action="store_true", help="Print JSON instead of a table")
+
+    p = sub.add_parser("cv", help="Cross-validation workflow helpers")
+    cv_sub = p.add_subparsers(dest="cv_command", required=True)
+    p_fold = cv_sub.add_parser("prepare-fold", help="Write one fold dataset bundle and train config")
+    p_fold.add_argument("--dataset", required=True, help="Original TranscriptML dataset bundle")
+    p_fold.add_argument("--base-config", required=True, help="Base TranscriptML train config JSON")
+    p_fold.add_argument("--cv-root", required=True, help="Directory containing fold*/ outputs")
+    p_fold.add_argument("--fold", type=int, required=True, help="Zero-based fold index")
+    p_fold.add_argument("--model", required=True, help="Registered model name for this fold config")
+    p_fold.add_argument("--n-folds", type=int, default=10)
+    p_fold.add_argument("--seed", type=int, default=42)
+    p_fold.add_argument("--val-offset", type=int, default=1)
 
     p = sub.add_parser("build-mpra", help="Build an RNA4 MPRA dataset bundle")
     p.add_argument("table")
@@ -273,6 +285,20 @@ def main(argv: list[str] | None = None) -> None:
                 print(args.model)
                 for key, value in params.items():
                     print(f"{key}\t{value}")
+            return
+    if args.command == "cv":
+        if args.cv_command == "prepare-fold":
+            config_path = prepare_cv_fold(
+                dataset=args.dataset,
+                base_config=args.base_config,
+                cv_root=args.cv_root,
+                fold=args.fold,
+                model=args.model,
+                n_folds=args.n_folds,
+                seed=args.seed,
+                val_offset=args.val_offset,
+            )
+            print(config_path)
             return
     if args.command == "plot-ism":
         from transcriptml.plotting.single_nt_ism import plot_ism_from_args
