@@ -11,6 +11,7 @@ import torch
 
 from transcriptml.data.encoding import infer_valid_lengths
 from transcriptml.data.schemas import SequenceSchema, get_schema
+from transcriptml.devices import resolve_device
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.progress import ProgressReporter, log_progress
 
@@ -844,7 +845,7 @@ def compute_codon_ism(
         raise ValueError("mutation_batch_size must be positive")
 
     if isinstance(predictor, torch.nn.Module):
-        predictor = Predictor(predictor, device=device, batch_size=reference_batch_size or 128)
+        predictor = Predictor(predictor, device=resolve_device(device), batch_size=reference_batch_size or 128)
 
     N, _, L = arr.shape
     analysis_indices = _resolve_analysis_indices(

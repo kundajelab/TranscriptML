@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle
 from transcriptml.data.controls import apply_sequence_controls_to_bundle
+from transcriptml.devices import resolve_device
 from transcriptml.models.common import squeeze_prediction
 from transcriptml.models.registry import build_model, normalize_model_config, save_checkpoint
 from transcriptml.training.evaluation import evaluate_model, predict_to_csv
@@ -89,18 +90,6 @@ def _as_train_config(config: TrainConfig | Mapping[str, Any]) -> TrainConfig:
     if isinstance(config, TrainConfig):
         return config
     return TrainConfig(**dict(config))
-
-
-def _select_device(name: str) -> torch.device:
-    """Resolve ``auto`` or explicit torch device names.
-
-    Args:
-        name: ``"auto"`` or any string accepted by ``torch.device``.
-    """
-
-    if name == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(name)
 
 
 def _make_config_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
@@ -404,7 +393,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
 
     cfg = _as_train_config(config)
     _seed_everything(cfg.seed)
-    device = _select_device(cfg.device)
+    device = resolve_device(cfg.device)
     out = Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     sequence_control_stats: dict[str, Any] | None = None

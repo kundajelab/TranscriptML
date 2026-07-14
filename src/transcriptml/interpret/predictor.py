@@ -6,6 +6,7 @@ from typing import Callable, Sequence
 import numpy as np
 import torch
 
+from transcriptml.devices import resolve_device
 from transcriptml.models.common import squeeze_prediction
 from transcriptml.models.registry import load_checkpoint
 
@@ -30,7 +31,7 @@ class Predictor:
         """
 
         self.model = model
-        self.device = torch.device(device)
+        self.device = resolve_device(device)
         self.batch_size = int(batch_size)
         if isinstance(model, torch.nn.Module):
             self.model.to(self.device)
@@ -53,8 +54,9 @@ class Predictor:
             batch_size: Default batch size for prediction.
         """
 
-        model, _ = load_checkpoint(checkpoint_path, map_location=device)
-        return cls(model, device=device, batch_size=batch_size)
+        resolved = resolve_device(device)
+        model, _ = load_checkpoint(checkpoint_path, map_location=resolved)
+        return cls(model, device=resolved, batch_size=batch_size)
 
     @torch.no_grad()
     def predict(self, X: np.ndarray | torch.Tensor, *, batch_size: int | None = None) -> np.ndarray:

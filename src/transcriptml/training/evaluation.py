@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle
+from transcriptml.devices import resolve_device
 from transcriptml.models.common import squeeze_prediction
 from transcriptml.models.registry import load_checkpoint
 from transcriptml.training.metrics import mse, pearson_corr
@@ -33,6 +34,7 @@ def predict_array(
         progress: Whether to emit progress messages while predicting.
     """
 
+    device = resolve_device(device)
     model = model.to(device)
     model.eval()
     preds: list[np.ndarray] = []
@@ -75,6 +77,7 @@ def _predict_indexed_array(
         progress_label: Label shown in progress messages.
     """
 
+    device = resolve_device(device)
     model = model.to(device)
     model.eval()
     preds: list[np.ndarray] = []
@@ -115,6 +118,7 @@ def evaluate_model(
         progress: Whether to emit progress messages while evaluating.
     """
 
+    device = resolve_device(device)
     idx = np.arange(bundle.X.shape[0]) if indices is None else np.asarray(indices, dtype=int)
     preds = _predict_indexed_array(
         model,
@@ -193,6 +197,7 @@ def evaluate_checkpoint(
         progress: Whether to emit progress messages while evaluating.
     """
 
+    device = resolve_device(device)
     log_progress(f"evaluate: loading checkpoint {checkpoint_path}", enabled=progress)
     model, _ = load_checkpoint(checkpoint_path, map_location=device)
     log_progress(f"evaluate: loading dataset {dataset_path}", enabled=progress)
