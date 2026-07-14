@@ -129,6 +129,9 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
     )
 
     assert result["summary"]["loss"] == {"name": "mse"}
+    assert result["summary"]["best_monitor_values"].keys() == {"val_loss"}
+    assert "best_monitor" not in result["summary"]
+    assert "best_monitors" not in result["summary"]
     assert result["summary"]["test_loss"] == pytest.approx(result["summary"]["test_mse"])
     assert (tmp_path / "best.pt").exists()
 

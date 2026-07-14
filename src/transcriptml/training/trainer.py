@@ -586,8 +586,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     summary = {
         "best_epoch": best_epoch,
         "monitor": list(monitors),
-        "best_monitor": best_metrics[monitors[0]] if len(monitors) == 1 else best_metrics,
-        "best_monitors": best_metrics,
+        "best_monitor_values": best_metrics,
         "epochs_run": len(history),
         "loss": normalized_loss_config,
         "split_source_requested": cfg.split_source,
