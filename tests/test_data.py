@@ -1,7 +1,8 @@
 import numpy as np
+import pytest
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle, save_bundle
-from transcriptml.data.builders import build_saluki_dataset_from_gtf
+from transcriptml.data.builders import build_mpra_dataset, build_saluki_dataset_from_gtf
 from transcriptml.data.encoding import (
     decode_rna_one_hot,
     encode_rna_sequence,
@@ -65,6 +66,22 @@ def test_bundle_roundtrip(tmp_path):
     assert loaded.ids == ["a", "b"]
     assert loaded.schema.name == "rna4"
     np.testing.assert_array_equal(loaded.y, bundle.y)
+
+
+def test_builders_reject_unknown_split_labels(tmp_path):
+    table = tmp_path / "mpra.csv"
+    table.write_text("id,seq,y,split\nx,ACGU,1.0,holdout\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unknown split label"):
+        build_mpra_dataset(
+            table,
+            tmp_path / "bundle",
+            sequence_col="seq",
+            target_col="y",
+            id_col="id",
+            split_col="split",
+            progress=False,
+        )
 
 
 def test_gtf_attribute_parser_handles_gtf_and_gff3_styles():

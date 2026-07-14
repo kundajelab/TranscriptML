@@ -6,7 +6,13 @@ from typing import Sequence
 
 import numpy as np
 
-from transcriptml.interpret.ablation import MotifInstance, enumerate_motif_instances, mean_ablation_prediction
+from transcriptml.data.schemas import SequenceSchema
+from transcriptml.interpret.ablation import (
+    MotifInstance,
+    enumerate_motif_instances,
+    mean_ablation_prediction,
+    normalize_motif_region,
+)
 from transcriptml.interpret.edits import scramble_motif_ablating_inplace, scramble_window_inplace, valid_base_window
 from transcriptml.interpret.motifs import intervals_overlap, parse_motif
 from transcriptml.interpret.predictor import Predictor
@@ -22,6 +28,7 @@ class MotifContextResult:
     context_mask: np.ndarray
     reference_predictions: np.ndarray
     ablation_predictions: np.ndarray
+    region: str | None = None
 
 
 def motif_context_scan(
@@ -36,6 +43,9 @@ def motif_context_scan(
     strategy: str = "random_different",
     seed: int = 123,
     valid_lengths: Sequence[int] | None = None,
+    region: str | None = None,
+    schema: str | SequenceSchema = "saluki6",
+    cds_channel: str | int | None = None,
     progress: bool = True,
 ) -> MotifContextResult:
     """Scan context windows with effect ``(MA - M) - (A - R)``.
@@ -55,12 +65,25 @@ def motif_context_scan(
         seed: Random seed used for motif and context scrambling.
         valid_lengths: Optional valid lengths for each sequence. When omitted,
             lengths are inferred during motif enumeration.
+        region: Optional region filter limiting motif sites to ``5utr``,
+            ``cds``, or ``3utr``.
+        schema: Sequence schema name or object used for region-aware scans.
+        cds_channel: Optional CDS channel name or integer index for region
+            filtering.
         progress: Whether to emit progress messages while scanning.
     """
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
-    instances = enumerate_motif_instances(arr, motif, valid_lengths=valid_lengths, progress=progress)
+    instances = enumerate_motif_instances(
+        arr,
+        motif,
+        valid_lengths=valid_lengths,
+        region=region,
+        schema=schema,
+        cds_channel=cds_channel,
+        progress=progress,
+    )
     L = int(arr.shape[-1])
     context_effects = np.zeros((len(instances), L), dtype=np.float32)
     context_mask = np.zeros((len(instances), L), dtype=np.uint8)
@@ -147,6 +170,7 @@ def motif_context_scan(
         context_mask=context_mask,
         reference_predictions=R,
         ablation_predictions=A,
+        region=normalize_motif_region(region),
     )
 
 
@@ -174,6 +198,7 @@ def save_motif_context_result(result: MotifContextResult, out_dir: str | Path, *
             "analysis": "motif_context",
             "context_effect_definition": "(MA - M) - (A - R)",
             "n_instances": len(result.instances),
+            "region": result.region,
         },
     )
     log_progress("motif-context: done", enabled=progress)

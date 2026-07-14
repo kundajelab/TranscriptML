@@ -80,6 +80,38 @@ def test_context_scan_additive_model_cancels_to_zero():
     np.testing.assert_allclose(result.context_effects[result.context_mask.astype(bool)], 0.0, atol=1e-6)
 
 
+def test_context_scan_region_filter_matches_motif_enumeration():
+    X = encode_saluki_transcript("AAACCCGGGAA", length=11, cds_positions=[3, 6])[None].astype(np.float32)
+    predictor = Predictor(BaseWeightModel([1, 0, 0, 0]))
+
+    utr5 = motif_context_scan(
+        X,
+        predictor,
+        motif="AA",
+        window_size=1,
+        context_width=1,
+        n_motif_scrambles=0,
+        n_window_scrambles=0,
+        region="5utr",
+        progress=False,
+    )
+    cds = motif_context_scan(
+        X,
+        predictor,
+        motif="AA",
+        window_size=1,
+        context_width=1,
+        n_motif_scrambles=0,
+        n_window_scrambles=0,
+        region="cds",
+        progress=False,
+    )
+
+    assert [(inst.start, inst.end, inst.region) for inst in utr5.instances] == [(0, 2, "5utr"), (1, 3, "5utr")]
+    assert cds.instances == []
+    assert utr5.region == "5utr"
+
+
 def test_epistasis_known_interaction_term():
     X = encode_rna_sequence("AAAA")[None, :, :].astype(np.float32)
     predictor = Predictor(InteractionModel())

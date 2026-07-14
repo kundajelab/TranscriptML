@@ -110,6 +110,7 @@ def _splits_from_rows(rows: Sequence[Mapping[str, str]], split_col: str | None) 
         return None
     splits = {"train": [], "val": [], "test": []}
     val_aliases = {"val", "valid", "validation"}
+    unknown: dict[str, int] = {}
     for i, row in enumerate(rows):
         value = str(row.get(split_col, "")).strip().lower()
         if value == "train":
@@ -118,6 +119,14 @@ def _splits_from_rows(rows: Sequence[Mapping[str, str]], split_col: str | None) 
             splits["val"].append(i)
         elif value == "test":
             splits["test"].append(i)
+        elif value:
+            unknown[value] = unknown.get(value, 0) + 1
+    if unknown:
+        details = ", ".join(f"{label}={count}" for label, count in sorted(unknown.items()))
+        raise ValueError(
+            f"Unknown split label(s) in column '{split_col}': {details}. "
+            "Expected train, val/valid/validation, or test."
+        )
     return splits
 
 

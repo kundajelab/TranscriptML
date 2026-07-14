@@ -39,6 +39,27 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
 }
 
 
+def list_models() -> dict[str, str]:
+    """Return registered model names mapped to their config class names."""
+
+    return {name: spec.config_cls.__name__ for name, spec in sorted(MODEL_REGISTRY.items())}
+
+
+def model_default_params(name: str) -> dict[str, Any]:
+    """Return default constructor parameters for a registered model.
+
+    Args:
+        name: Registered model name.
+    """
+
+    try:
+        spec = MODEL_REGISTRY[name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown model '{name}'. Available: {sorted(MODEL_REGISTRY)}") from exc
+    defaults = spec.config_cls()
+    return defaults.to_kwargs() if hasattr(defaults, "to_kwargs") else asdict(defaults)
+
+
 def normalize_model_config(config: ModelConfig | Mapping[str, Any] | str) -> ModelConfig:
     """Normalize supported model config forms to ``ModelConfig``.
 

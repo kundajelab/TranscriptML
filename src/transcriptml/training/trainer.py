@@ -41,6 +41,7 @@ class TrainConfig:
     seed: int = 123
     progress: bool = True
     sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
+    split_source: str = "auto"
     split: Mapping[str, Any] = field(
         default_factory=lambda: {"method": "random", "val_frac": 0.1, "test_frac": 0.1}
     )
@@ -102,16 +103,14 @@ def _select_device(name: str) -> torch.device:
     return torch.device(name)
 
 
-def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
-    """Choose dataset splits from the bundle or training config.
+def _make_config_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
+    """Choose dataset splits from the training config.
 
     Args:
-        bundle: Dataset bundle that may already contain predefined splits.
+        bundle: Dataset bundle used for size and metadata.
         cfg: Training configuration containing split strategy settings.
     """
 
-    if bundle.splits:
-        return normalize_splits(bundle.splits)
     split_cfg = dict(cfg.split or {})
     method = split_cfg.get("method", "random")
     if method == "random":
@@ -128,6 +127,36 @@ def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]
     if method == "predefined":
         return normalize_splits(split_cfg["splits"])
     raise ValueError(f"Unknown split method '{method}'")
+
+
+def _select_splits(bundle: DatasetBundle, cfg: TrainConfig) -> tuple[dict[str, list[int]], str]:
+    """Choose dataset splits and report which source was used.
+
+    Args:
+        bundle: Dataset bundle that may already contain predefined splits.
+        cfg: Training configuration containing split source and strategy.
+    """
+
+    source = str(cfg.split_source or "auto").strip().lower()
+    if source not in {"auto", "bundle", "config"}:
+        raise ValueError("split_source must be one of: auto, bundle, config")
+    has_bundle_splits = bundle.splits is not None
+    if source == "bundle":
+        if not has_bundle_splits:
+            raise ValueError("split_source='bundle' requested but dataset bundle has no splits")
+        return normalize_splits(bundle.splits), "bundle"
+    if source == "config":
+        return _make_config_splits(bundle, cfg), "config"
+    if has_bundle_splits:
+        return normalize_splits(bundle.splits), "bundle"
+    return _make_config_splits(bundle, cfg), "config"
+
+
+def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
+    """Choose dataset splits from the bundle or training config."""
+
+    splits, _ = _select_splits(bundle, cfg)
+    return splits
 
 
 class _ArrayRegressionDataset(Dataset):
@@ -398,14 +427,16 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         y_train = np.zeros(int(bundle.X.shape[0]), dtype=np.float32)
     else:
         y_train = bundle.y
-    splits = _make_splits(bundle, cfg)
+    splits, split_source_used = _select_splits(bundle, cfg)
+    split_counts = {name: len(splits.get(name, [])) for name in ("train", "val", "test")}
     model_config = normalize_model_config(cfg.model)
     log_progress(
         (
             "training: "
             f"device={device}, output={out}, loss={normalized_loss_config['name']}, "
-            f"train={len(splits.get('train', []))}, val={len(splits.get('val', []))}, "
-            f"test={len(splits.get('test', []))}"
+            f"split_source={split_source_used} requested={cfg.split_source}, "
+            f"train={split_counts['train']}, val={split_counts['val']}, "
+            f"test={split_counts['test']}"
         ),
         enabled=cfg.progress,
     )
@@ -487,7 +518,12 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
                 epoch=epoch,
                 metrics=row,
                 optimizer_state=optimizer.state_dict(),
-                extra={"splits": splits, "train_config": asdict(cfg), "loss_config": normalized_loss_config},
+                extra={
+                    "splits": splits,
+                    "split_source_used": split_source_used,
+                    "train_config": asdict(cfg),
+                    "loss_config": normalized_loss_config,
+                },
             )
         else:
             stale += 1
@@ -498,7 +534,12 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             epoch=epoch,
             metrics=row,
             optimizer_state=optimizer.state_dict(),
-            extra={"splits": splits, "train_config": asdict(cfg), "loss_config": normalized_loss_config},
+            extra={
+                "splits": splits,
+                "split_source_used": split_source_used,
+                "train_config": asdict(cfg),
+                "loss_config": normalized_loss_config,
+            },
         )
         log_progress(
             (
@@ -560,6 +601,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "best_monitors": best_metrics,
         "epochs_run": len(history),
         "loss": normalized_loss_config,
+        "split_source_requested": cfg.split_source,
+        "split_source_used": split_source_used,
+        "split_counts": split_counts,
         "test_loss": test_loss_metrics.get("loss"),
         "test_mse": test_result.get("loss"),
         "test_pearson": test_result.get("pearson"),
