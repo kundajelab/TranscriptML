@@ -32,6 +32,58 @@ def _analysis_install_message() -> str:
     return "This command requires the analysis extra: pip install 'TranscriptML[analysis]'"
 
 
+def _resolve_named_or_positional_args(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    *,
+    command: str,
+    specs: list[tuple[str, str, str, str]],
+) -> dict[str, str]:
+    """Resolve values from named flags or legacy positional arguments."""
+
+    resolved: dict[str, str] = {}
+    for dest, flag_dest, flag, metavar in specs:
+        flagged = getattr(args, flag_dest)
+        positional = getattr(args, dest)
+        if flagged is not None and positional is not None and str(flagged) != str(positional):
+            parser.error(f"{command} got both {flag} and positional {metavar}; use only one")
+        value = flagged if flagged is not None else positional
+        if value is None:
+            parser.error(f"{command} requires {flag} or legacy positional {metavar}")
+        resolved[dest] = value
+    return resolved
+
+
+def _resolve_evaluate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> dict[str, str]:
+    """Resolve evaluate paths from named flags or legacy positional arguments."""
+
+    return _resolve_named_or_positional_args(
+        args,
+        parser,
+        command="evaluate",
+        specs=[
+            ("checkpoint", "checkpoint_flag", "--checkpoint", "CHECKPOINT"),
+            ("dataset", "dataset_flag", "--dataset", "DATASET"),
+            ("out_csv", "out_csv_flag", "--out-csv", "OUT_CSV"),
+        ],
+    )
+
+
+def _resolve_interpret_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> dict[str, str]:
+    """Resolve interpretation paths from named flags or legacy positional arguments."""
+
+    return _resolve_named_or_positional_args(
+        args,
+        parser,
+        command=str(args.command),
+        specs=[
+            ("checkpoint", "checkpoint_flag", "--checkpoint", "CHECKPOINT"),
+            ("dataset", "dataset_flag", "--dataset", "DATASET"),
+            ("out_dir", "out_dir_flag", "--out-dir", "OUT_DIR"),
+        ],
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the TranscriptML command-line argument parser."""
 
@@ -103,9 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("config")
 
     p = sub.add_parser("evaluate", help="Evaluate a checkpoint on a dataset bundle")
-    p.add_argument("checkpoint")
-    p.add_argument("dataset")
-    p.add_argument("out_csv")
+    p.add_argument("checkpoint", nargs="?", metavar="CHECKPOINT", help="Checkpoint path; prefer --checkpoint")
+    p.add_argument("dataset", nargs="?", metavar="DATASET", help="Dataset bundle; prefer --dataset")
+    p.add_argument("out_csv", nargs="?", metavar="OUT_CSV", help="Prediction CSV path; prefer --out-csv")
+    p.add_argument("--checkpoint", dest="checkpoint_flag", help="Checkpoint path")
+    p.add_argument("--dataset", dest="dataset_flag", help="Dataset bundle directory")
+    p.add_argument("--out-csv", dest="out_csv_flag", help="Prediction CSV output path")
     p.add_argument("--split")
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--device", default="cpu")
@@ -118,9 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
         ("epistasis", "Run pairwise motif epistasis"),
     ]:
         p = sub.add_parser(name, help=help_text)
-        p.add_argument("checkpoint")
-        p.add_argument("dataset")
-        p.add_argument("out_dir")
+        p.add_argument("checkpoint", nargs="?", metavar="CHECKPOINT", help="Checkpoint path; prefer --checkpoint")
+        p.add_argument("dataset", nargs="?", metavar="DATASET", help="Dataset bundle; prefer --dataset")
+        p.add_argument("out_dir", nargs="?", metavar="OUT_DIR", help="Output directory; prefer --out-dir")
+        p.add_argument("--checkpoint", dest="checkpoint_flag", help="Checkpoint path")
+        p.add_argument("--dataset", dest="dataset_flag", help="Dataset bundle directory")
+        p.add_argument("--out-dir", dest="out_dir_flag", help="Output directory")
         p.add_argument("--device", default="cpu")
         p.add_argument("--batch-size", type=int, default=128)
         if name not in {"ism", "codon-ism"}:
@@ -249,7 +307,8 @@ def main(argv: list[str] | None = None) -> None:
             ``None`` to use the process command-line arguments.
     """
 
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.command == "init-run":
         from transcriptml.workflows import init_run
 
@@ -391,46 +450,53 @@ def main(argv: list[str] | None = None) -> None:
         from transcriptml.progress import log_progress
         from transcriptml.training.evaluation import evaluate_checkpoint
 
+        evaluate_paths = _resolve_evaluate_args(args, parser)
         result = evaluate_checkpoint(
-            args.checkpoint,
-            args.dataset,
-            args.out_csv,
+            evaluate_paths["checkpoint"],
+            evaluate_paths["dataset"],
+            evaluate_paths["out_csv"],
             split=args.split,
             batch_size=args.batch_size,
             device=args.device,
         )
         metrics = {k: v for k, v in result.items() if k not in {"predictions", "targets", "indices"}}
-        log_progress(f"evaluate: writing summary to {Path(args.out_csv).with_suffix('.summary.json')}")
-        Path(args.out_csv).with_suffix(".summary.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        summary_path = Path(evaluate_paths["out_csv"]).with_suffix(".summary.json")
+        log_progress(f"evaluate: writing summary to {summary_path}")
+        summary_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         return
 
     from transcriptml.data.bundle import load_bundle
     from transcriptml.interpret.predictor import Predictor
     from transcriptml.progress import log_progress
 
-    log_progress(f"{args.command}: loading dataset {args.dataset}")
-    bundle = load_bundle(args.dataset, mmap_mode="r" if args.command == "codon-ism" else None)
-    log_progress(f"{args.command}: loading checkpoint {args.checkpoint}")
-    predictor = Predictor.from_checkpoint(args.checkpoint, device=args.device, batch_size=args.batch_size)
+    interpret_paths = _resolve_interpret_args(args, parser)
+    checkpoint = interpret_paths["checkpoint"]
+    dataset = interpret_paths["dataset"]
+    out_dir = interpret_paths["out_dir"]
+
+    log_progress(f"{args.command}: loading dataset {dataset}")
+    bundle = load_bundle(dataset, mmap_mode="r" if args.command == "codon-ism" else None)
+    log_progress(f"{args.command}: loading checkpoint {checkpoint}")
+    predictor = Predictor.from_checkpoint(checkpoint, device=args.device, batch_size=args.batch_size)
     cds_channel = _maybe_int(getattr(args, "cds_channel", None))
     if args.command == "ism":
         from transcriptml.interpret.ism import compute_ism, save_ism_result
 
         result = compute_ism(bundle.X, predictor, mutation_batch_size=args.mutation_batch_size)
-        save_ism_result(result, args.out_dir)
+        save_ism_result(result, out_dir)
     elif args.command == "codon-ism":
         from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_writer, save_codon_ism_result
 
-        out_dir = Path(args.out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
         if args.table_format == "csv":
-            table_path = out_dir / "mutations.csv"
+            table_path = out_path / "mutations.csv"
         elif args.table_format == "parquet":
-            table_path = out_dir / "mutations.parquet"
+            table_path = out_path / "mutations.parquet"
         elif args.table_format == "arrow":
-            table_path = out_dir / "mutations.arrow"
+            table_path = out_path / "mutations.arrow"
         else:
-            table_path = out_dir / "mutations_npz"
+            table_path = out_path / "mutations_npz"
         writer = mutation_table_writer(table_path, format=args.table_format, rows_per_shard=args.rows_per_shard)
         result = compute_codon_ism(
             bundle.X,
@@ -448,7 +514,7 @@ def main(argv: list[str] | None = None) -> None:
             sequence_shard_index=args.sequence_shard_index,
             sequence_shards=args.sequence_shards,
         )
-        save_codon_ism_result(result, args.out_dir, save_mutations=False)
+        save_codon_ism_result(result, out_dir, save_mutations=False)
     elif args.command == "motif-ablation":
         from transcriptml.interpret.ablation import motif_ablation, save_motif_ablation_result
 
@@ -463,7 +529,7 @@ def main(argv: list[str] | None = None) -> None:
             schema=bundle.schema,
             cds_channel=cds_channel,
         )
-        save_motif_ablation_result(result, args.out_dir)
+        save_motif_ablation_result(result, out_dir)
     elif args.command == "motif-context":
         from transcriptml.interpret.context import motif_context_scan, save_motif_context_result
 
@@ -481,7 +547,7 @@ def main(argv: list[str] | None = None) -> None:
             schema=bundle.schema,
             cds_channel=cds_channel,
         )
-        save_motif_context_result(result, args.out_dir)
+        save_motif_context_result(result, out_dir)
     elif args.command == "epistasis":
         from transcriptml.interpret.epistasis import motif_epistasis, save_epistasis_result
 
@@ -499,7 +565,7 @@ def main(argv: list[str] | None = None) -> None:
             schema=bundle.schema,
             cds_channel=cds_channel,
         )
-        save_epistasis_result(result, args.out_dir)
+        save_epistasis_result(result, out_dir)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 import json
 
 import numpy as np
+import pytest
 
-from transcriptml.cli.main import main
+from transcriptml.cli.main import _resolve_evaluate_args, _resolve_interpret_args, build_parser, main
 from transcriptml.data.bundle import DatasetBundle, save_bundle
 from transcriptml.data.encoding import encode_saluki_transcript
 
@@ -35,6 +36,126 @@ def test_plot_ism_cli_demo_writes_png(tmp_path):
     main(["plot-ism", "--demo", "--out", str(out_path), "--no-logo"])
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+
+
+def test_evaluate_cli_resolves_named_and_legacy_positional_args():
+    parser = build_parser()
+
+    named = parser.parse_args(
+        [
+            "evaluate",
+            "--checkpoint",
+            "model/best.pt",
+            "--dataset",
+            "data/saluki",
+            "--out-csv",
+            "eval/predictions.csv",
+        ]
+    )
+    assert _resolve_evaluate_args(named, parser) == {
+        "checkpoint": "model/best.pt",
+        "dataset": "data/saluki",
+        "out_csv": "eval/predictions.csv",
+    }
+
+    positional = parser.parse_args(["evaluate", "model/best.pt", "data/saluki", "eval/predictions.csv"])
+    assert _resolve_evaluate_args(positional, parser) == {
+        "checkpoint": "model/best.pt",
+        "dataset": "data/saluki",
+        "out_csv": "eval/predictions.csv",
+    }
+
+    mixed = parser.parse_args(["evaluate", "model/best.pt", "data/saluki", "--out-csv", "eval/predictions.csv"])
+    assert _resolve_evaluate_args(mixed, parser)["out_csv"] == "eval/predictions.csv"
+
+
+def test_evaluate_cli_rejects_conflicting_named_and_positional_args():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "evaluate",
+            "old.pt",
+            "data/saluki",
+            "eval/predictions.csv",
+            "--checkpoint",
+            "new.pt",
+        ]
+    )
+
+    with pytest.raises(SystemExit):
+        _resolve_evaluate_args(args, parser)
+
+
+def test_interpret_cli_resolves_named_and_legacy_positional_args():
+    parser = build_parser()
+    motif_extra = {
+        "motif-ablation": ["--motif", "AUG"],
+        "motif-context": ["--motif", "AUG"],
+        "epistasis": ["--motif", "AUG"],
+    }
+
+    for command in ["ism", "codon-ism", "motif-ablation", "motif-context", "epistasis"]:
+        named = parser.parse_args(
+            [
+                command,
+                "--checkpoint",
+                "model/best.pt",
+                "--dataset",
+                "data/saluki",
+                "--out-dir",
+                f"interpret/{command}",
+                *motif_extra.get(command, []),
+            ]
+        )
+        assert _resolve_interpret_args(named, parser) == {
+            "checkpoint": "model/best.pt",
+            "dataset": "data/saluki",
+            "out_dir": f"interpret/{command}",
+        }
+
+        positional = parser.parse_args(
+            [
+                command,
+                "model/best.pt",
+                "data/saluki",
+                f"interpret/{command}",
+                *motif_extra.get(command, []),
+            ]
+        )
+        assert _resolve_interpret_args(positional, parser) == {
+            "checkpoint": "model/best.pt",
+            "dataset": "data/saluki",
+            "out_dir": f"interpret/{command}",
+        }
+
+        mixed = parser.parse_args(
+            [
+                command,
+                "model/best.pt",
+                "data/saluki",
+                "--out-dir",
+                f"interpret/{command}",
+                *motif_extra.get(command, []),
+            ]
+        )
+        assert _resolve_interpret_args(mixed, parser)["out_dir"] == f"interpret/{command}"
+
+
+def test_interpret_cli_rejects_conflicting_named_and_positional_args():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "ism",
+            "old.pt",
+            "data/saluki",
+            "interpret/ism",
+            "--checkpoint",
+            "new.pt",
+        ]
+    )
+
+    with pytest.raises(SystemExit):
+        _resolve_interpret_args(args, parser)
 
 
 def test_codon_usage_cli_tiny_bundle(tmp_path):
