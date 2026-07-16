@@ -11,9 +11,9 @@ two common starting points:
   with LegNet.
 
 Interpretation tools include single-nucleotide in silico mutagenesis (ISM),
-motif ablation, motif context scans, motif epistasis, and codon ISM. These
-analyses can expose learned regulatory sequence features as well as assay or
-model artifacts.
+motif ablations, motif context scans, motif epistasis analyses, and
+Saluki-specific codon ISM. These analyses can expose learned regulatory
+sequence features as well as technical artifacts in the model or assay.
 
 RiboNN support for translation measurements and RBPNet support for RBP binding
 measurements are planned but not yet implemented.

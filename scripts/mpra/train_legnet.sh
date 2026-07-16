@@ -53,9 +53,9 @@ fi
 
 if [[ "${run_eval}" == "1" ]]; then
   transcriptml evaluate \
-    "${MODEL_DIR}/best.pt" \
-    "${DATASET_DIR}" \
-    "${EVAL_DIR}/${EVAL_SPLIT}_predictions.csv" \
+    --checkpoint "${MODEL_DIR}/best.pt" \
+    --dataset "${DATASET_DIR}" \
+    --out-csv "${EVAL_DIR}/${EVAL_SPLIT}_predictions.csv" \
     --split "${EVAL_SPLIT}" \
     --batch-size "${PRED_BATCH_SIZE}" \
     --device "${DEVICE}"

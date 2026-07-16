@@ -12,33 +12,27 @@ For full-functionality model training and tests:
 ```bash
 git clone https://github.com/kundajelab/TranscriptML.git
 cd TranscriptML
-python -m pip install -e ".[dev,genomics]"
-```
-
-If you don't need the GTF/FASTA transcript extraction functionality, install with:
-
-```bash
 python -m pip install -e ".[dev]"
 ```
 
 ### Optional Dependencies
 
-TranscriptML keeps a small core install: NumPy, PyTorch, and TOML support on
-older Python versions. Optional extras enable workflows that need additional
-packages:
+TranscriptML keeps a compact core install for dataset construction, training,
+evaluation, ISM, motif analyses, plotting, and GTF/FASTA-based Saluki input
+construction. Optional extras enable workflows that need additional packages:
 
 - `dev`: installs `pytest` for running the test suite.
-- `genomics`: installs `pyfaidx` for GTF/FASTA transcript extraction used by
-  `transcriptml build-saluki-gtf`.
 - `arrow`: installs `pyarrow` for streaming codon-ISM mutation tables to
   Parquet or Arrow IPC files.
+- `analysis`: installs `pyarrow`, `polars`, and `seaborn` for codon-ISM
+  summary analyses.
 
 Common combinations:
 
 ```bash
 python -m pip install -e ".[dev]"
-python -m pip install -e ".[dev,genomics]"
-python -m pip install -e ".[dev,genomics,arrow]"
+python -m pip install -e ".[arrow]"
+python -m pip install -e ".[dev,analysis]"
 ```
 
 For installing on Sherlock, I currently follow this workflow:
@@ -64,7 +58,7 @@ python -m pip install "torch==2.6.0+cu124" --index-url https://download.pytorch.
 ## Step 4: Install TranscriptML
 git clone https://github.com/kundajelab/TranscriptML.git
 cd TranscriptML
-pip install -e ".[dev,genomics,arrow]"
+pip install -e ".[dev,arrow]"
 ```
 
 For SLURM jobs on Sherlock, see [scripts/README.md](scripts/README.md). It
@@ -124,11 +118,17 @@ Train, evaluate, and run single-nucleotide ISM:
 ```bash
 transcriptml train train_saluki.json
 
-transcriptml evaluate runs/saluki_exact/best.pt data/saluki predictions.csv \
+transcriptml evaluate \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-csv predictions.csv \
   --split test \
   --device auto
 
-transcriptml ism runs/saluki_exact/best.pt data/saluki interpret/ism \
+transcriptml ism \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/ism \
   --device auto \
   --mutation-batch-size 512
 ```
@@ -341,7 +341,12 @@ they can be reloaded without restating hyperparameters.
 ### Evaluate
 
 ```bash
-transcriptml evaluate runs/saluki_exact/best.pt data/saluki predictions.csv --split test --device auto
+transcriptml evaluate \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-csv predictions.csv \
+  --split test \
+  --device auto
 ```
 
 This writes per-transcript predictions and a companion summary JSON.
@@ -351,7 +356,10 @@ This writes per-transcript predictions and a companion summary JSON.
 Single-nucleotide ISM:
 
 ```bash
-transcriptml ism runs/saluki_exact/best.pt data/saluki interpret/ism \
+transcriptml ism \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/ism \
   --device auto \
   --mutation-batch-size 512
 ```
@@ -367,7 +375,10 @@ all 63 alternatives per reference codon; stop codons are included unless
 `--exclude-stop-codons` is set. Stop codon ISMs are often not interpretable (Saluki does not learn canonical NMD unless trained on PTC-containing isoforms and thus won't predict PTCs to be destabilizing) or observe weird artifacts (fun example: UGA looks to be very stabilizing as it is only found within the CDS in selenocysteine protein mRNAs where it is decoded as selenocysteine; these mRNAs are on average highly stable, leading to a strong spurious correlation between UGA presence and stabilization), but I like to include them as a nice example of out-of-distribution hallucination.
 
 ```bash
-transcriptml codon-ism runs/saluki_exact/best.pt data/saluki interpret/codon_ism \
+transcriptml codon-ism \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/codon_ism \
   --device auto \
   --mutation-policy synonymous-only \
   --table-format npz \
@@ -382,7 +393,10 @@ max-absolute codon effect projected back onto reference nucleotide channels.
 Motif ablation, with effect `A - R`:
 
 ```bash
-transcriptml motif-ablation runs/saluki_exact/best.pt data/saluki interpret/pre_ablation \
+transcriptml motif-ablation \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/pre_ablation \
   --motif "UGUA[A|U|C]AUA" \
   --n-scrambles 10 \
   --device auto
@@ -391,7 +405,10 @@ transcriptml motif-ablation runs/saluki_exact/best.pt data/saluki interpret/pre_
 Motif context specificity, with effect `(MA - M) - (A - R)`:
 
 ```bash
-transcriptml motif-context runs/saluki_exact/best.pt data/saluki interpret/pre_context \
+transcriptml motif-context \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/pre_context \
   --motif "UGUA[A|U|C]AUA" \
   --window-size 5 \
   --context-width 100 \
@@ -403,7 +420,10 @@ transcriptml motif-context runs/saluki_exact/best.pt data/saluki interpret/pre_c
 Pairwise motif epistasis, with effect `A12 - A1 - A2 + R`:
 
 ```bash
-transcriptml epistasis runs/saluki_exact/best.pt data/saluki interpret/pre_epistasis \
+transcriptml epistasis \
+  --checkpoint runs/saluki_exact/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/pre_epistasis \
   --motif "UGUA[A|U|C]AUA" \
   --n-scrambles 10 \
   --max-pairs 5000 \

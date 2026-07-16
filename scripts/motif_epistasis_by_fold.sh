@@ -29,9 +29,9 @@ for spec in "${MOTIF_EPISTASIS_SPECS[@]}"; do
   parse_motif_epistasis_spec "${spec}"
   args=(
     epistasis
-    "${CHECKPOINT}"
-    "${INTERPRET_DATASET_DIR}"
-    "${INTERPRET_ROOT}/motif_epistasis/${MOTIF_SPEC_LABEL}/fold${FOLD}"
+    --checkpoint "${CHECKPOINT}"
+    --dataset "${INTERPRET_DATASET_DIR}"
+    --out-dir "${INTERPRET_ROOT}/motif_epistasis/${MOTIF_SPEC_LABEL}/fold${FOLD}"
     --motif "${MOTIF_SPEC_1}"
     --n-scrambles "${N_SCRAMBLES}"
     --strategy "${MOTIF_STRATEGY}"

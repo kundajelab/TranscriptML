@@ -34,9 +34,9 @@ if [[ ! -f "${INTERPRET_DATASET_DIR}/X.npy" ]]; then
 fi
 
 transcriptml ism \
-  "${LEGNET_CHECKPOINT}" \
-  "${INTERPRET_DATASET_DIR}" \
-  "${ISM_OUT_DIR}" \
+  --checkpoint "${LEGNET_CHECKPOINT}" \
+  --dataset "${INTERPRET_DATASET_DIR}" \
+  --out-dir "${ISM_OUT_DIR}" \
   --device "${DEVICE}" \
   --batch-size "${PRED_BATCH_SIZE}" \
   --mutation-batch-size "${MUTATION_BATCH_SIZE}"

@@ -52,9 +52,9 @@ for FOLD in $(seq 0 $((N_FOLDS - 1))); do
 
   mkdir -p "${FOLD_DIR}/eval"
   transcriptml evaluate \
-    "${FOLD_DIR}/model/best.pt" \
-    "${FOLD_DIR}/dataset" \
-    "${FOLD_DIR}/eval/${EVAL_SPLIT}_predictions.csv" \
+    --checkpoint "${FOLD_DIR}/model/best.pt" \
+    --dataset "${FOLD_DIR}/dataset" \
+    --out-csv "${FOLD_DIR}/eval/${EVAL_SPLIT}_predictions.csv" \
     --split "${EVAL_SPLIT}" \
     --batch-size "${PRED_BATCH_SIZE}" \
     --device "${DEVICE}"

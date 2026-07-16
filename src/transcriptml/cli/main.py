@@ -287,6 +287,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--plots", choices=["all", "none"], default="all")
     p.add_argument("--dpi", type=int, default=300)
 
+    p = sub.add_parser("summarize-ism", help="Average and mean-center fold-level single-nucleotide ISM")
+    p.add_argument("--input-dir", type=Path, required=True, help="Directory containing fold*/deltas.npy files")
+    p.add_argument("--out-dir", type=Path, required=True, help="Directory for averaged ISM arrays")
+    p.add_argument("--dataset", type=Path, help="Optional dataset bundle used for IDs and projected scores")
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--dtype", default="float32")
+    p.add_argument("--write-fold-std", action="store_true", help="Also write fold_std_deltas.npy")
+    p.add_argument(
+        "--write-projected",
+        action="store_true",
+        help="Also write centered scores projected onto reference bases; requires --dataset",
+    )
+
     p = sub.add_parser("summarize-codon-ism", help="Summarize codon-ISM mutation tables")
     p.add_argument("--mode", required=True, choices=["synonymous", "all-codons"])
     p.add_argument("--input-dir", type=Path, required=True)
@@ -361,6 +374,11 @@ def main(argv: list[str] | None = None) -> None:
         from transcriptml.analysis.codon_usage import run_codon_usage_from_args
 
         run_codon_usage_from_args(args)
+        return
+    if args.command == "summarize-ism":
+        from transcriptml.analysis.ism_summary import run_ism_summary_from_args
+
+        run_ism_summary_from_args(args)
         return
     if args.command == "summarize-codon-ism":
         common = [

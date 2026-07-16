@@ -27,9 +27,9 @@ CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
 OUT_DIR="${INTERPRET_ROOT}/codon_ism/fold${FOLD}"
 
 transcriptml codon-ism \
-  "${CHECKPOINT}" \
-  "${INTERPRET_DATASET_DIR}" \
-  "${OUT_DIR}" \
+  --checkpoint "${CHECKPOINT}" \
+  --dataset "${INTERPRET_DATASET_DIR}" \
+  --out-dir "${OUT_DIR}" \
   --device "${DEVICE}" \
   --batch-size "${PRED_BATCH_SIZE}" \
   --mutation-batch-size "${MUTATION_BATCH_SIZE}" \

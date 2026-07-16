@@ -25,13 +25,15 @@ setup_transcriptml_env
 FOLD="${SLURM_ARRAY_TASK_ID}"
 
 CONFIG_PATH="$(
-  python "${SCRIPT_DIR}/write_cv_fold_artifacts.py" \
+  transcriptml cv prepare-fold \
     --dataset "${DATASET_DIR}" \
     --base-config "${BASE_TRAIN_CONFIG}" \
     --cv-root "${CV_ROOT}" \
     --fold "${FOLD}" \
+    --model "${CV_MODEL}" \
     --n-folds "${N_FOLDS}" \
-    --seed "${CV_SEED}"
+    --seed "${CV_SEED}" \
+    --val-offset "${CV_VAL_OFFSET}"
 )"
 
 transcriptml train "${CONFIG_PATH}"
@@ -40,9 +42,9 @@ FOLD_DIR="${CV_ROOT}/fold${FOLD}"
 mkdir -p "${FOLD_DIR}/eval"
 
 transcriptml evaluate \
-  "${FOLD_DIR}/model/best.pt" \
-  "${FOLD_DIR}/dataset" \
-  "${FOLD_DIR}/eval/${EVAL_SPLIT}_predictions.csv" \
+  --checkpoint "${FOLD_DIR}/model/best.pt" \
+  --dataset "${FOLD_DIR}/dataset" \
+  --out-csv "${FOLD_DIR}/eval/${EVAL_SPLIT}_predictions.csv" \
   --split "${EVAL_SPLIT}" \
   --batch-size "${PRED_BATCH_SIZE}" \
   --device "${DEVICE}"

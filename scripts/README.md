@@ -69,6 +69,7 @@ INTERPRET_ROOT="${RUN_ROOT}/interpret"
 # 4. Runtime choices.
 N_FOLDS="10"
 CV_SEED="42"
+CV_MODEL="saluki_exact"
 DEVICE="cuda"
 ```
 
@@ -83,7 +84,7 @@ What each group means:
 | `RUN_NAME`, `RUN_ROOT` | Pick a run name and scratch/OAK location where outputs should be written. |
 | `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
 | `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/saluki_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |
-| `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior. |
+| `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `CV_MODEL`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior or model name. |
 | `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
 | `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
@@ -248,12 +249,9 @@ ${EVAL_DIR}/test_predictions.csv
 ${EVAL_DIR}/test_predictions.summary.json
 ```
 
-For a manual 4-fold CV workaround, make four run directories, copy `scripts/`
-into each, and give each directory a different target table whose `split`
-column contains that fold's train/val/test labels. In each copied
-`scripts/sherlock_config.sh`, set `TARGETS` to that fold's target table,
-`SPLIT_COL` to the split column name, and choose a fold-specific `RUN_ROOT`.
-Then run the build job and `submit_train_eval_split.sh` in each directory.
+For cross-validation, use the CV workflow below. It writes fold-specific
+bundles and train configs from one built dataset bundle, so you do not need to
+make separate run directories or target tables for each fold.
 
 ## Train And Evaluate 10-Fold CV
 
@@ -273,7 +271,9 @@ ${CV_ROOT}/fold0/eval/test_predictions.csv
 ${CV_ROOT}/fold0/eval/test_predictions.summary.json
 ```
 
-The fold split is deterministic from `CV_SEED`. For fold `i`, fold `i` is the test split, fold `i + 1` is validation, and the remaining folds are training.
+The fold split is deterministic from `CV_SEED`. For fold `i`, fold `i` is the
+test split, fold `i + CV_VAL_OFFSET` modulo `N_FOLDS` is validation, and the
+remaining folds are training.
 
 ## Hyperparameter Sweep CV
 
@@ -360,7 +360,7 @@ contiguous transcript shard using:
 
 ```bash
 --mutation-policy all
---table-format parquet
+--table-format npz
 --sequence-shard-index "${SLURM_ARRAY_TASK_ID}"
 --sequence-shards "${CODON_ISM_SHARDS_PER_FOLD:-10}"
 ```

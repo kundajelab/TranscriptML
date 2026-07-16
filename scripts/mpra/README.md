@@ -17,7 +17,7 @@ from the copied scripts.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
 - `train_legnet.sh` and `submit_train_legnet.sh`: optional helper to train one LegNet model from the MPRA bundle.
 - `run_legnet_ism.sh` and `submit_legnet_ism.sh`: optional helper to run ISM on one trained checkpoint.
-- `write_cv_fold_artifacts.py` and `write_legnet_train_config.py`: internal helpers used by the training scripts to generate run-specific bundles and train configs.
+- `write_legnet_train_config.py`: internal helper used by the optional single-model training script.
 
 ## Configure A Run
 
@@ -53,6 +53,7 @@ CV_ROOT="${RUN_ROOT}/cv10"
 INTERPRET_ROOT="${RUN_ROOT}/interpret"
 N_FOLDS="10"
 CV_SEED="42"
+CV_MODEL="legnet"
 DEVICE="cuda"
 ```
 
@@ -71,7 +72,7 @@ Important config values:
 | `DELIMITER` | Optional delimiter override. When empty, `.tsv`/`.tab` use tabs and other files use commas. |
 | `RUN_ROOT`, `DATASET_DIR`, `CV_ROOT`, `INTERPRET_ROOT` | Output locations for the dataset, fold model/evaluation files, and ISM files. |
 | `BASE_TRAIN_CONFIG` | Base JSON training config. Defaults to `scripts/mpra/example_legnet_train_config.json`. |
-| `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET` | CV controls. By default, fold `i` is the test split and fold `i + 1` is validation. |
+| `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `CV_MODEL` | CV controls. By default, fold `i` is the test split, fold `i + 1` is validation, and the model is `legnet`. |
 | `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/mpra/legnet_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |
 | `RUN_SPLIT_EVALUATION` | `auto` runs the extra `transcriptml evaluate --split` step only when the built dataset has `splits.json`. Set `1` to require it or `0` to skip it. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for prediction and ISM. |
@@ -280,9 +281,9 @@ By default this single-checkpoint helper runs:
 
 ```bash
 transcriptml ism \
-  "${MODEL_DIR}/best.pt" \
-  "${DATASET_DIR}" \
-  "${ISM_OUT_DIR}" \
+  --checkpoint "${MODEL_DIR}/best.pt" \
+  --dataset "${DATASET_DIR}" \
+  --out-dir "${ISM_OUT_DIR}" \
   --device "${DEVICE}" \
   --batch-size "${PRED_BATCH_SIZE}" \
   --mutation-batch-size "${MUTATION_BATCH_SIZE}"
