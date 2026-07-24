@@ -135,6 +135,8 @@ Edit `configs/saluki/train_config.json` to adjust settings such as
 `batch_size`, `epochs`, `learning_rate`, `patience`, and model parameters. For
 cross-validation, the fold-preparation command will replace `dataset` and
 `output_dir`, so those fields can stay as placeholders in the base config.
+See the [training configuration guide](training_configuration.md) for every
+Saluki model, optimization, loss, split, and sequence-control option.
 
 Run the folds sequentially:
 
