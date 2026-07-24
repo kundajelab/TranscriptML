@@ -23,8 +23,9 @@ Start here
 
 See :doc:`installation` for the smallest install that covers your use case.
 The :doc:`usage` guide walks through Saluki and MPRA projects from input tables
-through cross-validation and interpretation. Use the :doc:`api` reference when
-calling TranscriptML from Python.
+through cross-validation and interpretation. The :doc:`training_configuration`
+guide describes every Saluki, LegNet, and shared training option. Use the
+:doc:`api` reference when calling TranscriptML from Python.
 
 .. toctree::
    :maxdepth: 2
@@ -32,4 +33,5 @@ calling TranscriptML from Python.
 
    installation
    usage
+   training_configuration
    api

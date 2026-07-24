@@ -26,6 +26,17 @@ def test_init_run_cli_writes_templates(tmp_path):
 
     train_config = json.loads((out_dir / "train_config.json").read_text(encoding="utf-8"))
     assert train_config["model"]["name"] == "saluki_exact"
+    assert train_config["batch_size"] == 64
+    assert train_config["epochs"] == 250
+    assert train_config["learning_rate"] == 0.0001
+    assert train_config["weight_decay"] == 0.0
+    assert train_config["gradient_clip_norm"] == 0.5
+    assert train_config["patience"] == 10
+    assert train_config["monitor"] == ["val_loss", "val_pearson"]
+    assert train_config["device"] == "auto"
+    assert train_config["num_workers"] == 0
+    assert train_config["mmap_mode"] == "r"
+    assert train_config["seed"] == 42
     assert train_config["split_source"] == "auto"
     assert not (out_dir / "run_config.json").exists()
     assert (out_dir / "README.md").exists()
