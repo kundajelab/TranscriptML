@@ -1,6 +1,6 @@
 # Training Configuration
 
-TranscriptML training is controlled by a JSON or TOML file. The same top-level
+TranscriptML model training is controlled by a JSON or TOML file. The same top-level
 training settings are used for Saluki and MPRA-LegNet runs; the main difference
 between the workflows is the model selected under `model`.
 
