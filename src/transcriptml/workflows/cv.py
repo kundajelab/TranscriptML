@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -28,6 +28,30 @@ def find_fold_checkpoints(
                 paths.append((int(match.group(1)), checkpoint_path))
     paths.sort(key=lambda item: item[0])
     return [path for _, path in paths]
+
+
+def load_fold_test_indices(checkpoint_paths: Sequence[str | Path]) -> list[list[int]]:
+    """Load each checkpoint's sibling ``dataset/splits.json`` test indices."""
+
+    test_indices: list[list[int]] = []
+    for checkpoint in checkpoint_paths:
+        checkpoint_path = Path(checkpoint)
+        split_path = checkpoint_path.parent.parent / "dataset" / "splits.json"
+        if not split_path.is_file():
+            raise FileNotFoundError(
+                f"Test-only ensemble prediction requires fold split file: {split_path}"
+            )
+        splits = json.loads(split_path.read_text(encoding="utf-8"))
+        if not isinstance(splits, Mapping) or "test" not in splits:
+            raise ValueError(f"Fold split file has no 'test' split: {split_path}")
+        raw_indices = splits["test"]
+        if not isinstance(raw_indices, list):
+            raise ValueError(f"Fold 'test' split must be a list: {split_path}")
+        try:
+            test_indices.append([int(index) for index in raw_indices])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Fold 'test' split contains a non-integer index: {split_path}") from exc
+    return test_indices
 
 
 def _replace_link(src: Path, dst: Path) -> None:
