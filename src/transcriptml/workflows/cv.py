@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -8,6 +9,25 @@ import numpy as np
 
 
 BUNDLE_FILES = ("X.npy", "y.npy", "ids.txt", "schema.json", "metadata.json", "config.json")
+
+
+def find_fold_checkpoints(
+    cv_root: str | Path,
+    *,
+    checkpoint_name: str = "best.pt",
+) -> list[Path]:
+    """Find ``foldN/model/<checkpoint_name>`` paths in natural fold order."""
+
+    root = Path(cv_root)
+    paths: list[tuple[int, Path]] = []
+    for fold_dir in root.glob("fold*"):
+        match = re.fullmatch(r"fold(\d+)", fold_dir.name)
+        if match and fold_dir.is_dir():
+            checkpoint_path = fold_dir / "model" / checkpoint_name
+            if checkpoint_path.is_file():
+                paths.append((int(match.group(1)), checkpoint_path))
+    paths.sort(key=lambda item: item[0])
+    return [path for _, path in paths]
 
 
 def _replace_link(src: Path, dst: Path) -> None:
