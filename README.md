@@ -1,5 +1,7 @@
 # TranscriptML
 
+**TranscriptML is actively being developed and is subject to changes, some of which may not be backwards compatible**
+
 TranscriptML is a toolkit for training, evaluating, and interpreting RNA
 sequence-to-function models. It provides command-line tools and reusable Python
 APIs for preparing sequence datasets, training models, evaluating held-out
@@ -16,6 +18,8 @@ TranscriptML currently supports two main workflows:
 
 In the future, I plan to also support [RiboNN](https://www.nature.com/articles/s41587-025-02712-x) modeling of translation efficiency measurements
 and [RBPNet](https://link.springer.com/article/10.1186/s13059-023-03015-7) modeling of RBP binding assays like eCLIP.
+
+For identifying learned  motifs in either Saluki or MPRA-LegNet models, consider using [RNA-MoDISco](https://github.com/isaacvock/tfmodisco/tree/rna), my RNA-optimized fork of TF-MoDISco.
 
 ## Installation
 
