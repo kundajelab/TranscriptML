@@ -114,6 +114,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_fold.add_argument("--n-folds", type=int, default=10)
     p_fold.add_argument("--seed", type=int, default=42)
     p_fold.add_argument("--val-offset", type=int, default=1)
+    p_ensemble = cv_sub.add_parser(
+        "ensemble-predict",
+        help="Average predictions from fold checkpoints on one shared dataset",
+    )
+    p_ensemble.add_argument("--cv-root", required=True, help="Directory containing fold*/model checkpoints")
+    p_ensemble.add_argument("--dataset", required=True, help="Shared dataset bundle scored by every fold")
+    p_ensemble.add_argument("--out-csv", required=True, help="Averaged prediction CSV output path")
+    p_ensemble.add_argument(
+        "--checkpoint-name",
+        default="best.pt",
+        help="Checkpoint filename under each fold's model directory",
+    )
+    p_ensemble.add_argument("--batch-size", type=int, default=128)
+    p_ensemble.add_argument("--device", default="cpu")
 
     p = sub.add_parser("build-mpra", help="Build an RNA4 MPRA dataset bundle")
     p.add_argument("table")
@@ -350,7 +364,7 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"{key}\t{value}")
             return
     if args.command == "cv":
-        from transcriptml.workflows import prepare_cv_fold
+        from transcriptml.workflows import find_fold_checkpoints, prepare_cv_fold
 
         if args.cv_command == "prepare-fold":
             config_path = prepare_cv_fold(
@@ -364,6 +378,26 @@ def main(argv: list[str] | None = None) -> None:
                 val_offset=args.val_offset,
             )
             print(config_path)
+            return
+        if args.cv_command == "ensemble-predict":
+            from transcriptml.training.evaluation import evaluate_fold_checkpoints
+
+            checkpoint_paths = find_fold_checkpoints(
+                args.cv_root,
+                checkpoint_name=args.checkpoint_name,
+            )
+            if not checkpoint_paths:
+                raise SystemExit(
+                    f"No fold*/model/{args.checkpoint_name} checkpoints found under {args.cv_root}"
+                )
+            evaluate_fold_checkpoints(
+                checkpoint_paths,
+                args.dataset,
+                args.out_csv,
+                batch_size=args.batch_size,
+                device=args.device,
+            )
+            print(args.out_csv)
             return
     if args.command == "plot-ism":
         from transcriptml.plotting.single_nt_ism import plot_ism_from_args

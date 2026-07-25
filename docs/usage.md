@@ -188,6 +188,60 @@ and test metrics. The `eval/test_predictions.csv` file contains held-out
 predictions for that fold. Concatenate the ten fold-level prediction tables to
 measure performance across the full dataset.
 
+To make an ensemble prediction instead, apply every fold checkpoint to the
+same complete dataset and average their outputs:
+
+```bash
+transcriptml cv ensemble-predict \
+  --cv-root runs/saluki_cv10 \
+  --dataset data/saluki \
+  --out-csv runs/saluki_cv10/ensemble_predictions.csv \
+  --batch-size 128 \
+  --device auto
+```
+
+This discovers `fold*/model/best.pt` under the CV root in numeric fold order.
+Use `--checkpoint-name last.pt` to select a different checkpoint filename.
+Models are loaded and evaluated one at a time, so they do not all need to fit
+in device memory simultaneously.
+
+The same operation is available from Python when checkpoint paths are managed
+outside the standard CV directory layout:
+
+```python
+from transcriptml.training.evaluation import evaluate_fold_checkpoints
+
+result = evaluate_fold_checkpoints(
+    [
+        "runs/saluki_cv10/fold0/model/best.pt",
+        "runs/saluki_cv10/fold1/model/best.pt",
+    ],
+    "data/saluki",
+    "runs/saluki_cv10/ensemble_predictions.csv",
+    device="auto",
+)
+average_predictions = result["average_predictions"]
+average_residuals = result["average_residuals"]
+```
+
+The output has one row per dataset example:
+
+```text
+index,id,target,average_prediction,average_residual
+```
+
+Here `average_prediction` is the mean prediction from all discovered fold
+checkpoints, and `average_residual` is `target - average_prediction`. If the
+dataset has no `y.npy`, the prediction columns are still written but target and
+residual columns are omitted. A sibling `ensemble_predictions.summary.json`
+records the checkpoints, fold count, ensemble MSE and Pearson correlation, and
+mean residual.
+
+Do not use the disjoint fold-level `test_predictions.csv` files as inputs to
+this averaging operation. Those rows are out-of-fold estimates and should be
+concatenated, whereas ensemble averaging requires every fold model to score the
+same examples.
+
 The built-in fold assignment is random and transcript-level. If related
 isoforms, homologous transcripts, or other biological groups must stay
 together, create grouped folds upstream and run one predefined split per fold.

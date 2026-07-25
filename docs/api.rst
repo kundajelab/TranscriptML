@@ -78,7 +78,7 @@ Training and evaluation
    :member-order: bysource
 
 .. automodule:: transcriptml.training.evaluation
-   :members: predict_array, evaluate_model, predict_to_csv, evaluate_checkpoint
+   :members: predict_array, evaluate_model, predict_to_csv, evaluate_checkpoint, evaluate_fold_checkpoints
    :member-order: bysource
 
 .. automodule:: transcriptml.training.splits
