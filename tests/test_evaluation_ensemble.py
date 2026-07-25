@@ -170,7 +170,14 @@ def test_cv_ensemble_predict_discovers_checkpoints_in_natural_order(tmp_path, mo
         ]
     )
 
-    assert capsys.readouterr().out.strip() == str(out_csv)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == str(out_csv)
+    assert "ensemble-predict: discovered 2 checkpoints" in captured.err
+    assert "ensemble: dataset ready: 2 examples; targets available" in captured.err
+    assert "ensemble: checkpoint 1/2 complete" in captured.err
+    assert "estimated remaining" in captured.err
+    assert "ensemble: metrics: mse=" in captured.err
+    assert "ensemble: done: 2 examples across 2 checkpoints" in captured.err
     with out_csv.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert [float(row["average_prediction"]) for row in rows] == [2.0, 3.0]

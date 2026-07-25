@@ -380,6 +380,7 @@ def main(argv: list[str] | None = None) -> None:
             print(config_path)
             return
         if args.cv_command == "ensemble-predict":
+            from transcriptml.progress import log_progress
             from transcriptml.training.evaluation import evaluate_fold_checkpoints
 
             checkpoint_paths = find_fold_checkpoints(
@@ -390,6 +391,12 @@ def main(argv: list[str] | None = None) -> None:
                 raise SystemExit(
                     f"No fold*/model/{args.checkpoint_name} checkpoints found under {args.cv_root}"
                 )
+            log_progress(
+                (
+                    f"ensemble-predict: discovered {len(checkpoint_paths)} checkpoints "
+                    f"under {args.cv_root}"
+                )
+            )
             evaluate_fold_checkpoints(
                 checkpoint_paths,
                 args.dataset,

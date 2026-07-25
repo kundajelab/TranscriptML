@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -213,6 +214,19 @@ def _fold_ensemble_to_csv(
             writer.writerow(row)
 
 
+def _format_duration(seconds: float) -> str:
+    """Format a short human-readable duration for progress messages."""
+
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remaining_seconds = divmod(int(round(seconds)), 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds:02d}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h {remaining_minutes:02d}m"
+
+
 def evaluate_fold_checkpoints(
     checkpoint_paths: Sequence[str | Path],
     dataset_path: str | Path,
@@ -254,14 +268,28 @@ def evaluate_fold_checkpoints(
         raise FileNotFoundError(f"Checkpoint does not exist: {missing[0]}")
 
     resolved_device = resolve_device(device)
+    ensemble_start = time.monotonic()
+    log_progress(
+        (
+            f"ensemble: starting {len(paths)} checkpoints; "
+            f"batch_size={int(batch_size)}, device={resolved_device}"
+        ),
+        enabled=progress,
+    )
     log_progress(f"ensemble: loading dataset {dataset_path}", enabled=progress)
     bundle = load_bundle(dataset_path, mmap_mode="r")
     indices = np.arange(int(bundle.X.shape[0]), dtype=int)
     prediction_sum = np.zeros(indices.shape[0], dtype=np.float64)
+    target_status = "targets available" if bundle.y is not None else "no targets"
+    log_progress(
+        f"ensemble: dataset ready: {indices.shape[0]:,} examples; {target_status}",
+        enabled=progress,
+    )
 
     for fold_number, checkpoint_path in enumerate(paths, start=1):
+        checkpoint_start = time.monotonic()
         log_progress(
-            f"ensemble: loading checkpoint {fold_number}/{len(paths)}: {checkpoint_path}",
+            f"ensemble: checkpoint {fold_number}/{len(paths)}: loading {checkpoint_path}",
             enabled=progress,
         )
         model, _ = load_checkpoint(checkpoint_path, map_location=resolved_device)
@@ -283,6 +311,22 @@ def evaluate_fold_checkpoints(
         prediction_sum += predictions
         del model
 
+        checkpoint_elapsed = time.monotonic() - checkpoint_start
+        total_elapsed = time.monotonic() - ensemble_start
+        remaining_checkpoints = len(paths) - fold_number
+        timing = f"completed in {_format_duration(checkpoint_elapsed)}"
+        if remaining_checkpoints:
+            estimated_remaining = (total_elapsed / fold_number) * remaining_checkpoints
+            timing += f"; estimated remaining {_format_duration(estimated_remaining)}"
+        log_progress(
+            f"ensemble: checkpoint {fold_number}/{len(paths)} complete; {timing}",
+            enabled=progress,
+        )
+
+    log_progress(
+        f"ensemble: averaging predictions across {len(paths)} checkpoints",
+        enabled=progress,
+    )
     average_predictions64 = prediction_sum / len(paths)
     average_predictions = average_predictions64.astype(np.float32)
     result: dict[str, object] = {
@@ -315,7 +359,16 @@ def evaluate_fold_checkpoints(
                 ),
             }
         )
+        log_progress(
+            (
+                f"ensemble: metrics: mse={result['mse']:.6g}, "
+                f"pearson={result['pearson']:.6g}, "
+                f"mean_residual={result['mean_residual']:.6g}"
+            ),
+            enabled=progress,
+        )
 
+    output_message = ""
     if out_csv is not None:
         out_path = Path(out_csv)
         log_progress(f"ensemble: writing predictions to {out_path}", enabled=progress)
@@ -348,8 +401,15 @@ def evaluate_fold_checkpoints(
         summary_path = out_path.with_suffix(".summary.json")
         log_progress(f"ensemble: writing summary to {summary_path}", enabled=progress)
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        output_message = f"; predictions={out_path}, summary={summary_path}"
 
-    log_progress("ensemble: done", enabled=progress)
+    log_progress(
+        (
+            f"ensemble: done: {indices.shape[0]:,} examples across {len(paths)} checkpoints "
+            f"in {_format_duration(time.monotonic() - ensemble_start)}{output_message}"
+        ),
+        enabled=progress,
+    )
     return result
 
 
