@@ -235,12 +235,14 @@ def evaluate_fold_checkpoints(
     batch_size: int = 128,
     device: str | torch.device = "cpu",
     progress: bool = True,
+    test_only: bool = False,
 ) -> dict[str, object]:
     """Average predictions from fold checkpoints evaluated on one shared dataset.
 
-    Every checkpoint scores every example in the dataset. This produces an
-    ensemble prediction rather than an out-of-fold CV prediction; disjoint
-    fold-level test prediction tables should be concatenated instead.
+    By default every checkpoint scores every example in the dataset, producing
+    an ensemble prediction. With ``test_only=True``, each checkpoint instead
+    scores its own fold test split, producing one out-of-fold prediction per
+    example.
 
     Args:
         checkpoint_paths: Non-empty sequence of TranscriptML checkpoints.
@@ -250,6 +252,9 @@ def evaluate_fold_checkpoints(
         batch_size: Number of examples to score per prediction batch.
         device: Torch device used to load and run each model.
         progress: Whether to emit progress messages while evaluating.
+        test_only: Whether each checkpoint should score only the test indices
+            from its sibling fold ``dataset/splits.json``. Test splits must
+            cover every dataset example exactly once.
 
     Returns:
         A dictionary containing ``average_predictions``, example identifiers
@@ -269,46 +274,95 @@ def evaluate_fold_checkpoints(
 
     resolved_device = resolve_device(device)
     ensemble_start = time.monotonic()
+    prediction_scope = "fold test sets" if test_only else "full dataset"
     log_progress(
         (
             f"ensemble: starting {len(paths)} checkpoints; "
-            f"batch_size={int(batch_size)}, device={resolved_device}"
+            f"scope={prediction_scope}, batch_size={int(batch_size)}, "
+            f"device={resolved_device}"
         ),
         enabled=progress,
     )
+    test_indices_by_checkpoint = None
+    if test_only:
+        from transcriptml.workflows.cv import load_fold_test_indices
+
+        log_progress("ensemble: loading fold test split assignments", enabled=progress)
+        test_indices_by_checkpoint = load_fold_test_indices(paths)
+
     log_progress(f"ensemble: loading dataset {dataset_path}", enabled=progress)
     bundle = load_bundle(dataset_path, mmap_mode="r")
     indices = np.arange(int(bundle.X.shape[0]), dtype=int)
     prediction_sum = np.zeros(indices.shape[0], dtype=np.float64)
+    if test_indices_by_checkpoint is None:
+        checkpoint_indices = [indices] * len(paths)
+        predictions_per_example = len(paths)
+    else:
+        checkpoint_indices = []
+        coverage = np.zeros(indices.shape[0], dtype=np.int64)
+        for checkpoint_path, raw_indices in zip(paths, test_indices_by_checkpoint):
+            fold_indices = np.asarray(raw_indices, dtype=int)
+            if fold_indices.ndim != 1:
+                raise ValueError(f"Test indices for {checkpoint_path} must be one-dimensional")
+            if np.unique(fold_indices).shape[0] != fold_indices.shape[0]:
+                raise ValueError(f"Test split contains duplicate indices for {checkpoint_path}")
+            if np.any(fold_indices < 0) or np.any(fold_indices >= indices.shape[0]):
+                raise ValueError(
+                    f"Test split for {checkpoint_path} contains an index outside "
+                    f"[0, {indices.shape[0]})"
+                )
+            coverage[fold_indices] += 1
+            checkpoint_indices.append(fold_indices)
+        missing_count = int(np.count_nonzero(coverage == 0))
+        repeated_count = int(np.count_nonzero(coverage > 1))
+        if missing_count or repeated_count:
+            raise ValueError(
+                "Fold test splits must cover every dataset example exactly once; "
+                f"missing={missing_count}, repeated={repeated_count}"
+            )
+        predictions_per_example = 1
+
     target_status = "targets available" if bundle.y is not None else "no targets"
     log_progress(
-        f"ensemble: dataset ready: {indices.shape[0]:,} examples; {target_status}",
+        (
+            f"ensemble: dataset ready: {indices.shape[0]:,} examples; "
+            f"{target_status}; {predictions_per_example} prediction(s) per example"
+        ),
         enabled=progress,
     )
 
-    for fold_number, checkpoint_path in enumerate(paths, start=1):
+    for fold_number, (checkpoint_path, fold_indices) in enumerate(
+        zip(paths, checkpoint_indices),
+        start=1,
+    ):
         checkpoint_start = time.monotonic()
         log_progress(
-            f"ensemble: checkpoint {fold_number}/{len(paths)}: loading {checkpoint_path}",
+            (
+                f"ensemble: checkpoint {fold_number}/{len(paths)}: loading {checkpoint_path}; "
+                f"scoring {fold_indices.shape[0]:,} examples"
+            ),
             enabled=progress,
         )
         model, _ = load_checkpoint(checkpoint_path, map_location=resolved_device)
         predictions = _predict_indexed_array(
             model,
             bundle.X,
-            indices,
+            fold_indices,
             batch_size=int(batch_size),
             device=resolved_device,
             progress=progress,
             progress_label=f"ensemble: checkpoint {fold_number}/{len(paths)}",
         )
         predictions = np.asarray(predictions, dtype=np.float64).reshape(-1)
-        if predictions.shape != prediction_sum.shape:
+        if predictions.shape != fold_indices.shape:
             raise ValueError(
                 f"Checkpoint {checkpoint_path} returned {predictions.shape[0]} predictions; "
-                f"expected {prediction_sum.shape[0]}"
+                f"expected {fold_indices.shape[0]}"
             )
-        prediction_sum += predictions
+        if test_only:
+            prediction_sum[fold_indices] += predictions
+        else:
+            prediction_sum += predictions
         del model
 
         checkpoint_elapsed = time.monotonic() - checkpoint_start
@@ -324,10 +378,13 @@ def evaluate_fold_checkpoints(
         )
 
     log_progress(
-        f"ensemble: averaging predictions across {len(paths)} checkpoints",
+        (
+            f"ensemble: combining {prediction_scope} predictions "
+            f"({predictions_per_example} per example)"
+        ),
         enabled=progress,
     )
-    average_predictions64 = prediction_sum / len(paths)
+    average_predictions64 = prediction_sum / predictions_per_example
     average_predictions = average_predictions64.astype(np.float32)
     result: dict[str, object] = {
         "average_predictions": average_predictions,
@@ -335,6 +392,8 @@ def evaluate_fold_checkpoints(
         "ids": [str(identifier) for identifier in bundle.ids],
         "fold_count": len(paths),
         "checkpoint_paths": [str(path) for path in paths],
+        "prediction_scope": "test_only" if test_only else "full_dataset",
+        "predictions_per_example": predictions_per_example,
     }
 
     targets = None
@@ -386,6 +445,8 @@ def evaluate_fold_checkpoints(
             "fold_count": len(paths),
             "checkpoint_paths": [str(path) for path in paths],
             "n_examples": int(indices.shape[0]),
+            "prediction_scope": result["prediction_scope"],
+            "predictions_per_example": predictions_per_example,
             "target_available": targets is not None,
             "residual_definition": "mean(truth - fold_prediction) = truth - average_prediction",
             "output_csv": str(out_path),

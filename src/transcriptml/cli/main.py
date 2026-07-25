@@ -128,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ensemble.add_argument("--batch-size", type=int, default=128)
     p_ensemble.add_argument("--device", default="cpu")
+    p_ensemble.add_argument(
+        "--test-only",
+        action="store_true",
+        help="Use only each checkpoint's fold test split for an out-of-fold report",
+    )
 
     p = sub.add_parser("build-mpra", help="Build an RNA4 MPRA dataset bundle")
     p.add_argument("table")
@@ -394,7 +399,8 @@ def main(argv: list[str] | None = None) -> None:
             log_progress(
                 (
                     f"ensemble-predict: discovered {len(checkpoint_paths)} checkpoints "
-                    f"under {args.cv_root}"
+                    f"under {args.cv_root}; "
+                    f"scope={'fold test sets' if args.test_only else 'full dataset'}"
                 )
             )
             evaluate_fold_checkpoints(
@@ -403,6 +409,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.out_csv,
                 batch_size=args.batch_size,
                 device=args.device,
+                test_only=args.test_only,
             )
             print(args.out_csv)
             return

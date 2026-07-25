@@ -205,6 +205,25 @@ Use `--checkpoint-name last.pt` to select a different checkpoint filename.
 Models are loaded and evaluated one at a time, so they do not all need to fit
 in device memory simultaneously.
 
+For an out-of-fold report on the training dataset, add `--test-only`:
+
+```bash
+transcriptml cv ensemble-predict \
+  --cv-root runs/saluki_cv10 \
+  --dataset data/saluki \
+  --out-csv runs/saluki_cv10/out_of_fold_predictions.csv \
+  --test-only \
+  --device auto
+```
+
+This reads each checkpoint's sibling `foldN/dataset/splits.json` and scores
+only that fold's test indices. The fold test splits must cover every dataset
+example exactly once. Consequently, a standard CV run contributes one
+held-out prediction per row rather than averaging predictions from models that
+trained on that row. Use this mode for unbiased CV metrics and residual
+diagnostics; use the default full-dataset mode when ensembling fold models on a
+new external dataset.
+
 The same operation is available from Python when checkpoint paths are managed
 outside the standard CV directory layout:
 
@@ -230,17 +249,19 @@ The output has one row per dataset example:
 index,id,target,average_prediction,average_residual
 ```
 
-Here `average_prediction` is the mean prediction from all discovered fold
-checkpoints, and `average_residual` is `target - average_prediction`. If the
-dataset has no `y.npy`, the prediction columns are still written but target and
-residual columns are omitted. A sibling `ensemble_predictions.summary.json`
-records the checkpoints, fold count, ensemble MSE and Pearson correlation, and
-mean residual.
+By default, `average_prediction` is the mean prediction from all discovered
+fold checkpoints. With `--test-only`, it is the single held-out prediction for
+that row. In both modes, `average_residual` is
+`target - average_prediction`. If the dataset has no `y.npy`, the prediction
+columns are still written but target and residual columns are omitted. A
+sibling `ensemble_predictions.summary.json` records the prediction scope,
+checkpoints, fold count, MSE and Pearson correlation, and mean residual.
 
 Do not use the disjoint fold-level `test_predictions.csv` files as inputs to
-this averaging operation. Those rows are out-of-fold estimates and should be
-concatenated, whereas ensemble averaging requires every fold model to score the
-same examples.
+the default full-dataset averaging operation. Those rows are out-of-fold
+estimates and should be concatenated, or reproduced directly with
+`--test-only`, whereas ensemble averaging requires every fold model to score
+the same examples.
 
 The built-in fold assignment is random and transcript-level. If related
 isoforms, homologous transcripts, or other biological groups must stay
