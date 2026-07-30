@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from transcriptml.data.bundle import DatasetBundle
+from transcriptml.models.reproduce import StochasticShift
 from transcriptml.models.registry import build_model
 from transcriptml.training.trainer import TrainConfig, _monitor_improved, _monitor_names, _select_splits
 from transcriptml.training.splits import predefined_split_indices, random_split_indices
@@ -73,6 +74,18 @@ def test_multiple_monitor_metrics_use_or_improvement():
     assert not improved
 
 
+def test_stochastic_shift_can_be_disabled():
+    x = torch.arange(24, dtype=torch.float32).reshape(2, 3, 4)
+
+    disabled = StochasticShift(shift_max=0)
+    disabled.train()
+    assert torch.equal(disabled(x), x)
+
+    enabled = StochasticShift(shift_max=3)
+    enabled.eval()
+    assert torch.equal(enabled(x), x)
+
+
 def test_model_registry_dummy_forward():
     x4 = torch.randn(2, 4, 32)
     small = build_model({"name": "small_cnn", "params": {"in_ch": 4, "n_filters": 8, "head_hidden": 8}})
@@ -101,6 +114,8 @@ def test_model_registry_dummy_forward():
     )
     assert isinstance(saluki_exact.bn1, torch.nn.BatchNorm1d)
     assert isinstance(saluki_exact.bn2, torch.nn.BatchNorm1d)
+    assert saluki_exact.pooling == "max"
+    assert all(isinstance(block["pool"], torch.nn.MaxPool1d) for block in saluki_exact.blocks)
 
     saluki_exact_ln = build_model(
         {
@@ -121,6 +136,30 @@ def test_model_registry_dummy_forward():
     assert saluki_exact_ln.bn1.eps == pytest.approx(0.002)
     saluki_exact_ln.train()
     assert saluki_exact_ln(x6[:1]).shape == (1,)
+
+    saluki_exact_average_pool = build_model(
+        {
+            "name": "saluki_exact",
+            "params": {
+                "filters": 8,
+                "kernel_size": 3,
+                "num_layers": 1,
+                "pooling": "average",
+                "dropout": 0.0,
+                "augment_shift": 0,
+                "head_layernorm": True,
+            },
+        }
+    )
+    assert saluki_exact_average_pool.pooling == "average"
+    assert all(
+        isinstance(block["pool"], torch.nn.AvgPool1d)
+        for block in saluki_exact_average_pool.blocks
+    )
+    assert saluki_exact_average_pool(x6).shape == (2,)
+
+    with pytest.raises(ValueError, match="pooling must be either 'max' or 'average'"):
+        build_model({"name": "saluki_exact", "params": {"pooling": "median"}})
 
     legnet = build_model(
         {

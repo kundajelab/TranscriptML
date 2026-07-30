@@ -15,6 +15,7 @@ class SalukiExactConfig:
     filters: int = 64
     kernel_size: int = 5
     num_layers: int = 6
+    pooling: str = "max"
     dropout: float = 0.3
     augment_shift: int = 3
     ln_epsilon: float = 0.007
@@ -90,6 +91,7 @@ class SalukiExact(nn.Module):
         filters: int = 64,
         kernel_size: int = 5,
         num_layers: int = 6,
+        pooling: str = "max",
         dropout: float = 0.3,
         augment_shift: int = 3,
         ln_epsilon: float = 0.007,
@@ -104,6 +106,8 @@ class SalukiExact(nn.Module):
             filters: Number of convolutional and recurrent feature channels.
             kernel_size: Width of the convolution kernels.
             num_layers: Number of repeated convolution/pooling blocks.
+            pooling: Downsampling operation used by each convolutional block.
+                Supported values are ``"max"`` and ``"average"``.
             dropout: Dropout probability used in convolutional and dense layers.
             augment_shift: Maximum stochastic right shift during training.
             ln_epsilon: Epsilon used by channel layer normalization.
@@ -119,6 +123,13 @@ class SalukiExact(nn.Module):
         self.filters = int(filters)
         self.kernel_size = int(kernel_size)
         self.num_layers = int(num_layers)
+        self.pooling = str(pooling).strip().lower()
+        if self.pooling == "max":
+            pool_cls = nn.MaxPool1d
+        elif self.pooling == "average":
+            pool_cls = nn.AvgPool1d
+        else:
+            raise ValueError("pooling must be either 'max' or 'average'")
         self.head_layernorm = bool(head_layernorm)
         bn_momentum_pt = 1.0 - float(keras_bn_momentum)
         self.shift = StochasticShift(augment_shift)
@@ -132,7 +143,7 @@ class SalukiExact(nn.Module):
                         "act": nn.ReLU(),
                         "conv": nn.Conv1d(filters, filters, kernel_size=kernel_size, padding=0),
                         "drop": nn.Dropout(dropout),
-                        "pool": nn.MaxPool1d(kernel_size=2, stride=2),
+                        "pool": pool_cls(kernel_size=2, stride=2),
                     }
                 )
             )

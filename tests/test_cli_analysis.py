@@ -18,6 +18,8 @@ def test_models_cli_list_and_show_json(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["name"] == "saluki_exact"
     assert payload["params"]["filters"] == 64
+    assert payload["params"]["pooling"] == "max"
+    assert payload["params"]["augment_shift"] == 3
     assert payload["params"]["head_layernorm"] is False
 
 
