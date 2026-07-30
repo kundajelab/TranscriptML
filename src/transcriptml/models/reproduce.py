@@ -20,6 +20,7 @@ class SalukiExactConfig:
     ln_epsilon: float = 0.007
     keras_bn_momentum: float = 0.90
     bn_eps: float = 1e-3
+    head_layernorm: bool = False
 
     def to_kwargs(self) -> dict[str, object]:
         """Return constructor keyword arguments for ``SalukiExact``."""
@@ -94,6 +95,7 @@ class SalukiExact(nn.Module):
         ln_epsilon: float = 0.007,
         keras_bn_momentum: float = 0.90,
         bn_eps: float = 1e-3,
+        head_layernorm: bool = False,
     ):
         """Create the Saluki architecture reproduction.
 
@@ -106,7 +108,10 @@ class SalukiExact(nn.Module):
             augment_shift: Maximum stochastic right shift during training.
             ln_epsilon: Epsilon used by channel layer normalization.
             keras_bn_momentum: Keras-style batch-normalization momentum value.
-            bn_eps: Epsilon used by batch-normalization layers.
+            bn_eps: Epsilon used by normalization layers in the prediction
+                head.
+            head_layernorm: Whether to replace the two head batch-normalization
+                layers with per-example layer normalization.
         """
 
         super().__init__()
@@ -114,6 +119,7 @@ class SalukiExact(nn.Module):
         self.filters = int(filters)
         self.kernel_size = int(kernel_size)
         self.num_layers = int(num_layers)
+        self.head_layernorm = bool(head_layernorm)
         bn_momentum_pt = 1.0 - float(keras_bn_momentum)
         self.shift = StochasticShift(augment_shift)
         self.conv0 = nn.Conv1d(seq_depth, filters, kernel_size=kernel_size, padding=0, bias=False)
@@ -133,10 +139,14 @@ class SalukiExact(nn.Module):
         self.pre_rnn_ln = ChannelLayerNorm(filters, eps=ln_epsilon)
         self.pre_rnn_act = nn.ReLU()
         self.gru = nn.GRU(input_size=filters, hidden_size=filters, batch_first=True)
-        self.bn1 = nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
+        if self.head_layernorm:
+            self.bn1 = nn.LayerNorm(filters, eps=bn_eps)
+            self.bn2 = nn.LayerNorm(filters, eps=bn_eps)
+        else:
+            self.bn1 = nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
+            self.bn2 = nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
         self.fc1 = nn.Linear(filters, filters)
         self.drop1 = nn.Dropout(dropout)
-        self.bn2 = nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
         self.fc2 = nn.Linear(filters, 1)
         self.reset_parameters()
 

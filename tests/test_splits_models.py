@@ -87,6 +87,41 @@ def test_model_registry_dummy_forward():
     )
     assert saluki(x6).shape == (2,)
 
+    saluki_exact = build_model(
+        {
+            "name": "saluki_exact",
+            "params": {
+                "filters": 8,
+                "kernel_size": 3,
+                "num_layers": 1,
+                "dropout": 0.0,
+                "augment_shift": 0,
+            },
+        }
+    )
+    assert isinstance(saluki_exact.bn1, torch.nn.BatchNorm1d)
+    assert isinstance(saluki_exact.bn2, torch.nn.BatchNorm1d)
+
+    saluki_exact_ln = build_model(
+        {
+            "name": "saluki_exact",
+            "params": {
+                "filters": 8,
+                "kernel_size": 3,
+                "num_layers": 1,
+                "dropout": 0.0,
+                "augment_shift": 0,
+                "bn_eps": 0.002,
+                "head_layernorm": True,
+            },
+        }
+    )
+    assert isinstance(saluki_exact_ln.bn1, torch.nn.LayerNorm)
+    assert isinstance(saluki_exact_ln.bn2, torch.nn.LayerNorm)
+    assert saluki_exact_ln.bn1.eps == pytest.approx(0.002)
+    saluki_exact_ln.train()
+    assert saluki_exact_ln(x6[:1]).shape == (1,)
+
     legnet = build_model(
         {
             "name": "legnet",

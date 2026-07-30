@@ -23,5 +23,6 @@
   "num_workers": 0,
   "mmap_mode": "r",
   "seed": 42,
-  "debug_epoch_predictions": false
+  "debug_epoch_predictions": false,
+  "head_layernorm": false
 }

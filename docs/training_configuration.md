@@ -49,6 +49,7 @@ defaults:
   "num_workers": 0,
   "mmap_mode": "r",
   "seed": 42,
+  "head_layernorm": false,
   "split_source": "auto",
   "split": {
     "method": "random",
@@ -130,6 +131,7 @@ above.
 | `seed` | integer | `123` | Seeds Python, NumPy, and PyTorch. It also seeds a config-defined random split unless `split.seed` is set. |
 | `progress` | boolean | `true` | Whether to print data-processing, batch, epoch, and evaluation progress. |
 | `debug_epoch_predictions` | boolean | `false` | Save deterministic end-of-epoch train and validation predictions to `debug_epoch_predictions.csv`. This adds one evaluation pass over the training split per epoch. |
+| `head_layernorm` | boolean | `false` | For `saluki_exact`, replace both dense-head BatchNorm layers with per-example LayerNorm. Other model types reject `true`. |
 | `sequence_controls` | mapping, list, or `null` | `null` | Optional sequence ablations applied before split selection. |
 | `split_source` | string | `"auto"` | Whether splits come from the bundle or from the `split` block. |
 | `split` | mapping | random 80/10/10 | Config-defined split settings, used according to `split_source`. |
@@ -244,7 +246,25 @@ This is the model used by the standard Saluki workflow.
 | `augment_shift` | `3` | Maximum random right shift applied during training. The sampled shift is between zero and this value; set to zero to disable it. |
 | `ln_epsilon` | `0.007` | Numerical epsilon used by channel layer normalization. |
 | `keras_bn_momentum` | `0.9` | Batch-normalization momentum expressed using the Keras convention reproduced by this model. |
-| `bn_eps` | `0.001` | Numerical epsilon used by batch-normalization layers in the head. |
+| `bn_eps` | `0.001` | Numerical epsilon used by normalization layers in the head. |
+| `head_layernorm` | `false` | Checkpoint-level record of whether the head uses LayerNorm. During training, set the top-level `head_layernorm` field instead. |
+
+Set the top-level training option to enable the experimental head:
+
+```json
+{
+  "model": {"name": "saluki_exact", "params": {}},
+  "head_layernorm": true
+}
+```
+
+This preserves the original `Normalization → ReLU → Linear → Dropout →
+Normalization → ReLU → Linear` ordering, but makes both head normalization
+layers independent of batch and running statistics. LayerNorm uses `bn_eps`
+so enabling the option changes the normalization behavior without also
+changing its numerical epsilon. The resolved value is saved in checkpoint
+`model_config.params`, allowing the checkpoint loader to reconstruct the
+correct head, and is also recorded in `summary.json`.
 
 ### `saluki_like`
 

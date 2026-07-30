@@ -18,6 +18,7 @@ def test_models_cli_list_and_show_json(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["name"] == "saluki_exact"
     assert payload["params"]["filters"] == 64
+    assert payload["params"]["head_layernorm"] is False
 
 
 def test_init_run_cli_writes_templates(tmp_path):
@@ -37,6 +38,7 @@ def test_init_run_cli_writes_templates(tmp_path):
     assert train_config["num_workers"] == 0
     assert train_config["mmap_mode"] == "r"
     assert train_config["seed"] == 42
+    assert train_config["head_layernorm"] is False
     assert train_config["split_source"] == "auto"
     assert not (out_dir / "run_config.json").exists()
     assert (out_dir / "README.md").exists()

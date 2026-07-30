@@ -7,6 +7,7 @@ import torch
 
 import transcriptml.training.trainer as trainer
 from transcriptml.data.bundle import DatasetBundle
+from transcriptml.models.registry import load_checkpoint
 from transcriptml.training.losses import build_training_loss
 from transcriptml.training.trainer import train_model
 
@@ -83,6 +84,13 @@ def _tiny_x(n: int) -> np.ndarray:
     return x
 
 
+def _tiny_saluki_x(n: int) -> np.ndarray:
+    x = np.zeros((n, 6, 32), dtype=np.uint8)
+    for i in range(n):
+        x[i, i % 4, :] = 1
+    return x
+
+
 def _tiny_model_config() -> dict[str, object]:
     return {
         "name": "small_cnn",
@@ -136,6 +144,70 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
     assert result["summary"]["test_loss"] == pytest.approx(result["summary"]["test_mse"])
     assert (tmp_path / "best.pt").exists()
     assert not (tmp_path / "debug_epoch_predictions.csv").exists()
+
+
+def test_train_model_saluki_head_layernorm_checkpoint_roundtrip(tmp_path):
+    bundle = DatasetBundle(
+        X=_tiny_saluki_x(4),
+        y=np.linspace(-1.0, 1.0, 4, dtype=np.float32),
+        schema="saluki6",
+        splits={"train": [0], "val": [1, 2], "test": [3]},
+    )
+
+    result = train_model(
+        bundle,
+        {
+            "dataset": "unused",
+            "output_dir": str(tmp_path),
+            "model": {
+                "name": "saluki_exact",
+                "params": {
+                    "filters": 4,
+                    "kernel_size": 3,
+                    "num_layers": 1,
+                    "dropout": 0.0,
+                    "augment_shift": 0,
+                },
+            },
+            "head_layernorm": True,
+            "batch_size": 1,
+            "epochs": 1,
+            "progress": False,
+        },
+    )
+
+    assert isinstance(result["model"].bn1, torch.nn.LayerNorm)
+    assert isinstance(result["model"].bn2, torch.nn.LayerNorm)
+    assert np.isfinite(result["history"][0]["train_loss"])
+    assert result["summary"]["head_layernorm"] is True
+
+    loaded_model, checkpoint = load_checkpoint(tmp_path / "best.pt")
+    assert isinstance(loaded_model.bn1, torch.nn.LayerNorm)
+    assert isinstance(loaded_model.bn2, torch.nn.LayerNorm)
+    assert checkpoint["model_config"]["params"]["head_layernorm"] is True
+    assert checkpoint["train_config"]["head_layernorm"] is True
+
+
+def test_train_model_rejects_head_layernorm_for_other_models(tmp_path):
+    bundle = DatasetBundle(
+        X=_tiny_x(4),
+        y=np.linspace(-1.0, 1.0, 4, dtype=np.float32),
+        schema="rna4",
+        splits={"train": [0, 1], "val": [2], "test": [3]},
+    )
+
+    with pytest.raises(ValueError, match="only supported.*saluki_exact"):
+        train_model(
+            bundle,
+            {
+                "dataset": "unused",
+                "output_dir": str(tmp_path),
+                "model": _tiny_model_config(),
+                "head_layernorm": True,
+                "epochs": 1,
+                "progress": False,
+            },
+        )
 
 
 def test_train_model_debug_epoch_predictions_csv(tmp_path):

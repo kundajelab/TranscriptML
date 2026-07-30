@@ -43,6 +43,7 @@ class TrainConfig:
     seed: int = 123
     progress: bool = True
     debug_epoch_predictions: bool = False
+    head_layernorm: bool = False
     sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     split_source: str = "auto"
     split: Mapping[str, Any] = field(
@@ -245,6 +246,12 @@ def _would_create_singleton_batch(n_examples: int, batch_size: int) -> bool:
     if bs <= 1 or n <= bs:
         return False
     return n % bs == 1
+
+
+def _has_batch_normalization(model: nn.Module) -> bool:
+    """Return whether a model contains a PyTorch batch-normalization module."""
+
+    return any(isinstance(module, nn.modules.batchnorm._BatchNorm) for module in model.modules())
 
 
 def _run_loader(
@@ -526,10 +533,16 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     splits, split_source_used = _select_splits(bundle, cfg)
     split_counts = {name: len(splits.get(name, [])) for name in ("train", "val", "test")}
     model_config = normalize_model_config(cfg.model)
+    if cfg.head_layernorm and model_config.name != "saluki_exact":
+        raise ValueError("head_layernorm is only supported for model 'saluki_exact'")
+    if model_config.name == "saluki_exact":
+        model_config.params = dict(model_config.params or {})
+        model_config.params["head_layernorm"] = bool(cfg.head_layernorm)
     log_progress(
         (
             "training: "
             f"device={device}, output={out}, loss={normalized_loss_config['name']}, "
+            f"head_layernorm={cfg.head_layernorm}, "
             f"split_source={split_source_used} requested={cfg.split_source}, "
             f"train={split_counts['train']}, val={split_counts['val']}, "
             f"test={split_counts['test']}"
@@ -540,7 +553,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
     dataset = _ArrayRegressionDataset(bundle.X, y_train, aux_arrays)
     pin_memory = device.type == "cuda"
-    drop_last_train = _would_create_singleton_batch(len(splits["train"]), cfg.batch_size)
+    drop_last_train = _has_batch_normalization(model) and _would_create_singleton_batch(
+        len(splits["train"]), cfg.batch_size
+    )
     if drop_last_train:
         log_progress(
             (
@@ -748,6 +763,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "best_monitor_values": best_metrics,
         "epochs_run": len(history),
         "loss": normalized_loss_config,
+        "head_layernorm": bool(cfg.head_layernorm),
         "split_source_requested": cfg.split_source,
         "split_source_used": split_source_used,
         "split_counts": split_counts,
