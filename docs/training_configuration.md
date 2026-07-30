@@ -129,6 +129,7 @@ above.
 | `mmap_mode` | string or `null` | `"r"` | NumPy memory-map mode used when loading bundle arrays. Use `"r"` to avoid reading the complete input into memory, or `null` to load it normally. |
 | `seed` | integer | `123` | Seeds Python, NumPy, and PyTorch. It also seeds a config-defined random split unless `split.seed` is set. |
 | `progress` | boolean | `true` | Whether to print data-processing, batch, epoch, and evaluation progress. |
+| `debug_epoch_predictions` | boolean | `false` | Save deterministic end-of-epoch train and validation predictions to `debug_epoch_predictions.csv`. This adds one evaluation pass over the training split per epoch. |
 | `sequence_controls` | mapping, list, or `null` | `null` | Optional sequence ablations applied before split selection. |
 | `split_source` | string | `"auto"` | Whether splits come from the bundle or from the `split` block. |
 | `split` | mapping | random 80/10/10 | Config-defined split settings, used according to `split_source`. |
@@ -174,6 +175,27 @@ A list uses an OR rule. With:
 an epoch is considered improved when validation loss decreases or validation
 Pearson correlation increases. That epoch replaces `best.pt` and resets
 patience. `last.pt` is written after every epoch.
+
+### Epoch Prediction Debugging
+
+Set `"debug_epoch_predictions": true` to write
+`debug_epoch_predictions.csv` in the training output directory. The file has
+one row per train or validation example per completed epoch. Predictions are
+made in evaluation mode using the model at the end of the epoch, so dropout
+and stochastic augmentation are disabled and all training examples are
+included.
+
+The columns include `epoch`, `split`, original dataset `index`, `id`, `target`,
+`prediction`, `residual`, `squared_error`, configured split-level `loss` and
+`pearson`, the corresponding online `history_loss` and `history_pearson`,
+`loss_name`, and checkpoint-monitoring context. Split-level metrics are
+repeated on each example row to keep the CSV self-contained.
+
+For the training split, `loss` and `pearson` can differ from the
+`history_loss` and `history_pearson` columns. History metrics are collected
+while batches are being trained and the model parameters are changing, with
+augmentation and dropout active when configured. The debug metrics instead
+evaluate the final model state for that epoch deterministically.
 
 ## Saluki Model Parameters
 

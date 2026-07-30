@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import random
 from dataclasses import asdict, dataclass, field
@@ -41,6 +42,7 @@ class TrainConfig:
     mmap_mode: str | None = "r"
     seed: int = 123
     progress: bool = True
+    debug_epoch_predictions: bool = False
     sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     split_source: str = "auto"
     split: Mapping[str, Any] = field(
@@ -256,7 +258,8 @@ def _run_loader(
     target_metrics: bool = True,
     progress: bool = True,
     progress_label: str | None = None,
-) -> dict[str, float]:
+    return_predictions: bool = False,
+) -> dict[str, float | np.ndarray | None]:
     """Run one train or evaluation pass over a loader.
 
     Args:
@@ -271,10 +274,18 @@ def _run_loader(
             Pearson correlation.
         progress: Whether to emit progress messages while iterating.
         progress_label: Optional label shown in progress messages.
+        return_predictions: Whether to include concatenated predictions and
+            targets in the returned mapping.
     """
 
     if loader is None:
-        return {"loss": float("nan"), "pearson": float("nan")}
+        result: dict[str, float | np.ndarray | None] = {
+            "loss": float("nan"),
+            "pearson": float("nan"),
+        }
+        if return_predictions:
+            result.update({"predictions": np.array([]), "targets": None})
+        return result
     training = optimizer is not None
     model.train(training)
     loss_numerator = 0.0
@@ -312,10 +323,106 @@ def _run_loader(
     reporter.close()
     y_pred = np.concatenate(preds) if preds else np.array([])
     y_true = np.concatenate(targets) if targets else np.array([])
-    return {
+    result: dict[str, float | np.ndarray | None] = {
         "loss": float(loss_numerator / max(loss_denominator, 1e-12)),
         "pearson": pearson_corr(y_true, y_pred) if target_metrics else float("nan"),
     }
+    if return_predictions:
+        result.update(
+            {
+                "predictions": y_pred,
+                "targets": y_true if target_metrics else None,
+            }
+        )
+    return result
+
+
+_DEBUG_PREDICTION_FIELDS = (
+    "epoch",
+    "split",
+    "index",
+    "id",
+    "target",
+    "prediction",
+    "residual",
+    "squared_error",
+    "loss",
+    "pearson",
+    "history_loss",
+    "history_pearson",
+    "loss_name",
+    "evaluation_mode",
+    "monitor_improved",
+)
+
+
+def _initialize_debug_predictions_csv(path: str | Path) -> None:
+    """Create an empty epoch-prediction CSV with its header."""
+
+    with Path(path).open("w", newline="", encoding="utf-8") as handle:
+        csv.DictWriter(handle, fieldnames=_DEBUG_PREDICTION_FIELDS).writeheader()
+
+
+def _append_debug_predictions(
+    path: str | Path,
+    *,
+    epoch: int,
+    split: str,
+    indices: Sequence[int],
+    ids: Sequence[str],
+    metrics: Mapping[str, float | np.ndarray | None],
+    history_loss: float,
+    history_pearson: float,
+    loss_name: str,
+    monitor_improved: bool,
+) -> None:
+    """Append deterministic end-of-epoch predictions for one dataset split."""
+
+    predictions = np.asarray(metrics.get("predictions"), dtype=np.float64).reshape(-1)
+    targets_value = metrics.get("targets")
+    targets = (
+        None
+        if targets_value is None
+        else np.asarray(targets_value, dtype=np.float64).reshape(-1)
+    )
+    split_indices = [int(index) for index in indices]
+    if predictions.size != len(split_indices):
+        raise ValueError(
+            f"Debug predictions for split '{split}' have {predictions.size} rows; "
+            f"expected {len(split_indices)}"
+        )
+    if targets is not None and targets.size != predictions.size:
+        raise ValueError(
+            f"Debug targets for split '{split}' have {targets.size} rows; "
+            f"expected {predictions.size}"
+        )
+
+    loss = float(metrics["loss"])
+    pearson = float(metrics["pearson"])
+    with Path(path).open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_DEBUG_PREDICTION_FIELDS)
+        for position, (index, prediction) in enumerate(zip(split_indices, predictions)):
+            target = None if targets is None else float(targets[position])
+            residual = None if target is None else target - float(prediction)
+            writer.writerow(
+                {
+                    "epoch": int(epoch),
+                    "split": split,
+                    "index": index,
+                    "id": str(ids[index]),
+                    "target": "" if target is None else target,
+                    "prediction": float(prediction),
+                    "residual": "" if residual is None else residual,
+                    "squared_error": "" if residual is None else residual**2,
+                    "loss": loss,
+                    "pearson": pearson,
+                    "history_loss": float(history_loss),
+                    "history_pearson": float(history_pearson),
+                    "loss_name": loss_name,
+                    "evaluation_mode": True,
+                    "monitor_improved": bool(monitor_improved),
+                }
+            )
 
 
 def _is_better(value: float, best: float | None, monitor: str) -> bool:
@@ -459,6 +566,21 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         num_workers=cfg.num_workers,
         pin_memory=pin_memory,
     )
+    debug_train_loader = (
+        _loader(
+            dataset,
+            splits["train"],
+            cfg.batch_size,
+            shuffle=False,
+            num_workers=cfg.num_workers,
+            pin_memory=pin_memory,
+        )
+        if cfg.debug_epoch_predictions
+        else None
+    )
+    debug_predictions_path = out / "debug_epoch_predictions.csv"
+    if cfg.debug_epoch_predictions:
+        _initialize_debug_predictions_csv(debug_predictions_path)
     history: list[dict[str, float | int]] = []
     monitors = _monitor_names(cfg.monitor)
     best_metrics: dict[str, float | None] = {name: None for name in monitors}
@@ -486,6 +608,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             target_metrics=has_targets,
             progress=cfg.progress,
             progress_label=f"epoch {epoch} val",
+            return_predictions=cfg.debug_epoch_predictions,
         )
         row = {
             "epoch": epoch,
@@ -496,6 +619,42 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         }
         history.append(row)
         improved, monitor_values = _monitor_improved(row, monitors, best_metrics)
+        if cfg.debug_epoch_predictions:
+            debug_train_metrics = _run_loader(
+                model,
+                debug_train_loader,
+                device=device,
+                loss_fn=loss_fn,
+                optimizer=None,
+                target_metrics=has_targets,
+                progress=cfg.progress,
+                progress_label=f"epoch {epoch} debug train",
+                return_predictions=True,
+            )
+            _append_debug_predictions(
+                debug_predictions_path,
+                epoch=epoch,
+                split="train",
+                indices=splits["train"],
+                ids=bundle.ids,
+                metrics=debug_train_metrics,
+                history_loss=float(row["train_loss"]),
+                history_pearson=float(row["train_pearson"]),
+                loss_name=str(normalized_loss_config["name"]),
+                monitor_improved=improved,
+            )
+            _append_debug_predictions(
+                debug_predictions_path,
+                epoch=epoch,
+                split="val",
+                indices=splits["val"],
+                ids=bundle.ids,
+                metrics=val_metrics,
+                history_loss=float(row["val_loss"]),
+                history_pearson=float(row["val_pearson"]),
+                loss_name=str(normalized_loss_config["name"]),
+                monitor_improved=improved,
+            )
         if improved:
             best_metrics = dict(monitor_values)
             best_epoch = epoch
@@ -596,6 +755,8 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "test_mse": test_result.get("loss"),
         "test_pearson": test_result.get("pearson"),
     }
+    if cfg.debug_epoch_predictions:
+        summary["debug_epoch_predictions"] = str(debug_predictions_path)
     if sequence_control_stats is not None:
         summary["sequence_controls"] = sequence_control_stats
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

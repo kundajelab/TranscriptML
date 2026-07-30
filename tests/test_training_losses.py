@@ -1,3 +1,4 @@
+import csv
 import math
 
 import numpy as np
@@ -134,6 +135,70 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
     assert "best_monitors" not in result["summary"]
     assert result["summary"]["test_loss"] == pytest.approx(result["summary"]["test_mse"])
     assert (tmp_path / "best.pt").exists()
+    assert not (tmp_path / "debug_epoch_predictions.csv").exists()
+
+
+def test_train_model_debug_epoch_predictions_csv(tmp_path):
+    y = np.linspace(-1.0, 1.0, 8, dtype=np.float32)
+    bundle = DatasetBundle(
+        X=_tiny_x(8),
+        y=y,
+        ids=[f"tx-{i}" for i in range(8)],
+        schema="rna4",
+        splits={"train": [0, 1, 2, 3], "val": [4, 5], "test": [6, 7]},
+    )
+
+    result = train_model(
+        bundle,
+        {
+            "dataset": "unused",
+            "output_dir": str(tmp_path),
+            "model": _tiny_model_config(),
+            "batch_size": 3,
+            "epochs": 2,
+            "patience": -1,
+            "progress": False,
+            "debug_epoch_predictions": True,
+        },
+    )
+
+    debug_path = tmp_path / "debug_epoch_predictions.csv"
+    assert result["summary"]["debug_epoch_predictions"] == str(debug_path)
+    with debug_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 2 * (4 + 2)
+    assert {row["epoch"] for row in rows} == {"1", "2"}
+    assert {row["split"] for row in rows} == {"train", "val"}
+    assert {row["loss_name"] for row in rows} == {"mse"}
+    assert {row["evaluation_mode"] for row in rows} == {"True"}
+    assert {row["id"] for row in rows if row["split"] == "val"} == {"tx-4", "tx-5"}
+
+    for epoch in (1, 2):
+        for split, expected_indices in (("train", [0, 1, 2, 3]), ("val", [4, 5])):
+            group = [
+                row
+                for row in rows
+                if int(row["epoch"]) == epoch and row["split"] == split
+            ]
+            assert [int(row["index"]) for row in group] == expected_indices
+            targets = np.asarray([float(row["target"]) for row in group])
+            predictions = np.asarray([float(row["prediction"]) for row in group])
+            squared_errors = np.asarray([float(row["squared_error"]) for row in group])
+            assert squared_errors == pytest.approx((targets - predictions) ** 2)
+            assert float(group[0]["loss"]) == pytest.approx(float(np.mean(squared_errors)))
+            assert float(group[0]["pearson"]) == pytest.approx(
+                float(np.corrcoef(targets, predictions)[0, 1])
+            )
+            assert len({row["loss"] for row in group}) == 1
+            assert len({row["pearson"] for row in group}) == 1
+
+    val_rows_epoch_1 = [
+        row for row in rows if row["epoch"] == "1" and row["split"] == "val"
+    ]
+    assert float(val_rows_epoch_1[0]["history_loss"]) == pytest.approx(
+        float(val_rows_epoch_1[0]["loss"])
+    )
 
 
 def test_train_model_drops_singleton_training_batch_for_batchnorm(tmp_path, monkeypatch):
