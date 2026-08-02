@@ -26,6 +26,7 @@ def _train_config(workflow: str) -> dict[str, Any]:
             "num_workers": 0,
             "mmap_mode": "r",
             "seed": 42,
+            "head_layernorm": False,
             "split_source": "auto",
             "split": {"method": "random", "val_frac": 0.1, "test_frac": 0.1},
         }

@@ -49,6 +49,7 @@ defaults:
   "num_workers": 0,
   "mmap_mode": "r",
   "seed": 42,
+  "head_layernorm": false,
   "split_source": "auto",
   "split": {
     "method": "random",
@@ -130,6 +131,7 @@ above.
 | `seed` | integer | `123` | Seeds Python, NumPy, and PyTorch. It also seeds a config-defined random split unless `split.seed` is set. |
 | `progress` | boolean | `true` | Whether to print data-processing, batch, epoch, and evaluation progress. |
 | `debug_epoch_predictions` | boolean | `false` | Save deterministic end-of-epoch train and validation predictions to `debug_epoch_predictions.csv`. This adds one evaluation pass over the training split per epoch. |
+| `head_layernorm` | boolean | `false` | For `saluki_exact`, replace both dense-head BatchNorm layers with per-example LayerNorm. Other model types reject `true`. |
 | `sequence_controls` | mapping, list, or `null` | `null` | Optional sequence ablations applied before split selection. |
 | `split_source` | string | `"auto"` | Whether splits come from the bundle or from the `split` block. |
 | `split` | mapping | random 80/10/10 | Config-defined split settings, used according to `split_source`. |
@@ -224,6 +226,7 @@ This is the model used by the standard Saluki workflow.
       "filters": 64,
       "kernel_size": 5,
       "num_layers": 6,
+      "pooling": "max",
       "dropout": 0.3,
       "augment_shift": 3,
       "ln_epsilon": 0.007,
@@ -239,12 +242,53 @@ This is the model used by the standard Saluki workflow.
 | `seq_depth` | `6` | Number of input channels. Keep this at six for an ordinary Saluki bundle. |
 | `filters` | `64` | Width of the convolutional stack, GRU, and dense hidden layer. |
 | `kernel_size` | `5` | Width of the initial and repeated one-dimensional convolutions. |
-| `num_layers` | `6` | Number of convolution, dropout, and max-pooling blocks after the initial convolution. |
+| `num_layers` | `6` | Number of convolution, dropout, and pooling blocks after the initial convolution. |
+| `pooling` | `"max"` | Downsampling operation in each convolutional block. Use `"max"` or `"average"`. |
 | `dropout` | `0.3` | Dropout probability in convolutional blocks and the dense head. |
 | `augment_shift` | `3` | Maximum random right shift applied during training. The sampled shift is between zero and this value; set to zero to disable it. |
 | `ln_epsilon` | `0.007` | Numerical epsilon used by channel layer normalization. |
 | `keras_bn_momentum` | `0.9` | Batch-normalization momentum expressed using the Keras convention reproduced by this model. |
-| `bn_eps` | `0.001` | Numerical epsilon used by batch-normalization layers in the head. |
+| `bn_eps` | `0.001` | Numerical epsilon used by normalization layers in the head. |
+| `head_layernorm` | `false` | Checkpoint-level record of whether the head uses LayerNorm. During training, set the top-level `head_layernorm` field instead. |
+
+Set the top-level training option to enable the experimental head:
+
+```json
+{
+  "model": {"name": "saluki_exact", "params": {}},
+  "head_layernorm": true
+}
+```
+
+This preserves the original `Normalization → ReLU → Linear → Dropout →
+Normalization → ReLU → Linear` ordering, but makes both head normalization
+layers independent of batch and running statistics. LayerNorm uses `bn_eps`
+so enabling the option changes the normalization behavior without also
+changing its numerical epsilon. The resolved value is saved in checkpoint
+`model_config.params`, allowing the checkpoint loader to reconstruct the
+correct head, and is also recorded in `summary.json`.
+
+To use average pooling and disable stochastic shift augmentation, set the
+corresponding model parameters:
+
+```json
+{
+  "model": {
+    "name": "saluki_exact",
+    "params": {
+      "pooling": "average",
+      "augment_shift": 0
+    }
+  }
+}
+```
+
+During each training forward pass, a positive `augment_shift` samples one
+integer offset from zero through the configured maximum. All channels are
+shifted right together, zeros are inserted at the left boundary, and the same
+number of positions are removed from the right boundary. Evaluation mode never
+applies the shift. Setting `augment_shift` to zero bypasses the operation in
+training mode as well.
 
 ### `saluki_like`
 
