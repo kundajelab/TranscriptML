@@ -186,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, help_text in [
         ("ism", "Run single-nucleotide ISM"),
+        ("window-ism", "Run window-level random-mutagenesis ISM"),
         ("codon-ism", "Run CDS codon-level ISM"),
         ("motif-ablation", "Run motif ablation"),
         ("motif-context", "Run motif context scan"),
@@ -200,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--out-dir", dest="out_dir_flag", help="Output directory")
         p.add_argument("--device", default="cpu")
         p.add_argument("--batch-size", type=int, default=128)
-        if name not in {"ism", "codon-ism"}:
+        if name in {"motif-ablation", "motif-context", "epistasis"}:
             p.add_argument("--motif", required=True)
             p.add_argument(
                 "--region",
@@ -214,8 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
                 choices=["random_different", "shuffle", "dinuc_shuffle"],
             )
             p.add_argument("--seed", type=int, default=123)
-        if name in {"ism", "codon-ism"}:
+        if name in {"ism", "window-ism", "codon-ism"}:
             p.add_argument("--mutation-batch-size", type=int, default=512)
+        if name == "window-ism":
+            p.add_argument("--window-size", type=int, required=True)
+            p.add_argument("--stride", type=int, help="Window stride; defaults to --window-size")
+            p.add_argument("--n-ablations", type=int, default=30)
+            p.add_argument("--seed", type=int, default=123)
         if name == "codon-ism":
             p.add_argument(
                 "--mutation-policy",
@@ -318,6 +324,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also write centered scores projected onto reference bases; requires --dataset",
     )
+
+    p = sub.add_parser("summarize-window-ism", help="Aggregate matching fold-level window-ISM tracks")
+    p.add_argument("--input-dir", type=Path, required=True, help="Directory containing fold*/ window-ISM outputs")
+    p.add_argument("--out-dir", type=Path, required=True, help="Directory for aggregated window-ISM arrays")
+    p.add_argument("--dataset", type=Path, help="Optional dataset bundle used to validate and write sequence IDs")
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--dtype", default="float32")
 
     p = sub.add_parser("summarize-codon-ism", help="Summarize codon-ISM mutation tables")
     p.add_argument("--mode", required=True, choices=["synonymous", "all-codons"])
@@ -427,6 +440,11 @@ def main(argv: list[str] | None = None) -> None:
         from transcriptml.analysis.ism_summary import run_ism_summary_from_args
 
         run_ism_summary_from_args(args)
+        return
+    if args.command == "summarize-window-ism":
+        from transcriptml.analysis.window_ism_summary import run_window_ism_summary_from_args
+
+        run_window_ism_summary_from_args(args)
         return
     if args.command == "summarize-codon-ism":
         common = [
@@ -541,7 +559,7 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = interpret_paths["out_dir"]
 
     log_progress(f"{args.command}: loading dataset {dataset}")
-    bundle = load_bundle(dataset, mmap_mode="r" if args.command == "codon-ism" else None)
+    bundle = load_bundle(dataset, mmap_mode="r" if args.command in {"codon-ism", "window-ism"} else None)
     log_progress(f"{args.command}: loading checkpoint {checkpoint}")
     predictor = Predictor.from_checkpoint(checkpoint, device=args.device, batch_size=args.batch_size)
     cds_channel = _maybe_int(getattr(args, "cds_channel", None))
@@ -550,6 +568,25 @@ def main(argv: list[str] | None = None) -> None:
 
         result = compute_ism(bundle.X, predictor, mutation_batch_size=args.mutation_batch_size)
         save_ism_result(result, out_dir)
+    elif args.command == "window-ism":
+        from transcriptml.interpret.window_ism import compute_window_ism, save_window_ism_result
+
+        result = compute_window_ism(
+            bundle.X,
+            predictor,
+            window_size=args.window_size,
+            stride=args.stride,
+            n_ablations=args.n_ablations,
+            seed=args.seed,
+            mutation_batch_size=args.mutation_batch_size,
+        )
+        save_window_ism_result(
+            result,
+            out_dir,
+            checkpoint=checkpoint,
+            dataset=dataset,
+            sequence_ids=bundle.ids,
+        )
     elif args.command == "codon-ism":
         from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_writer, save_codon_ism_result
 

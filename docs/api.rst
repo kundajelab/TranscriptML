@@ -100,6 +100,10 @@ Interpretation
    :members: ISMResult, compute_ism, max_abs_effect_per_position, save_ism_result
    :member-order: bysource
 
+.. automodule:: transcriptml.interpret.window_ism
+   :members: WindowISMResult, generate_window_starts, compute_window_ism, save_window_ism_result
+   :member-order: bysource
+
 .. automodule:: transcriptml.interpret.codon_ism
    :members: CodonISMResult, compute_codon_ism, mutation_table_writer, save_codon_ism_result
    :member-order: bysource

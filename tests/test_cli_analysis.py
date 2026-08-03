@@ -103,13 +103,14 @@ def test_evaluate_cli_rejects_conflicting_named_and_positional_args():
 
 def test_interpret_cli_resolves_named_and_legacy_positional_args():
     parser = build_parser()
-    motif_extra = {
+    command_extra = {
+        "window-ism": ["--window-size", "100"],
         "motif-ablation": ["--motif", "AUG"],
         "motif-context": ["--motif", "AUG"],
         "epistasis": ["--motif", "AUG"],
     }
 
-    for command in ["ism", "codon-ism", "motif-ablation", "motif-context", "epistasis"]:
+    for command in ["ism", "window-ism", "codon-ism", "motif-ablation", "motif-context", "epistasis"]:
         named = parser.parse_args(
             [
                 command,
@@ -119,7 +120,7 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
                 "data/saluki",
                 "--out-dir",
                 f"interpret/{command}",
-                *motif_extra.get(command, []),
+                *command_extra.get(command, []),
             ]
         )
         assert _resolve_interpret_args(named, parser) == {
@@ -134,7 +135,7 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
                 "model/best.pt",
                 "data/saluki",
                 f"interpret/{command}",
-                *motif_extra.get(command, []),
+                *command_extra.get(command, []),
             ]
         )
         assert _resolve_interpret_args(positional, parser) == {
@@ -150,7 +151,7 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
                 "data/saluki",
                 "--out-dir",
                 f"interpret/{command}",
-                *motif_extra.get(command, []),
+                *command_extra.get(command, []),
             ]
         )
         assert _resolve_interpret_args(mixed, parser)["out_dir"] == f"interpret/{command}"

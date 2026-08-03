@@ -363,7 +363,71 @@ windows or whole transcripts, the letters become dense and distracting; use
 `--no-logo` in those cases. Use `--no-isoform` if the annotation track is not
 needed for a particular figure.
 
-### 4. Run Motif Analyses
+### 4. Run Window ISM
+
+Window ISM provides a coarser complement to single-nucleotide ISM. Each window
+is independently mutated several times by replacing every nucleotide with a
+uniformly sampled alternative base. For replicate `r`, the effect is
+`mutant_prediction - reference_prediction`; the command records its signed
+mean, mean absolute value, and population standard deviation.
+
+Run the same scan once per fold checkpoint:
+
+```bash
+for fold in $(seq 0 9); do
+  transcriptml window-ism \
+    --checkpoint "runs/saluki_cv10/fold${fold}/model/best.pt" \
+    --dataset data/saluki \
+    --out-dir "interpret/window_ism/fold${fold}" \
+    --window-size 100 \
+    --stride 100 \
+    --n-ablations 30 \
+    --seed 123 \
+    --device auto \
+    --batch-size 128 \
+    --mutation-batch-size 512
+done
+```
+
+When `--stride` is omitted it defaults to `--window-size`. If a regular tiled
+scan would miss the sequence tail, an overlapping final window is shifted so it
+ends exactly at the valid sequence length. Therefore every unambiguous base is
+covered when the valid sequence is at least as long as the window. Use a
+smaller stride for an overlapping scan; stride must not exceed the window size.
+
+Each fold directory contains compact `(N, Wmax)` arrays. `window_starts.npy`
+stores zero-based window starts with `-1` padding, and `window_mask.npy`
+distinguishes scored windows from padding or windows containing ambiguous
+bases. `mean_deltas.npy` preserves effect direction,
+`mean_abs_deltas.npy` is the recommended window-ranking signal, and
+`std_deltas.npy` measures variability across random mutations. Effects at
+masked positions are zero and must be interpreted together with the mask.
+
+Aggregate matching fold scans with:
+
+```bash
+transcriptml summarize-window-ism \
+  --input-dir interpret/window_ism \
+  --out-dir interpret/window_ism_summary \
+  --dataset data/saluki
+```
+
+The summary writes `average_mean_deltas.npy`,
+`average_mean_abs_deltas.npy`, `within_model_std_deltas.npy`,
+`fold_std_mean_deltas.npy`, and `average_reference_predictions.npy`, together
+with the shared coordinates, mask, and valid lengths. The two standard
+deviations separate within-model random-mutation variability from between-fold
+model disagreement. Fold inputs must use identical coordinates, masks, scan
+parameters, seed, and sequence order. A later hierarchical workflow can rank
+windows by `average_mean_abs_deltas.npy` and apply finer window or
+single-nucleotide ISM only in the most sensitive regions.
+
+The approximate mutant count per sequence is `n_ablations * n_windows`. With
+the default tiled stride, this is approximately
+`(n_ablations * valid_length) / window_size`; a stride-one scan is substantially
+more expensive.
+
+### 5. Run Motif Analyses
 
 Motif analyses are usually much cheaper than full-transcript ISM and are designed
 to hone in on the context specificity and syntax of a particular motif or set of motifs.
@@ -417,7 +481,7 @@ The `--region` flag can be `5utr`, `cds`, or `3utr`. Omit it to analyze motif
 instances across the full transcript. Region-aware analyses require Saluki-style
 annotation channels.
 
-### 5. Run Codon Analyses
+### 6. Run Codon Analyses
 
 Lots of work has shown that the coding sequence of an mRNA strongly influences its
 stability. Codon analyses are designed to dissect Saluki's understanding of this influence.
@@ -645,6 +709,10 @@ transcriptml motif-ablation \
   --n-scrambles 10 \
   --device auto
 ```
+
+Window ISM also works unchanged with four-channel MPRA bundles. Use the same
+`window-ism` and `summarize-window-ism` commands shown in the Saluki workflow,
+pointing them at the MPRA checkpoint and dataset directories.
 
 Interpret MPRA results in the assay's exact reporter context. Single-base
 effects may reflect cryptic splice sites, unintended promoter activity, or
