@@ -43,6 +43,29 @@ Sequence controls
    :members: SequenceControlOperation, SequenceControlConfig, normalize_sequence_control_config, apply_sequence_controls_array, apply_sequence_controls_to_bundle
    :member-order: bysource
 
+RBPNet/eCLIP data
+-----------------
+
+.. automodule:: transcriptml.rbpnet.preprocessing
+   :members: Sample, PipelineConfig, preprocess_eclip
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.experiment
+   :members: ProcessedECLIPDataset, TranscriptRecord, SampleRecord, RegionRecord, GenomicBlock
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.windows
+   :members: WindowScanConfig, generate_window_bounds, calculate_gc_fraction, summarize_regions, scan_windows
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.selection
+   :members: SelectionConfig, SelectionManifest, select_regions, load_selection_manifest
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.bundle
+   :members: RBPNetBundleConfig, make_rbpnet_bundle, load_rbpnet_bundle
+   :member-order: bysource
+
 Models
 ------
 

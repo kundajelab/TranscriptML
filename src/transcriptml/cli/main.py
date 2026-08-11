@@ -90,6 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="transcriptml")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    from transcriptml.rbpnet.cli import add_rbpnet_parser
+
+    add_rbpnet_parser(sub)
+
     p = sub.add_parser("init-run", help="Write starter run configuration files")
     p.add_argument("--workflow", required=True, choices=["saluki", "legnet"])
     p.add_argument("--out-dir", required=True)
@@ -354,6 +358,11 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "rbpnet":
+        from transcriptml.rbpnet.cli import run_rbpnet_command
+
+        run_rbpnet_command(args, parser)
+        return
     if args.command == "init-run":
         from transcriptml.workflows import init_run
 

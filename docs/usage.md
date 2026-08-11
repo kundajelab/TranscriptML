@@ -5,6 +5,10 @@ This page walks through the two main TranscriptML workflows:
 - **Saluki**, for transcriptome-derived RNA stability measurements.
 - **MPRA-LegNet**, for single-insert MPRA-style measurements.
 
+The assay-aware RBPNet/eCLIP preprocessing, window scanning, selection, and
+bundle workflow has its own [RBPNet data guide](rbpnet.md). RBPNet model
+training is intentionally not implemented yet.
+
 For each workflow, the basic pattern is the same:
 
 1. Build a TranscriptML dataset bundle.

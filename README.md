@@ -6,16 +6,20 @@ APIs for preparing sequence datasets, training models, evaluating held-out
 predictions, and investigating learned sequence features with analyses such as
 in silico mutagenesis, motif ablation, context scans, etc.
 
-TranscriptML currently supports two main workflows:
+TranscriptML currently supports three main workflows:
 
 - **Saluki** predicts transcriptome-wide RNA stability from transcript sequence,
   coding-frame annotations, and splice sites.
 - **MPRA-LegNet** models MPRA measurements from variable sequence inserts and
   supports targets such as RNA stability, translation, protein
   output, etc.
+- **RBPNet/eCLIP data** converts FASTA/GTF/BAM inputs into a canonical
+  transcript-space experiment, descriptive windows, explicit selection
+  manifests, and memory-mappable model-ready NumPy bundles. The RBPNet model
+  and trainer are not implemented yet.
 
 In the future, I plan to also support [RiboNN](https://www.nature.com/articles/s41587-025-02712-x) modeling of translation efficiency measurements
-and [RBPNet](https://link.springer.com/article/10.1186/s13059-023-03015-7) modeling of RBP binding assays like eCLIP.
+and complete [RBPNet](https://link.springer.com/article/10.1186/s13059-023-03015-7) model training and interpretation.
 
 ## Installation
 

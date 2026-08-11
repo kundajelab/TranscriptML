@@ -44,6 +44,7 @@ Optional extras are available for a few heavier workflows:
 | --- | --- |
 | Write codon-ISM tables as Parquet or Arrow | `python -m pip install -e ".[arrow]"` |
 | Summarize and plot codon-ISM tables | `python -m pip install -e ".[analysis]"` |
+| Preprocess eCLIP and build RBPNet datasets | `python -m pip install -e ".[rbpnet]"` |
 | Run the test suite | `python -m pip install -e ".[dev]"` |
 
 Extras can be combined. The `analysis` extra already includes `pyarrow`, so you
@@ -51,5 +52,5 @@ do not need to install both `analysis` and `arrow`. A full analysis and
 development install is:
 
 ```bash
-python -m pip install -e ".[analysis,dev]"
+python -m pip install -e ".[analysis,rbpnet,dev]"
 ```

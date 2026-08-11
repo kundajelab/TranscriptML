@@ -15,8 +15,9 @@ motif ablations, motif context scans, motif epistasis analyses, and
 Saluki-specific codon ISM. These analyses can expose learned regulatory
 sequence features as well as technical artifacts in the model or assay.
 
-RiboNN support for translation measurements and RBPNet support for RBP binding
-measurements are planned but not yet implemented.
+RBPNet/eCLIP data preprocessing, descriptive scanning, region selection, and
+materialized dataset construction are supported. RBPNet model training remains
+planned.
 
 Start here
 ----------
@@ -33,5 +34,6 @@ guide describes every Saluki, LegNet, and shared training option. Use the
 
    installation
    usage
+   rbpnet
    training_configuration
    api
