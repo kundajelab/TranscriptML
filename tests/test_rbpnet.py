@@ -8,12 +8,19 @@ import numpy as np
 import pyarrow.parquet as pq
 import pysam
 import pytest
+from scipy.stats import poisson
 
 from transcriptml.data.encoding import encode_rna_sequence
-from transcriptml.rbpnet.bundle import RBPNetBundleConfig, load_rbpnet_bundle, make_rbpnet_bundle
+from transcriptml.rbpnet.bundle import (
+    RBPNetBundleConfig,
+    _shifted_materialized_interval,
+    jitter_crop_offset,
+    load_rbpnet_bundle,
+    make_rbpnet_bundle,
+)
 from transcriptml.rbpnet.coordinates import Exon, Region, Transcript, annotate_regions
 from transcriptml.rbpnet.experiment import ProcessedECLIPDataset
-from transcriptml.rbpnet.fasta import transcript_sequence
+from transcriptml.rbpnet.fasta import reverse_complement, transcript_sequence
 from transcriptml.rbpnet.preprocessing import PipelineConfig, Sample, preprocess_eclip
 from transcriptml.rbpnet.selection import SelectionConfig, load_selection_manifest, select_regions
 from transcriptml.rbpnet.serialization import calculate_tpm
@@ -59,6 +66,52 @@ def test_transcript_coordinates_regions_and_minus_sequence(tmp_path):
         assert transcript_sequence(fasta, minus) == "CCGGTACGT"
 
 
+def _gene_tx(strand="+", *, coding=False):
+    tx = Transcript(
+        f"gene_tx_{strand}", f"gene_{strand}", "", "",
+        "protein_coding" if coding else "lncRNA", "chr1", strand,
+        [Exon("chr1", 100, 110, strand), Exon("chr1", 200, 210, strand)],
+        coordinate_space="gene",
+    )
+    if coding:
+        tx.feature_intervals = {"CDS": [(105, 110), (200, 205)]}
+    tx.finalize()
+    tx.regions = annotate_regions(tx)
+    return tx
+
+
+def test_gene_coordinates_regions_sequence_and_round_trips(tmp_path):
+    plus = _gene_tx("+", coding=True)
+    minus = _gene_tx("-", coding=True)
+    expected_regions = [
+        Region(0, 5, "5putr"),
+        Region(5, 10, "cds"),
+        Region(10, 100, "intron"),
+        Region(100, 105, "cds"),
+        Region(105, 110, "3putr"),
+    ]
+    assert plus.length == minus.length == 110
+    assert plus.regions == minus.regions == expected_regions
+    assert plus.genome_to_transcript("chr1", 150) == 50
+    assert minus.genome_to_transcript("chr1", 150) == 59
+    assert plus.transcript_to_genome(50) == ("chr1", 150, "+")
+    assert minus.transcript_to_genome(59) == ("chr1", 150, "-")
+    for tx in (plus, minus):
+        for coordinate in (0, 9, 10, 50, 99, 100, 109):
+            chrom, genomic, strand = tx.transcript_to_genome(coordinate)
+            assert strand == tx.strand
+            assert tx.genome_to_transcript(chrom, genomic) == coordinate
+
+    fasta_path = tmp_path / "genome.fa"
+    genomic = ("ACGT" * 80)[:300]
+    fasta_path.write_text(">chr1\n" + genomic + "\n")
+    pysam.faidx(str(fasta_path))
+    with pysam.FastaFile(str(fasta_path)) as fasta:
+        expected = genomic[100:210]
+        assert transcript_sequence(fasta, plus) == expected
+        assert transcript_sequence(fasta, minus) == reverse_complement(expected)
+
+
 def _alignment(start, cigar, reverse=False):
     read = pysam.AlignedSegment()
     read.query_name = "compatibility"
@@ -96,6 +149,14 @@ def test_alignment_compatibility_and_library_orientation():
     assert not alignment_is_transcript_compatible(intronic, _junction_tx())
     assert not alignment_is_transcript_compatible(wrong_junction, _junction_tx())
 
+    gene = _gene_tx("+")
+    assert alignment_is_transcript_compatible(_alignment(102, ((pysam.CMATCH, 6),)), gene)
+    assert alignment_is_transcript_compatible(_alignment(140, ((pysam.CMATCH, 20),)), gene)
+    assert alignment_is_transcript_compatible(junction, gene)
+    assert not alignment_is_transcript_compatible(
+        _alignment(205, ((pysam.CMATCH, 10),)), gene
+    )
+
 
 def test_bam_assignment_reports_transcript_incompatibility(tmp_path):
     tx = _junction_tx()
@@ -125,6 +186,47 @@ def test_bam_assignment_reports_transcript_incompatibility(tmp_path):
     assert qc["retained"] == 1
     assert qc["transcript_incompatible"] == 1
     assert counts.tolist() == [1]
+
+
+def test_gene_space_bam_assignment_retains_intronic_and_spliced_reads(tmp_path):
+    gene = _gene_tx("+")
+    mature = _junction_tx("+")
+    bam_path = tmp_path / "gene_reads.bam"
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
+    records = [
+        ("exonic", 101, ((pysam.CMATCH, 4),), 4),
+        ("junction", 105, ((pysam.CMATCH, 5), (pysam.CREF_SKIP, 90), (pysam.CMATCH, 5)), 10),
+        ("intronic", 150, ((pysam.CMATCH, 4),), 4),
+    ]
+    with pysam.AlignmentFile(bam_path, "wb", header=header) as bam:
+        for name, start, cigar, query_length in records:
+            read = pysam.AlignedSegment()
+            read.query_name = name
+            read.query_sequence = "A" * query_length
+            read.flag = 81  # read1, reverse; opposite-strand RNA is plus
+            read.reference_id = 0
+            read.reference_start = start
+            read.mapping_quality = 60
+            read.cigar = cigar
+            read.query_qualities = pysam.qualitystring_to_array("I" * query_length)
+            bam.write(read)
+    pysam.index(str(bam_path))
+
+    with create_signal_store(tmp_path / "gene.h5", [gene], ["ip"], ["ip"]) as store:
+        gene_qc, gene_counts = extract_bam_to_store(
+            bam_path, 0, store["counts"], [gene], ExonBinIndex([gene]),
+            "opposite", 1, True, tmp_path, progress=False,
+        )
+    with create_signal_store(tmp_path / "mature.h5", [mature], ["ip"], ["ip"]) as store:
+        mature_qc, mature_counts = extract_bam_to_store(
+            bam_path, 0, store["counts"], [mature], ExonBinIndex([mature]),
+            "opposite", 1, True, tmp_path, progress=False,
+        )
+    assert gene_qc["retained"] == 3
+    assert mature_qc["retained"] == 2
+    assert mature_qc["no_compatible_transcript"] == 1
+    assert gene_counts.tolist() == [3]
+    assert mature_counts.tolist() == [2]
 
 
 def test_preprocess_pipeline_manifest_tpm_effective_sizes_and_missing_contig(tmp_path):
@@ -172,6 +274,114 @@ def test_preprocess_pipeline_manifest_tpm_effective_sizes_and_missing_contig(tmp
     with ProcessedECLIPDataset(output) as ds:
         assert ds.get_sequence("t1", 0, 20) == ("ACGT" * 5)
         assert int(ds.get_pooled_ip_profile("t1", 0, 20).sum()) == 2
+
+
+def test_full_gene_preprocessing_reader_orientation_introns_and_mature_regression(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    genomic = ("ACGT" * 300)[:1000]
+    fasta.write_text(">chr1\n" + genomic + "\n")
+    gtf = tmp_path / "annotation.gtf"
+    gtf.write_text(
+        'chr1\ttest\ttranscript\t101\t210\t.\t+\t.\tgene_id "gp"; transcript_id "tp"; transcript_type "lncRNA";\n'
+        'chr1\ttest\texon\t101\t110\t.\t+\t.\tgene_id "gp"; transcript_id "tp"; exon_number 1;\n'
+        'chr1\ttest\texon\t201\t210\t.\t+\t.\tgene_id "gp"; transcript_id "tp"; exon_number 2;\n'
+        'chr1\ttest\ttranscript\t401\t510\t.\t-\t.\tgene_id "gm"; transcript_id "tm"; transcript_type "lncRNA";\n'
+        'chr1\ttest\texon\t401\t410\t.\t-\t.\tgene_id "gm"; transcript_id "tm"; exon_number 2;\n'
+        'chr1\ttest\texon\t501\t510\t.\t-\t.\tgene_id "gm"; transcript_id "tm"; exon_number 1;\n'
+    )
+    bam_path = tmp_path / "reads.bam"
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
+    records = [
+        ("plus_junction", 105, ((pysam.CMATCH, 5), (pysam.CREF_SKIP, 90), (pysam.CMATCH, 5)), 10, 81),
+        ("plus_intron", 150, ((pysam.CMATCH, 4),), 4, 81),
+        ("minus_junction", 405, ((pysam.CMATCH, 5), (pysam.CREF_SKIP, 90), (pysam.CMATCH, 5)), 10, 65),
+        ("minus_intron", 450, ((pysam.CMATCH, 4),), 4, 65),
+    ]
+    with pysam.AlignmentFile(bam_path, "wb", header=header) as bam:
+        for name, start, cigar, query_length, flag in records:
+            read = pysam.AlignedSegment()
+            read.query_name = name
+            read.query_sequence = "A" * query_length
+            read.flag = flag
+            read.reference_id = 0
+            read.reference_start = start
+            read.mapping_quality = 60
+            read.cigar = cigar
+            read.query_qualities = pysam.qualitystring_to_array("I" * query_length)
+            bam.write(read)
+    pysam.index(str(bam_path))
+
+    def run(space, output):
+        return preprocess_eclip(PipelineConfig(
+            genome_fasta=fasta,
+            gtf=gtf,
+            sminput=Sample("sminput", bam_path, "sminput"),
+            ips=(Sample("ip1", bam_path, "ip"),),
+            output_dir=output,
+            coordinate_space=space,
+            progress=False,
+        ))
+
+    mature_dir = tmp_path / "mature"
+    gene_dir = tmp_path / "gene"
+    mature_qc = run("mature_transcript", mature_dir)
+    gene_qc = run("gene", gene_dir)
+    assert mature_qc["annotation"]["transcriptome_bases"] == 40
+    assert gene_qc["annotation"]["coordinate_space_bases"] == 220
+    assert gene_qc["annotation"]["intronic_bases"] == 180
+    assert mature_qc["samples"]["sminput"]["retained"] == 2
+    assert gene_qc["samples"]["sminput"]["retained"] == 4
+
+    with ProcessedECLIPDataset(gene_dir) as ds:
+        assert ds.coordinate_space == "gene"
+        assert ds.get_sequence("tp", 0, 110) == genomic[100:210]
+        assert ds.get_sequence("tm", 0, 110) == reverse_complement(genomic[400:510])
+        assert ds.genome_to_coordinate("tp", "chr1", 150) == 50
+        assert ds.genome_to_coordinate("tm", "chr1", 450) == 59
+        assert ds.coordinate_to_genome("tp", 50) == ("chr1", 150, "+")
+        assert ds.coordinate_to_genome("tm", 59) == ("chr1", 450, "-")
+        assert [(b.start, b.end) for b in ds.get_genomic_blocks("tm", 10, 100)] == [(410, 500)]
+        assert int(ds.get_profile("tp", 50, 60, "sminput").sum()) == 1
+        assert int(ds.get_profile("tm", 50, 60, "sminput").sum()) == 1
+
+    windows = tmp_path / "gene_windows"
+    summary = scan_windows(WindowScanConfig(
+        processed_dir=gene_dir,
+        output_prefix=windows,
+        window_size=10,
+        stride=10,
+        progress=False,
+    ))
+    assert summary["coordinate_space"] == "gene"
+    assert summary["region_type_windows"]["intron"] == 18
+    selected = tmp_path / "gene_selected"
+    select_regions(SelectionConfig(
+        processed_dir=gene_dir,
+        windows=windows,
+        output_prefix=selected,
+        strategy="broad_coverage",
+        replicate_mode="combined",
+        min_total_count=0,
+        progress=False,
+    ))
+    bundle = make_rbpnet_bundle(RBPNetBundleConfig(
+        processed_dir=gene_dir,
+        selection_manifest=selected,
+        output_dir=tmp_path / "gene_bundle",
+        input_length=20,
+        profile_length=20,
+        max_jitter=2,
+        transcript_end_policy="shift_to_fit",
+        progress=False,
+    ))
+    assert bundle.config["coordinate_space"] == "gene"
+    with ProcessedECLIPDataset(gene_dir) as ds:
+        for index, item in enumerate(bundle.metadata):
+            start, end = item["sequence_materialized_start"], item["sequence_materialized_end"]
+            np.testing.assert_array_equal(
+                bundle.X[index],
+                encode_rna_sequence(ds.get_sequence(item["transcript_id"], start, end)),
+            )
 
 
 def _write_processed_fixture(root: Path, *, length=12, profiles=None):
@@ -294,25 +504,26 @@ def test_selection_strategies_ids_serialization_and_stitching(tmp_path):
     scan_windows(WindowScanConfig(
         processed_dir=root, output_prefix=windows, window_size=4, stride=2, progress=False,
     ))
-    yeo = tmp_path / "yeo"
+    broad = tmp_path / "broad"
     summary = select_regions(SelectionConfig(
-        processed_dir=root, windows=windows, output_prefix=yeo, strategy="yeo_2026",
+        processed_dir=root, windows=windows, output_prefix=broad, strategy="broad_coverage",
         min_total_count=1, min_sminput_count=0, min_ip_count=0, progress=False,
     ))
-    loaded = load_selection_manifest(yeo)
+    loaded = load_selection_manifest(broad)
     assert summary["n_examples"] == len(loaded.rows) > 0
+    assert summary["configuration"]["replicate_mode"] == "per_ip"
     assert len({row["example_id"] for row in loaded.rows}) == len(loaded.rows)
-    yeo2 = tmp_path / "yeo2"
+    broad2 = tmp_path / "broad2"
     select_regions(SelectionConfig(
-        processed_dir=root, windows=windows, output_prefix=yeo2, strategy="yeo_2026",
+        processed_dir=root, windows=windows, output_prefix=broad2, strategy="broad_coverage",
         min_total_count=1, min_sminput_count=0, min_ip_count=0, progress=False,
     ))
     assert [r["example_id"] for r in loaded.rows] == [
-        r["example_id"] for r in load_selection_manifest(yeo2).rows
+        r["example_id"] for r in load_selection_manifest(broad2).rows
     ]
-    per_ip = tmp_path / "yeo_per_ip"
+    per_ip = tmp_path / "broad_per_ip"
     select_regions(SelectionConfig(
-        processed_dir=root, windows=windows, output_prefix=per_ip, strategy="yeo_2026",
+        processed_dir=root, windows=windows, output_prefix=per_ip, strategy="broad_coverage",
         min_total_count=0, min_sminput_count=0, min_ip_count=0,
         replicate_mode="per_ip", progress=False,
     ))
@@ -330,6 +541,53 @@ def test_selection_strategies_ids_serialization_and_stitching(tmp_path):
     states = set(classified_summary["state_counts"])
     assert states <= {"peak", "gray", "confident_negative"}
     assert any(row["source_window_count"] > 1 for row in load_selection_manifest(classified).rows)
+
+
+def test_zero_count_peak_negative_edges_and_broad_coverage_defaults(tmp_path):
+    profiles = np.zeros((3, 12), dtype=np.uint32)
+    profiles[0, 0] = 30       # informative input-only window
+    profiles[1, 4] = 30       # informative IP-only window
+    root = tmp_path / "processed"
+    _write_processed_fixture(root, profiles=profiles)
+    windows = tmp_path / "windows"
+    scan_windows(WindowScanConfig(
+        processed_dir=root, output_prefix=windows, window_size=4, stride=4, progress=False,
+    ))
+
+    classified = tmp_path / "classified"
+    summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=classified,
+        strategy="peak_gray_negative",
+        progress=False,
+    ))
+    rows = load_selection_manifest(classified).rows
+    assert summary["configuration"]["min_total_count"] == 8
+    assert summary["configuration"]["min_ip_count"] == 0
+    assert summary["configuration"]["min_sminput_count"] == 0
+    by_start = {row["selection_start"]: row for row in rows}
+    assert by_start[0]["selection_state"] == "confident_negative"
+    assert by_start[0]["ip_pooled_count"] == 0
+    assert by_start[0]["sminput_count"] == 30
+    assert by_start[4]["selection_state"] == "peak"
+    assert by_start[4]["ip_pooled_count"] == 30
+    assert by_start[4]["sminput_count"] == 0
+    assert all(np.isfinite(row["log2_ip_pooled_vs_sminput"]) for row in rows)
+
+    combined = tmp_path / "broad_combined"
+    combined_summary = select_regions(SelectionConfig(
+        processed_dir=root, windows=windows, output_prefix=combined,
+        strategy="broad_coverage", replicate_mode="combined", progress=False,
+    ))
+    assert combined_summary["n_examples"] == 2
+    per_ip = tmp_path / "broad_per_ip"
+    per_ip_summary = select_regions(SelectionConfig(
+        processed_dir=root, windows=windows, output_prefix=per_ip,
+        strategy="broad_coverage", replicate_mode="per_ip", progress=False,
+    ))
+    assert per_ip_summary["n_examples"] == 3
+    assert {row["replicate_id"] for row in load_selection_manifest(per_ip).rows} == {"ipA", "ipB"}
 
 
 def test_original_rbpnet_poisson_selection_and_50nt_advance(tmp_path):
@@ -356,6 +614,33 @@ def test_original_rbpnet_poisson_selection_and_50nt_advance(tmp_path):
     assert all(right - left >= 50 for left, right in zip(starts, starts[1:]))
     assert all(row["selection_pvalue"] < 0.01 for row in rows)
 
+    explicit = tmp_path / "original_explicit"
+    select_regions(SelectionConfig(
+        processed_dir=root, windows=windows, output_prefix=explicit,
+        strategy="original_rbpnet", poisson_null="ip_locus_density", progress=False,
+    ))
+    explicit_rows = load_selection_manifest(explicit).rows
+    assert [row["example_id"] for row in explicit_rows] == [row["example_id"] for row in rows]
+    np.testing.assert_allclose(
+        [row["selection_pvalue"] for row in explicit_rows],
+        [row["selection_pvalue"] for row in rows],
+    )
+
+    sminput_null = tmp_path / "original_sminput"
+    sminput_summary = select_regions(SelectionConfig(
+        processed_dir=root, windows=windows, output_prefix=sminput_null,
+        strategy="original_rbpnet", poisson_null="sminput", progress=False,
+    ))
+    sminput_rows = load_selection_manifest(sminput_null).rows
+    assert sminput_summary["configuration"]["poisson_null"] == "sminput"
+    assert sminput_rows
+    first = sminput_rows[0]
+    expected_mu = (first["sminput_count"] + 1.0) * (12 / 7)
+    assert first["selection_null_mean"] == pytest.approx(expected_mu)
+    assert first["selection_pvalue"] == pytest.approx(
+        poisson.sf(first["ip_pooled_count"] - 1, expected_mu)
+    )
+
 
 def test_materialized_bundle_exact_arrays_jitter_padding_and_mmap(tmp_path):
     root = tmp_path / "processed"
@@ -366,7 +651,7 @@ def test_materialized_bundle_exact_arrays_jitter_padding_and_mmap(tmp_path):
     ))
     selection = tmp_path / "selection"
     select_regions(SelectionConfig(
-        processed_dir=root, windows=windows, output_prefix=selection, strategy="yeo_2026",
+        processed_dir=root, windows=windows, output_prefix=selection, strategy="broad_coverage",
         min_total_count=0, min_sminput_count=0, min_ip_count=0, progress=False,
     ))
     out = tmp_path / "bundle"
@@ -413,3 +698,90 @@ def test_materialized_bundle_exact_arrays_jitter_padding_and_mmap(tmp_path):
     ))
     assert len(dropped.ids) < len(built.ids)
     assert all(m["sequence_left_pad"] == m["sequence_right_pad"] == 0 for m in dropped.metadata)
+
+
+def test_shift_to_fit_boundaries_jitter_coordinates_and_short_loci(tmp_path):
+    assert _shifted_materialized_interval(0, 4, 2, 12) == (0, 8)
+    assert _shifted_materialized_interval(6, 4, 2, 12) == (2, 10)
+    assert _shifted_materialized_interval(11, 4, 2, 12) == (4, 12)
+    assert _shifted_materialized_interval(6, 10, 2, 12) is None
+    root = tmp_path / "processed"
+    sequence, profiles = _write_processed_fixture(root)
+    windows = tmp_path / "windows"
+    scan_windows(WindowScanConfig(
+        processed_dir=root, output_prefix=windows, window_size=4, stride=4, progress=False,
+    ))
+    selection = tmp_path / "selection"
+    select_regions(SelectionConfig(
+        processed_dir=root, windows=windows, output_prefix=selection,
+        strategy="broad_coverage", min_total_count=0, progress=False,
+    ))
+    out = tmp_path / "shifted"
+    bundle = make_rbpnet_bundle(RBPNetBundleConfig(
+        processed_dir=root,
+        selection_manifest=selection,
+        output_dir=out,
+        input_length=4,
+        profile_length=4,
+        max_jitter=2,
+        transcript_end_policy="shift_to_fit",
+        progress=False,
+    ))
+    by_selection_start = {item["selection_start"]: (index, item) for index, item in enumerate(bundle.metadata)}
+    assert by_selection_start[0][1]["sequence_materialized_start"] == 0
+    assert by_selection_start[4][1]["sequence_materialized_start"] == 2
+    assert by_selection_start[8][1]["sequence_materialized_start"] == 4
+    assert all(
+        item["sequence_left_pad"] == item["sequence_right_pad"] == 0
+        for item in bundle.metadata
+    )
+    for index, item in enumerate(bundle.metadata):
+        start, end = item["sequence_materialized_start"], item["sequence_materialized_end"]
+        np.testing.assert_array_equal(bundle.X[index], encode_rna_sequence(sequence[start:end]))
+        pstart, pend = item["profile_materialized_start"], item["profile_materialized_end"]
+        np.testing.assert_array_equal(bundle.arrays["sminput_profiles"][index], profiles[0, pstart:pend])
+        np.testing.assert_array_equal(bundle.arrays["ip_profiles"][index], profiles[1:, pstart:pend])
+        assert item["sequence_anchor_offset"] == item["transcript_anchor"] - start
+
+    left_index, left = by_selection_start[0]
+    offsets = [
+        jitter_crop_offset(
+            anchor=left["transcript_anchor"],
+            materialized_start=left["sequence_materialized_start"],
+            locus_length=left["locus_length"],
+            crop_length=4,
+            jitter_shift=shift,
+        )
+        for shift in range(-2, 3)
+    ]
+    assert offsets == [0, 0, 0, 1, 2]
+    for shift, offset in zip(range(-2, 3), offsets):
+        desired = left["transcript_anchor"] - 2 + shift
+        actual = min(max(desired, 0), len(sequence) - 4)
+        np.testing.assert_array_equal(
+            bundle.X[left_index, :, offset:offset + 4],
+            encode_rna_sequence(sequence[actual:actual + 4]),
+        )
+
+    right = by_selection_start[8][1]
+    assert jitter_crop_offset(
+        anchor=right["transcript_anchor"],
+        materialized_start=right["sequence_materialized_start"],
+        locus_length=right["locus_length"],
+        crop_length=4,
+        jitter_shift=2,
+    ) == 4
+    assert bundle.config["transcript_end_policy"] == "shift_to_fit"
+    assert bundle.config["n_dropped_short_loci"] == 0
+
+    with pytest.raises(ValueError, match="no examples remain"):
+        make_rbpnet_bundle(RBPNetBundleConfig(
+            processed_dir=root,
+            selection_manifest=selection,
+            output_dir=tmp_path / "too_short",
+            input_length=10,
+            profile_length=10,
+            max_jitter=2,
+            transcript_end_policy="shift_to_fit",
+            progress=False,
+        ))

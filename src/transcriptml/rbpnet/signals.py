@@ -74,8 +74,45 @@ def _alignment_is_compatible(
     return has_aligned_bases
 
 
+def _alignment_is_gene_compatible(read, start: int, end: int) -> bool:
+    """Check that every reference-consuming CIGAR segment stays in one gene span.
+
+    Full-gene coordinates contain introns, so ``N`` operations need not match
+    the selected mature-transcript junctions. They do, however, have to remain
+    completely within the selected gene locus.
+    """
+
+    if read.reference_start is None or not read.cigartuples:
+        return False
+    reference_pos = read.reference_start
+    has_aligned_bases = False
+    for operation, length in read.cigartuples:
+        if length <= 0:
+            return False
+        if operation in {
+            pysam.CMATCH, pysam.CEQUAL, pysam.CDIFF, pysam.CDEL, pysam.CREF_SKIP,
+        }:
+            next_pos = reference_pos + length
+            if reference_pos < start or next_pos > end:
+                return False
+            if operation in {pysam.CMATCH, pysam.CEQUAL, pysam.CDIFF}:
+                has_aligned_bases = True
+            reference_pos = next_pos
+        elif operation in {pysam.CINS, pysam.CSOFT_CLIP, pysam.CHARD_CLIP, pysam.CPAD}:
+            continue
+        else:
+            return False
+    return has_aligned_bases
+
+
 def alignment_is_transcript_compatible(read, transcript: Transcript) -> bool:
-    """Return whether an alignment follows selected exons and exact junctions."""
+    """Return whether an alignment is compatible with the selected coordinates."""
+
+    if transcript.coordinate_space == "gene":
+        assert transcript.genomic_start is not None and transcript.genomic_end is not None
+        return _alignment_is_gene_compatible(
+            read, transcript.genomic_start, transcript.genomic_end
+        )
 
     exons = tuple(sorted((exon.start, exon.end) for exon in transcript.exons))
     introns = frozenset((left[1], right[0]) for left, right in zip(exons, exons[1:]))
@@ -83,7 +120,7 @@ def alignment_is_transcript_compatible(read, transcript: Transcript) -> bool:
 
 
 class ExonBinIndex:
-    """Small-memory genomic point index for candidate transcript exons."""
+    """Small-memory genomic point index for candidate coordinate-space loci."""
 
     def __init__(self, transcripts: list[Transcript], bin_size: int = 16_384):
         self.transcripts = transcripts
@@ -91,19 +128,27 @@ class ExonBinIndex:
         self._bins: dict[tuple[str, str, int], list[tuple[int, int, int, int]]] = {}
         self._exons: list[tuple[tuple[int, int], ...]] = []
         self._introns: list[frozenset[tuple[int, int]]] = []
+        self._gene_spans: list[tuple[int, int] | None] = []
         for tx_index, tx in enumerate(transcripts):
             genomic_exons = tuple(sorted((exon.start, exon.end) for exon in tx.exons))
             self._exons.append(genomic_exons)
             self._introns.append(frozenset(
                 (left[1], right[0]) for left, right in zip(genomic_exons, genomic_exons[1:])
             ))
-            for exon in tx.exons:
-                record = (exon.start, exon.end, tx_index, exon.tx_start)
-                for bin_id in range(exon.start // bin_size, (exon.end - 1) // bin_size + 1):
-                    self._bins.setdefault((exon.chrom, exon.strand, bin_id), []).append(record)
+            if tx.coordinate_space == "gene":
+                assert tx.genomic_start is not None and tx.genomic_end is not None
+                self._gene_spans.append((tx.genomic_start, tx.genomic_end))
+                intervals = [(tx.genomic_start, tx.genomic_end, 0)]
+            else:
+                self._gene_spans.append(None)
+                intervals = [(exon.start, exon.end, exon.tx_start) for exon in tx.exons]
+            for start, end, tx_start in intervals:
+                record = (start, end, tx_index, tx_start)
+                for bin_id in range(start // bin_size, (end - 1) // bin_size + 1):
+                    self._bins.setdefault((tx.chrom, tx.strand, bin_id), []).append(record)
 
     def query(self, chrom: str, pos: int, strand: str | None) -> list[tuple[int, int]]:
-        """Return ``(transcript_index, transcript_position)`` exon hits."""
+        """Return ``(transcript_index, coordinate_position)`` locus hits."""
 
         strands = ("+", "-") if strand is None else (strand,)
         matches: list[tuple[int, int]] = []
@@ -117,8 +162,11 @@ class ExonBinIndex:
         return matches
 
     def alignment_is_compatible(self, read, transcript_index: int) -> bool:
-        """Check a read against precomputed exon and intron intervals."""
+        """Check a read against the selected mature-transcript or gene span."""
 
+        gene_span = self._gene_spans[transcript_index]
+        if gene_span is not None:
+            return _alignment_is_gene_compatible(read, *gene_span)
         return _alignment_is_compatible(
             read, self._exons[transcript_index], self._introns[transcript_index]
         )
@@ -163,15 +211,22 @@ def create_signal_store(
     sample_names: list[str],
     sample_roles: list[str],
 ) -> h5py.File:
-    """Create the canonical concatenated transcript-space HDF5 store."""
+    """Create the canonical concatenated locus-coordinate HDF5 store."""
 
     total_length = sum(tx.length for tx in transcripts)
     if total_length == 0:
-        raise ValueError("annotation has zero mature-transcript bases")
+        raise ValueError("annotation has zero coordinate-space bases")
+    coordinate_spaces = {tx.coordinate_space for tx in transcripts}
+    if len(coordinate_spaces) != 1:
+        raise ValueError("all loci in one signal store must use the same coordinate space")
+    coordinate_space = coordinate_spaces.pop()
     store = h5py.File(path, "w")
     store.attrs["format"] = "transcriptml-rbpnet-signals"
     store.attrs["format_version"] = "1"
-    store.attrs["coordinate_system"] = "0-based half-open transcript coordinates"
+    store.attrs["coordinate_space"] = coordinate_space
+    store.attrs["coordinate_system"] = (
+        "0-based half-open coordinates in annotated 5-prime to 3-prime orientation"
+    )
     strings = h5py.string_dtype("utf-8")
     store.create_dataset(
         "transcript_ids",

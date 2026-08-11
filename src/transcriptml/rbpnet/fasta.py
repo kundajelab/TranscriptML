@@ -1,4 +1,4 @@
-"""FASTA validation and mature-transcript sequence extraction."""
+"""FASTA validation and transcript-oriented locus sequence extraction."""
 
 from __future__ import annotations
 
@@ -63,13 +63,20 @@ def retain_fasta_transcripts(
 
 
 def transcript_sequence(fasta: pysam.FastaFile, tx: Transcript) -> str:
-    """Assemble one mature transcript in transcript 5-prime to 3-prime order."""
+    """Extract one selected locus in annotated RNA 5-prime to 3-prime order."""
 
-    chunks = []
-    for exon in tx.exons:
-        chunk = fasta.fetch(exon.chrom, exon.start, exon.end)
-        chunks.append(chunk if tx.strand == "+" else reverse_complement(chunk))
-    sequence = "".join(chunks).upper()
+    if tx.coordinate_space == "gene":
+        assert tx.genomic_start is not None and tx.genomic_end is not None
+        sequence = fasta.fetch(tx.chrom, tx.genomic_start, tx.genomic_end)
+        if tx.strand == "-":
+            sequence = reverse_complement(sequence)
+    else:
+        chunks = []
+        for exon in tx.exons:
+            chunk = fasta.fetch(exon.chrom, exon.start, exon.end)
+            chunks.append(chunk if tx.strand == "+" else reverse_complement(chunk))
+        sequence = "".join(chunks)
+    sequence = sequence.upper()
     if len(sequence) != tx.length:
         raise RuntimeError(f"sequence length mismatch for {tx.transcript_id}")
     return sequence
@@ -82,7 +89,7 @@ def write_transcript_fasta(
     *,
     progress: bool = True,
 ) -> dict:
-    """Write indexed mature-transcript FASTA and return sequence QC."""
+    """Write indexed transcript-oriented locus FASTA and return sequence QC."""
 
     path = Path(path)
     ensure_fasta_index(genome_fasta)

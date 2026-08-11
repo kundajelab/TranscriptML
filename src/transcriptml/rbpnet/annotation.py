@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from transcriptml.rbpnet._progress import track
-from transcriptml.rbpnet.coordinates import Exon, Transcript, annotate_regions
+from transcriptml.rbpnet.coordinates import COORDINATE_SPACES, Exon, Transcript, annotate_regions
 
 _ATTR_RE = re.compile(r'([^\s;]+)\s+(?:"([^"]*)"|([^;\s]+))')
 
@@ -23,10 +23,19 @@ def _open_text(path: Path):
     return gzip.open(path, "rt") if path.suffix == ".gz" else path.open(encoding="utf-8")
 
 
-def parse_gtf(path: str | Path, *, progress: bool = True) -> list[Transcript]:
+def parse_gtf(
+    path: str | Path,
+    *,
+    coordinate_space: str = "mature_transcript",
+    progress: bool = True,
+) -> list[Transcript]:
     """Parse and validate a one-transcript-per-gene annotation."""
 
     path = Path(path)
+    if coordinate_space not in COORDINATE_SPACES:
+        raise ValueError(
+            f"coordinate_space must be one of {', '.join(COORDINATE_SPACES)}"
+        )
     if not path.is_file():
         raise FileNotFoundError(f"GTF not found: {path}")
     transcripts: dict[str, Transcript] = {}
@@ -60,6 +69,9 @@ def parse_gtf(path: str | Path, *, progress: bool = True) -> list[Transcript]:
                     transcript_type=attrs.get("transcript_type", attrs.get("gene_type", "")),
                     chrom=chrom,
                     strand=strand,
+                    coordinate_space=coordinate_space,
+                    genomic_start=start,
+                    genomic_end=end,
                 )
             elif feature == "exon":
                 exon_rows.setdefault(tx_id, []).append(

@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -21,7 +21,8 @@ from transcriptml.progress import ProgressReporter, log_progress
 from transcriptml.rbpnet.experiment import ProcessedECLIPDataset
 from transcriptml.rbpnet.windows import REGION_TYPES, summarize_regions
 
-SELECTION_STRATEGIES = ("original_rbpnet", "yeo_2026", "peak_gray_negative")
+SELECTION_STRATEGIES = ("original_rbpnet", "broad_coverage", "peak_gray_negative")
+POISSON_NULLS = ("ip_locus_density", "sminput")
 
 
 @dataclass(frozen=True)
@@ -29,8 +30,9 @@ class SelectionConfig:
     """Configuration for selecting eligible experimental loci.
 
     Defaults for ``original_rbpnet`` reproduce the published Horlacher et al.
-    candidate rules. Defaults for the other two strategies are transparent
-    starting points and should be reviewed for each assay.
+    candidate rules. ``broad_coverage`` defaults to replicate-wise
+    IP+SMInput >= 6. Peak/gray/negative thresholds remain configurable
+    scientific starting points.
     """
 
     processed_dir: Path
@@ -45,12 +47,14 @@ class SelectionConfig:
     original_min_count: int = 8
     original_min_height: int = 2
     original_advance: int = 50
+    poisson_null: str = "ip_locus_density"
+    sminput_poisson_pseudocount: float = 1.0
     # Broad measured-window selector.
-    min_total_count: int = 8
-    min_sminput_count: int = 1
-    min_ip_count: int = 1
+    min_total_count: int | None = None
+    min_sminput_count: int = 0
+    min_ip_count: int = 0
     min_sminput_tpm: float = 0.0
-    replicate_mode: str = "combined"
+    replicate_mode: str = "per_ip"
     # Peak / gray / confident-negative selector.
     peak_fdr: float = 0.05
     peak_min_log2_ratio: float = 1.0
@@ -116,6 +120,7 @@ def _manifest_schema(ds: ProcessedECLIPDataset, metadata: dict[bytes, bytes]) ->
         pa.field("transcript_id", pa.string()),
         pa.field("chromosome", pa.string()),
         pa.field("strand", pa.string()),
+        pa.field("coordinate_space", pa.string()),
         pa.field("transcript_anchor", pa.int64()),
         pa.field("selection_start", pa.int64()),
         pa.field("selection_end", pa.int64()),
@@ -148,6 +153,7 @@ def _manifest_schema(ds: ProcessedECLIPDataset, metadata: dict[bytes, bytes]) ->
     fields.extend(pa.field(f"max_{sample.name}_5pend", pa.int64()) for sample in ds.samples)
     fields.extend([
         pa.field("max_ip_pooled_5pend", pa.int64()),
+        pa.field("selection_null_mean", pa.float64()),
         pa.field("selection_pvalue", pa.float64()),
         pa.field("selection_qvalue", pa.float64()),
         pa.field("source_min_enrichment_pvalue", pa.float64()),
@@ -177,6 +183,7 @@ def _base_manifest_row(
     replicate_id: str = "",
     source_window_count: int = 1,
     anchor: int | None = None,
+    selection_null_mean: float = math.nan,
     selection_pvalue: float = math.nan,
     selection_qvalue: float = math.nan,
     enrichment_pvalue: float = math.nan,
@@ -194,6 +201,7 @@ def _base_manifest_row(
         "transcript_id": tx.transcript_id,
         "chromosome": tx.chromosome,
         "strand": tx.strand,
+        "coordinate_space": ds.coordinate_space,
         "transcript_anchor": anchor,
         "selection_start": start,
         "selection_end": end,
@@ -210,6 +218,7 @@ def _base_manifest_row(
         "total_ip_sminput_count": int(source["total_ip_sminput_count"]),
         "log2_ip_pooled_vs_sminput": float(source["log2_ip_pooled_vs_sminput"]),
         "max_ip_pooled_5pend": int(source["max_ip_pooled_5pend"]),
+        "selection_null_mean": float(selection_null_mean),
         "selection_pvalue": float(selection_pvalue),
         "selection_qvalue": float(selection_qvalue),
         "source_min_enrichment_pvalue": float(enrichment_pvalue),
@@ -221,8 +230,10 @@ def _base_manifest_row(
         "group_chromosome": tx.chromosome,
     }
     for region_type in REGION_TYPES:
-        row[f"region_{region_type}_nt"] = int(source[f"region_{region_type}_nt"])
-        row[f"region_{region_type}_fraction"] = float(source[f"region_{region_type}_fraction"])
+        row[f"region_{region_type}_nt"] = int(source.get(f"region_{region_type}_nt", 0))
+        row[f"region_{region_type}_fraction"] = float(
+            source.get(f"region_{region_type}_fraction", 0.0)
+        )
     for sample in ds.samples:
         row[f"{sample.name}_count"] = int(source[f"{sample.name}_count"])
         row[f"{sample.name}_cpm"] = float(source[f"{sample.name}_cpm"])
@@ -318,8 +329,11 @@ def _original_rows(
             tx_id = row["transcript_id"]
             if tx_id != current_tx:
                 tx = ds.get_transcript(tx_id)
-                transcript_count = int(ds.get_pooled_ip_profile(tx_id, 0, tx.length).sum(dtype=np.uint64))
-                mu = transcript_count / tx.length * int(row["window_length"])
+                if config.poisson_null == "ip_locus_density":
+                    transcript_count = int(
+                        ds.get_pooled_ip_profile(tx_id, 0, tx.length).sum(dtype=np.uint64)
+                    )
+                    mu = transcript_count / tx.length * int(row["window_length"])
                 current_tx = tx_id
                 next_start = 0
             start = int(row["tx_start"])
@@ -327,7 +341,18 @@ def _original_rows(
                 continue
             count = int(row["ip_pooled_count"])
             height = int(row["max_ip_pooled_5pend"])
-            pvalue = float(poisson.sf(count - 1, mu))
+            if config.poisson_null == "sminput":
+                input_count = int(row[f"{ds.sminput_sample.name}_count"])
+                exposure_ratio = (
+                    ds.pooled_ip_effective_library_size
+                    / int(ds.sminput_sample.effective_library_size)
+                )
+                row_mu = (
+                    input_count + config.sminput_poisson_pseudocount
+                ) * exposure_ratio
+            else:
+                row_mu = mu
+            pvalue = float(poisson.sf(count - 1, row_mu))
             if (
                 pvalue < config.original_min_pvalue
                 and count >= config.original_min_count
@@ -338,6 +363,7 @@ def _original_rows(
                     row,
                     strategy="original_rbpnet",
                     state="candidate",
+                    selection_null_mean=row_mu,
                     selection_pvalue=pvalue,
                 )
                 next_start = start + config.original_advance
@@ -345,7 +371,7 @@ def _original_rows(
         reporter.close()
 
 
-def _yeo_rows(
+def _broad_coverage_rows(
     config: SelectionConfig,
     ds: ProcessedECLIPDataset,
     windows_path: Path,
@@ -373,7 +399,7 @@ def _yeo_rows(
                     yield _base_manifest_row(
                         ds,
                         row,
-                        strategy="yeo_2026",
+                        strategy="broad_coverage",
                         state="measured",
                         replicate_id="",
                     )
@@ -388,7 +414,7 @@ def _yeo_rows(
                         yield _base_manifest_row(
                             ds,
                             row,
-                            strategy="yeo_2026",
+                            strategy="broad_coverage",
                             state="measured",
                             replicate_id=sample.name,
                         )
@@ -569,11 +595,16 @@ def _validate_config(config: SelectionConfig) -> None:
         value = float(getattr(config, name))
         if not 0 < value <= 1:
             raise ValueError(f"{name} must be in (0, 1]")
+    assert config.min_total_count is not None
     if min(config.original_min_count, config.original_min_height, config.min_total_count,
            config.min_sminput_count, config.min_ip_count, config.stitch_gap) < 0:
         raise ValueError("count thresholds and stitch_gap must be non-negative")
     if config.min_sminput_tpm < 0:
         raise ValueError("min_sminput_tpm must be non-negative")
+    if config.poisson_null not in POISSON_NULLS:
+        raise ValueError(f"poisson_null must be one of {', '.join(POISSON_NULLS)}")
+    if config.sminput_poisson_pseudocount <= 0:
+        raise ValueError("sminput_poisson_pseudocount must be positive")
     if config.replicate_mode not in {"combined", "per_ip"}:
         raise ValueError("replicate_mode must be combined or per_ip")
 
@@ -597,6 +628,9 @@ def _validate_scan_dataset(
         )
     if int(scan_metadata.get("ip_pooled_effective_library_size", -1)) != ds.pooled_ip_effective_library_size:
         raise ValueError("window scan pooled-IP library size does not match the processed experiment")
+    scan_coordinate_space = scan_metadata.get("coordinate_space", "mature_transcript")
+    if scan_coordinate_space != ds.coordinate_space:
+        raise ValueError("window scan coordinate space does not match the processed experiment")
     required_columns = {
         "transcript_id", "tx_start", "tx_end", "window_length", "region_type",
         "sminput_tpm", "ip_pooled_count", "ip_pooled_cpm",
@@ -615,6 +649,11 @@ def _validate_scan_dataset(
 def select_regions(config: SelectionConfig) -> dict:
     """Select biological loci and write a versioned lightweight manifest."""
 
+    if config.min_total_count is None:
+        config = replace(
+            config,
+            min_total_count=6 if config.strategy == "broad_coverage" else 8,
+        )
     _validate_config(config)
     windows_path = _resolve_parquet(config.windows)
     scan_metadata = _scan_metadata(windows_path)
@@ -639,6 +678,7 @@ def select_regions(config: SelectionConfig) -> dict:
             "format_version": "1",
             "strategy": config.strategy,
             "source_processed_dir": str(config.processed_dir.resolve()),
+            "coordinate_space": ds.coordinate_space,
             "source_windows": str(windows_path.resolve()),
             "window_scan": scan_metadata,
             "configuration": {
@@ -646,12 +686,29 @@ def select_regions(config: SelectionConfig) -> dict:
                 for key, value in config.__dict__.items()
                 if key not in {"processed_dir", "windows", "output_prefix", "progress"}
             },
+            "poisson_null_formula": (
+                "pooled_IP_transcript_or_gene_total / locus_length * window_length"
+                if config.strategy == "original_rbpnet"
+                and config.poisson_null == "ip_locus_density"
+                else "(SMInput_window_count + sminput_poisson_pseudocount) * "
+                "(pooled_IP_effective_library_size / SMInput_effective_library_size)"
+                if config.strategy == "original_rbpnet"
+                else None
+            ),
             "statistical_notes": (
-                "original_rbpnet uses a one-sided Poisson test against the transcript-level pooled-IP rate"
+                (
+                    "original_rbpnet uses a one-sided uncorrected Poisson test; "
+                    "poisson_null=ip_locus_density is the published pooled-IP locus-density null"
+                    if config.poisson_null == "ip_locus_density"
+                    else "original_rbpnet uses a one-sided uncorrected experimental SMInput null: "
+                    "mu=(SMInput_window_count+sminput_poisson_pseudocount)*"
+                    "(pooled_IP_effective_library_size/SMInput_effective_library_size)"
+                )
                 if config.strategy == "original_rbpnet"
                 else "peak_gray_negative uses exact conditional binomial tails and BH correction over adequately measured windows"
                 if config.strategy == "peak_gray_negative"
-                else "yeo_2026 applies coverage thresholds only and performs no peak test"
+                else "broad_coverage applies coverage thresholds only and performs no peak test; "
+                "it is Yeo-inspired but is not an exact Skipper window-generation preset"
             ),
         }
         schema = _manifest_schema(
@@ -660,8 +717,8 @@ def select_regions(config: SelectionConfig) -> dict:
         )
         if config.strategy == "original_rbpnet":
             rows: Iterable[dict] = _original_rows(config, ds, windows_path, scan_metadata)
-        elif config.strategy == "yeo_2026":
-            rows = _yeo_rows(config, ds, windows_path)
+        elif config.strategy == "broad_coverage":
+            rows = _broad_coverage_rows(config, ds, windows_path)
         else:
             rows = _peak_gray_negative_rows(config, ds, windows_path, scan_metadata)
 

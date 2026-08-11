@@ -14,7 +14,7 @@ TranscriptML currently supports three main workflows:
   supports targets such as RNA stability, translation, protein
   output, etc.
 - **RBPNet/eCLIP data** converts FASTA/GTF/BAM inputs into a canonical
-  transcript-space experiment, descriptive windows, explicit selection
+  mature-transcript or full-gene coordinate experiment, descriptive windows, explicit selection
   manifests, and memory-mappable model-ready NumPy bundles. The RBPNet model
   and trainer are not implemented yet.
 

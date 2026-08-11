@@ -18,7 +18,7 @@ import pyarrow.parquet as pq
 from transcriptml.progress import ProgressReporter, log_progress
 from transcriptml.rbpnet.experiment import ProcessedECLIPDataset, RegionRecord
 
-REGION_TYPES = ("5putr", "cds", "3putr", "noncoding_exon")
+REGION_TYPES = ("5putr", "cds", "3putr", "noncoding_exon", "intron")
 
 
 @dataclass(frozen=True)
@@ -179,6 +179,7 @@ def scan_windows(config: WindowScanConfig) -> dict:
             "format": "transcriptml-rbpnet-window-scan",
             "format_version": "1",
             "source_processed_dir": str(config.processed_dir.resolve()),
+            "coordinate_space": ds.coordinate_space,
             "window_size": config.window_size,
             "stride": config.stride,
             "min_sminput_tpm": config.min_sminput_tpm,

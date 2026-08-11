@@ -17,7 +17,7 @@ def add_rbpnet_parser(subparsers) -> None:
     commands = root.add_subparsers(dest="rbpnet_command", required=True)
 
     preprocess = commands.add_parser(
-        "preprocess", help="Build a canonical mature-transcript eCLIP experiment"
+        "preprocess", help="Build a canonical mature-transcript or full-gene eCLIP experiment"
     )
     preprocess.add_argument("--genome-fasta", required=True, type=Path)
     preprocess.add_argument("--gtf", required=True, type=Path, help="one-transcript-per-gene GTF")
@@ -27,6 +27,12 @@ def add_rbpnet_parser(subparsers) -> None:
     )
     preprocess.add_argument("--sminput-bam", required=True, metavar="[LABEL=]PATH")
     preprocess.add_argument("--output-dir", required=True, type=Path)
+    preprocess.add_argument(
+        "--coordinate-space",
+        choices=("mature_transcript", "gene"),
+        default="mature_transcript",
+        help="canonical locus coordinates (default: mature_transcript)",
+    )
     preprocess.add_argument(
         "--read1-rna-strand", choices=("opposite", "same", "unstranded"), default="opposite",
         help="RNA strand relative to read1 alignment (default: opposite for eCLIP)",
@@ -64,17 +70,38 @@ def add_rbpnet_parser(subparsers) -> None:
     select.add_argument("--output-prefix", required=True, type=Path)
     select.add_argument(
         "--strategy", required=True,
-        choices=("original_rbpnet", "yeo_2026", "peak_gray_negative"),
+        choices=("original_rbpnet", "broad_coverage", "peak_gray_negative"),
     )
     select.add_argument("--original-min-pvalue", type=float, default=0.01)
     select.add_argument("--original-min-count", type=int, default=8)
     select.add_argument("--original-min-height", type=int, default=2)
     select.add_argument("--original-advance", type=int, default=50)
-    select.add_argument("--min-total-count", type=int, default=8)
-    select.add_argument("--min-sminput-count", type=int, default=1)
-    select.add_argument("--min-ip-count", type=int, default=1)
+    select.add_argument(
+        "--poisson-null", choices=("ip_locus_density", "sminput"),
+        default="ip_locus_density",
+        help="v1 Poisson null; sminput is an experimental library-scaled alternative",
+    )
+    select.add_argument(
+        "--sminput-poisson-pseudocount", type=float, default=1.0,
+        help="additive SMInput window-count pseudocount for the experimental null (default: 1)",
+    )
+    select.add_argument(
+        "--min-total-count", type=int, default=None,
+        help="minimum IP+SMInput count (default: 6 for broad_coverage, 8 for peak_gray_negative)",
+    )
+    select.add_argument(
+        "--min-sminput-count", type=int, default=0,
+        help="optional per-window SMInput minimum (default: 0)",
+    )
+    select.add_argument(
+        "--min-ip-count", type=int, default=0,
+        help="optional pooled/per-replicate IP minimum (default: 0)",
+    )
     select.add_argument("--min-sminput-tpm", type=float, default=0.0)
-    select.add_argument("--replicate-mode", choices=("combined", "per_ip"), default="combined")
+    select.add_argument(
+        "--replicate-mode", choices=("combined", "per_ip"), default="per_ip",
+        help="broad_coverage eligibility mode (default: per_ip)",
+    )
     select.add_argument("--peak-fdr", type=float, default=0.05)
     select.add_argument("--peak-min-log2-ratio", type=float, default=1.0)
     select.add_argument("--negative-fdr", type=float, default=0.05)
@@ -92,7 +119,12 @@ def add_rbpnet_parser(subparsers) -> None:
     bundle.add_argument("--input-length", type=int, default=300)
     bundle.add_argument("--profile-length", type=int, default=300)
     bundle.add_argument("--max-jitter", type=int, default=0)
-    bundle.add_argument("--transcript-end-policy", choices=("drop", "pad"), default="drop")
+    bundle.add_argument(
+        "--transcript-end-policy",
+        choices=("drop", "pad", "shift_to_fit"),
+        default="shift_to_fit",
+        help="locus-boundary handling (default: shift_to_fit)",
+    )
     bundle.add_argument("--overwrite", action="store_true")
     bundle.add_argument("--no-progress", action="store_true")
 
@@ -129,6 +161,7 @@ def run_rbpnet_command(args: argparse.Namespace, parser: argparse.ArgumentParser
                 sminput=_sample(args.sminput_bam, "sminput"),
                 ips=tuple(_sample(value, "ip") for value in args.ip_bam),
                 output_dir=args.output_dir,
+                coordinate_space=args.coordinate_space,
                 read1_rna_strand=args.read1_rna_strand,
                 min_mapq=args.min_mapq,
                 exclude_duplicates=not args.include_duplicates,
@@ -166,6 +199,8 @@ def run_rbpnet_command(args: argparse.Namespace, parser: argparse.ArgumentParser
                 original_min_count=args.original_min_count,
                 original_min_height=args.original_min_height,
                 original_advance=args.original_advance,
+                poisson_null=args.poisson_null,
+                sminput_poisson_pseudocount=args.sminput_poisson_pseudocount,
                 min_total_count=args.min_total_count,
                 min_sminput_count=args.min_sminput_count,
                 min_ip_count=args.min_ip_count,

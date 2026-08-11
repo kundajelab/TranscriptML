@@ -29,7 +29,7 @@ class RBPNetBundleConfig:
     input_length: int = 300
     profile_length: int = 300
     max_jitter: int = 0
-    transcript_end_policy: str = "drop"
+    transcript_end_policy: str = "shift_to_fit"
     overwrite: bool = False
     progress: bool = True
 
@@ -38,6 +38,46 @@ def _materialized_interval(anchor: int, length: int, jitter: int) -> tuple[int, 
     width = length + 2 * jitter
     start = anchor - width // 2
     return start, start + width
+
+
+def _shifted_materialized_interval(
+    anchor: int,
+    length: int,
+    jitter: int,
+    locus_length: int,
+) -> tuple[int, int] | None:
+    """Return a centered-then-clipped real interval, or ``None`` if too short."""
+
+    width = length + 2 * jitter
+    if locus_length < width:
+        return None
+    centered_start, _ = _materialized_interval(anchor, length, jitter)
+    start = min(max(centered_start, 0), locus_length - width)
+    return start, start + width
+
+
+def jitter_crop_offset(
+    *,
+    anchor: int,
+    materialized_start: int,
+    locus_length: int,
+    crop_length: int,
+    jitter_shift: int,
+) -> int:
+    """Derive a legal future crop offset from explicit biological coordinates.
+
+    This is the coordinate contract used by ``shift_to_fit`` bundles. Requested
+    shifts near a boundary can map to the same closest legal crop.
+    """
+
+    if crop_length <= 0 or locus_length < crop_length:
+        raise ValueError("locus must be at least as long as the requested crop")
+    desired_start = anchor - crop_length // 2 + jitter_shift
+    actual_start = min(max(desired_start, 0), locus_length - crop_length)
+    offset = actual_start - materialized_start
+    if offset < 0:
+        raise ValueError("materialized interval does not contain the requested legal crop")
+    return offset
 
 
 def _source_and_destination(start: int, end: int, transcript_length: int) -> tuple[int, int, int, int]:
@@ -77,8 +117,8 @@ def _validate_config(config: RBPNetBundleConfig) -> None:
         raise ValueError("input_length and profile_length must be positive")
     if config.max_jitter < 0:
         raise ValueError("max_jitter must be non-negative")
-    if config.transcript_end_policy not in {"drop", "pad"}:
-        raise ValueError("transcript_end_policy must be drop or pad")
+    if config.transcript_end_policy not in {"drop", "pad", "shift_to_fit"}:
+        raise ValueError("transcript_end_policy must be drop, pad, or shift_to_fit")
 
 
 def _sorted_rows(manifest: SelectionManifest) -> list[dict]:
@@ -91,6 +131,11 @@ def _validate_manifest_dataset(
     ds: ProcessedECLIPDataset,
 ) -> None:
     scan = manifest.metadata.get("window_scan", {})
+    manifest_space = manifest.metadata.get(
+        "coordinate_space", scan.get("coordinate_space", "mature_transcript")
+    )
+    if manifest_space != ds.coordinate_space:
+        raise ValueError("selection manifest coordinate space does not match processed experiment")
     observed = {
         str(name): int(value)
         for name, value in scan.get("effective_library_sizes", {}).items()
@@ -141,6 +186,7 @@ def make_rbpnet_bundle(config: RBPNetBundleConfig) -> DatasetBundle:
             raise ValueError("processed dataset contains no IP samples")
         kept: list[dict] = []
         dropped = 0
+        dropped_short_locus = 0
         for row in rows:
             tx = ds.get_transcript(row["transcript_id"])
             anchor = int(row["transcript_anchor"])
@@ -158,8 +204,26 @@ def make_rbpnet_bundle(config: RBPNetBundleConfig) -> DatasetBundle:
             replicate_id = str(row["replicate_id"])
             if replicate_id and replicate_id not in {sample.name for sample in ip_samples}:
                 raise ValueError(f"selection manifest has unknown IP replicate_id {replicate_id!r}")
-            seq_start, seq_end = _materialized_interval(anchor, config.input_length, config.max_jitter)
-            profile_start, profile_end = _materialized_interval(anchor, config.profile_length, config.max_jitter)
+            if config.transcript_end_policy == "shift_to_fit":
+                seq_interval = _shifted_materialized_interval(
+                    anchor, config.input_length, config.max_jitter, tx.length
+                )
+                profile_interval = _shifted_materialized_interval(
+                    anchor, config.profile_length, config.max_jitter, tx.length
+                )
+                if seq_interval is None or profile_interval is None:
+                    dropped += 1
+                    dropped_short_locus += 1
+                    continue
+                seq_start, seq_end = seq_interval
+                profile_start, profile_end = profile_interval
+            else:
+                seq_start, seq_end = _materialized_interval(
+                    anchor, config.input_length, config.max_jitter
+                )
+                profile_start, profile_end = _materialized_interval(
+                    anchor, config.profile_length, config.max_jitter
+                )
             in_bounds = (
                 seq_start >= 0 and seq_end <= tx.length
                 and profile_start >= 0 and profile_end <= tx.length
@@ -169,15 +233,23 @@ def make_rbpnet_bundle(config: RBPNetBundleConfig) -> DatasetBundle:
                 continue
             row = dict(row)
             row.update({
+                "coordinate_space": ds.coordinate_space,
+                "locus_length": tx.length,
                 "sequence_context_start": seq_start,
                 "sequence_context_end": seq_end,
+                "sequence_materialized_start": seq_start,
+                "sequence_materialized_end": seq_end,
                 "profile_context_start": profile_start,
                 "profile_context_end": profile_end,
+                "profile_materialized_start": profile_start,
+                "profile_materialized_end": profile_end,
+                "sequence_anchor_offset": anchor - seq_start,
+                "profile_anchor_offset": anchor - profile_start,
             })
             kept.append(row)
         if not kept:
             raise ValueError(
-                "no examples remain after transcript-end handling; use --transcript-end-policy pad "
+                "no examples remain after locus-end handling; use --transcript-end-policy pad "
                 "or reduce context/jitter lengths"
             )
 
@@ -229,7 +301,7 @@ def make_rbpnet_bundle(config: RBPNetBundleConfig) -> DatasetBundle:
             "selection_sminput_counts": selection_sminput_counts,
             "selection_ip_counts": selection_ip_counts,
         }
-        metadata: list[dict] = []
+        metadata_by_index: list[dict | None] = [None] * n_examples
         reporter = ProgressReporter(
             "rbpnet make-bundle: materialize examples",
             total=n_examples,
@@ -237,71 +309,143 @@ def make_rbpnet_bundle(config: RBPNetBundleConfig) -> DatasetBundle:
             enabled=config.progress,
         )
         input_name = ds.sminput_sample.name
+        input_index = ds.sample_names.index(input_name)
+        ip_sample_indices = [ds.sample_names.index(sample.name) for sample in ip_samples]
+        rows_by_transcript: dict[str, list[tuple[int, dict]]] = {}
         for index, row in enumerate(kept):
-            tx = ds.get_transcript(row["transcript_id"])
-            seq_start = int(row["sequence_context_start"])
-            seq_end = int(row["sequence_context_end"])
-            src_start, src_end, dst_start, dst_end = _source_and_destination(
-                seq_start, seq_end, tx.length
-            )
-            if src_end > src_start:
-                encoded = encode_rna_sequence(ds.get_sequence(tx.transcript_id, src_start, src_end))
-                X[index, :, dst_start:dst_end] = encoded
-                sequence_valid_mask[index, dst_start:dst_end] = 1
+            rows_by_transcript.setdefault(row["transcript_id"], []).append((index, row))
+        for transcript_id, indexed_rows in rows_by_transcript.items():
+            tx = ds.get_transcript(transcript_id)
+            # Read each locus only once. This avoids repeatedly decompressing
+            # the same HDF5 chunks when stable example-ID order interleaves
+            # windows from many transcripts.
+            locus_sequence = ds.get_sequence(transcript_id, 0, tx.length)
+            locus_profiles = ds.get_profiles(transcript_id, 0, tx.length)
+            for index, row in indexed_rows:
+                seq_start = int(row["sequence_context_start"])
+                seq_end = int(row["sequence_context_end"])
+                src_start, src_end, dst_start, dst_end = _source_and_destination(
+                    seq_start, seq_end, tx.length
+                )
+                if src_end > src_start:
+                    encoded = encode_rna_sequence(locus_sequence[src_start:src_end])
+                    X[index, :, dst_start:dst_end] = encoded
+                    sequence_valid_mask[index, dst_start:dst_end] = 1
 
-            profile_start = int(row["profile_context_start"])
-            profile_end = int(row["profile_context_end"])
-            psrc_start, psrc_end, pdst_start, pdst_end = _source_and_destination(
-                profile_start, profile_end, tx.length
-            )
-            if psrc_end > psrc_start:
-                sminput = ds.get_profile(tx.transcript_id, psrc_start, psrc_end, input_name)
-                sminput_profiles[index, pdst_start:pdst_end] = sminput
-                for ip_index, sample in enumerate(ip_samples):
-                    ip_profiles[index, ip_index, pdst_start:pdst_end] = ds.get_profile(
-                        tx.transcript_id, psrc_start, psrc_end, sample.name
-                    )
-                profile_valid_mask[index, pdst_start:pdst_end] = 1
-            profile_sminput_totals[index] = sminput_profiles[index].sum(dtype=np.uint64)
-            profile_ip_totals[index] = ip_profiles[index].sum(axis=1, dtype=np.uint64)
-            selection_sminput_counts[index] = int(row[f"{input_name}_count"])
-            selection_ip_counts[index] = np.asarray(
-                [int(row[f"{sample.name}_count"]) for sample in ip_samples], dtype=np.uint64
-            )
-            metadata.append({
-                "example_id": row["example_id"],
-                "gene_id": row["gene_id"],
-                "transcript_id": row["transcript_id"],
-                "chromosome": row["chromosome"],
-                "strand": row["strand"],
-                "transcript_anchor": int(row["transcript_anchor"]),
-                "selection_start": int(row["selection_start"]),
-                "selection_end": int(row["selection_end"]),
-                "region_type": row["region_type"],
-                "selection_strategy": row["selection_strategy"],
-                "selection_state": row["selection_state"],
-                "replicate_id": row["replicate_id"],
-                "group_gene_id": row["group_gene_id"],
-                "group_transcript_id": row["group_transcript_id"],
-                "group_chromosome": row["group_chromosome"],
-                "sequence_context_start": seq_start,
-                "sequence_context_end": seq_end,
-                "sequence_left_pad": max(0, -seq_start),
-                "sequence_right_pad": max(0, seq_end - tx.length),
-                "profile_context_start": profile_start,
-                "profile_context_end": profile_end,
-                "profile_left_pad": max(0, -profile_start),
-                "profile_right_pad": max(0, profile_end - tx.length),
-            })
-            reporter.update()
+                profile_start = int(row["profile_context_start"])
+                profile_end = int(row["profile_context_end"])
+                psrc_start, psrc_end, pdst_start, pdst_end = _source_and_destination(
+                    profile_start, profile_end, tx.length
+                )
+                if psrc_end > psrc_start:
+                    sminput_profiles[index, pdst_start:pdst_end] = locus_profiles[
+                        input_index, psrc_start:psrc_end
+                    ]
+                    ip_profiles[index, :, pdst_start:pdst_end] = locus_profiles[
+                        ip_sample_indices, psrc_start:psrc_end
+                    ]
+                    profile_valid_mask[index, pdst_start:pdst_end] = 1
+                profile_sminput_totals[index] = sminput_profiles[index].sum(dtype=np.uint64)
+                profile_ip_totals[index] = ip_profiles[index].sum(axis=1, dtype=np.uint64)
+                selection_sminput_counts[index] = int(row[f"{input_name}_count"])
+                selection_ip_counts[index] = np.asarray(
+                    [int(row[f"{sample.name}_count"]) for sample in ip_samples], dtype=np.uint64
+                )
+                metadata_by_index[index] = {
+                    "example_id": row["example_id"],
+                    "gene_id": row["gene_id"],
+                    "transcript_id": row["transcript_id"],
+                    "chromosome": row["chromosome"],
+                    "strand": row["strand"],
+                    "coordinate_space": ds.coordinate_space,
+                    "locus_length": tx.length,
+                    "transcript_anchor": int(row["transcript_anchor"]),
+                    "selection_start": int(row["selection_start"]),
+                    "selection_end": int(row["selection_end"]),
+                    "region_type": row["region_type"],
+                    "selection_strategy": row["selection_strategy"],
+                    "selection_state": row["selection_state"],
+                    "replicate_id": row["replicate_id"],
+                    "group_gene_id": row["group_gene_id"],
+                    "group_transcript_id": row["group_transcript_id"],
+                    "group_chromosome": row["group_chromosome"],
+                    "sequence_context_start": seq_start,
+                    "sequence_context_end": seq_end,
+                    "sequence_materialized_start": seq_start,
+                    "sequence_materialized_end": seq_end,
+                    "sequence_anchor_offset": int(row["sequence_anchor_offset"]),
+                    "sequence_left_pad": max(0, -seq_start),
+                    "sequence_right_pad": max(0, seq_end - tx.length),
+                    "profile_context_start": profile_start,
+                    "profile_context_end": profile_end,
+                    "profile_materialized_start": profile_start,
+                    "profile_materialized_end": profile_end,
+                    "profile_anchor_offset": int(row["profile_anchor_offset"]),
+                    "profile_left_pad": max(0, -profile_start),
+                    "profile_right_pad": max(0, profile_end - tx.length),
+                    "sequence_crop_offset_at_minus_max_jitter": (
+                        jitter_crop_offset(
+                            anchor=int(row["transcript_anchor"]),
+                            materialized_start=seq_start,
+                            locus_length=tx.length,
+                            crop_length=config.input_length,
+                            jitter_shift=-config.max_jitter,
+                        )
+                        if tx.length >= config.input_length
+                        and config.transcript_end_policy != "pad"
+                        else None
+                    ),
+                    "sequence_crop_offset_at_plus_max_jitter": (
+                        jitter_crop_offset(
+                            anchor=int(row["transcript_anchor"]),
+                            materialized_start=seq_start,
+                            locus_length=tx.length,
+                            crop_length=config.input_length,
+                            jitter_shift=config.max_jitter,
+                        )
+                        if tx.length >= config.input_length
+                        and config.transcript_end_policy != "pad"
+                        else None
+                    ),
+                    "profile_crop_offset_at_minus_max_jitter": (
+                        jitter_crop_offset(
+                            anchor=int(row["transcript_anchor"]),
+                            materialized_start=profile_start,
+                            locus_length=tx.length,
+                            crop_length=config.profile_length,
+                            jitter_shift=-config.max_jitter,
+                        )
+                        if tx.length >= config.profile_length
+                        and config.transcript_end_policy != "pad"
+                        else None
+                    ),
+                    "profile_crop_offset_at_plus_max_jitter": (
+                        jitter_crop_offset(
+                            anchor=int(row["transcript_anchor"]),
+                            materialized_start=profile_start,
+                            locus_length=tx.length,
+                            crop_length=config.profile_length,
+                            jitter_shift=config.max_jitter,
+                        )
+                        if tx.length >= config.profile_length
+                        and config.transcript_end_policy != "pad"
+                        else None
+                    ),
+                }
+                reporter.update()
         reporter.close()
+        if any(item is None for item in metadata_by_index):
+            raise AssertionError("internal error: missing materialized example metadata")
+        metadata = [item for item in metadata_by_index if item is not None]
         X.flush()
         for array in arrays.values():
             array.flush()
 
         # Keep a self-contained scalable copy of the selected-example contract,
         # sorted in the exact same stable-ID order as the arrays.
-        example_table = pa.Table.from_pylist(kept, schema=manifest.table.schema)
+        example_table = pa.Table.from_pylist(kept).replace_schema_metadata(
+            manifest.table.schema.metadata
+        )
         pq.write_table(example_table, config.output_dir / "examples.parquet", compression="zstd")
         config_payload = {
             "builder": "rbpnet",
@@ -311,18 +455,34 @@ def make_rbpnet_bundle(config: RBPNetBundleConfig) -> DatasetBundle:
             "source_selection_manifest": str(manifest.path.resolve()),
             "source_selection_sha256": _sha256(manifest.path),
             "selection": manifest.metadata,
+            "coordinate_space": ds.coordinate_space,
             "input_length": config.input_length,
             "profile_length": config.profile_length,
             "max_jitter": config.max_jitter,
             "materialized_sequence_length": sequence_width,
             "materialized_profile_length": profile_width,
             "jitter_contract": (
-                "future shift s in [-max_jitter,+max_jitter] takes sequence/profile crop "
-                "starting at max_jitter+s from their respective materialized arrays"
+                {
+                    "crop_offset": "max_jitter + jitter_shift",
+                    "jitter_shift_range": [-config.max_jitter, config.max_jitter],
+                    "note": "pad preserves the legacy centered padded materialization contract",
+                }
+                if config.transcript_end_policy == "pad"
+                else {
+                    "desired_crop_start": "anchor - crop_length//2 + jitter_shift",
+                    "actual_crop_start": "clip(desired_crop_start, 0, locus_length-crop_length)",
+                    "crop_offset": "actual_crop_start - materialized_start",
+                    "jitter_shift_range": [-config.max_jitter, config.max_jitter],
+                    "note": (
+                        "boundary clipping may map multiple requested shifts to the same legal crop; "
+                        "use per-example materialized starts and anchors, not max_jitter+jitter_shift"
+                    ),
+                }
             ),
             "transcript_end_policy": config.transcript_end_policy,
             "n_selected_manifest_rows": len(rows),
             "n_dropped_at_transcript_ends": dropped,
+            "n_dropped_short_loci": dropped_short_locus,
             "sample_metadata": {
                 "sminput": {
                     "name": ds.sminput_sample.name,

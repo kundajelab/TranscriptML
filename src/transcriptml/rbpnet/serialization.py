@@ -14,7 +14,7 @@ from transcriptml.rbpnet.coordinates import Transcript
 
 
 def calculate_tpm(raw_counts: np.ndarray, transcripts: list[Transcript]) -> np.ndarray:
-    """Calculate length-normalized TPM from retained transcript event counts."""
+    """Calculate length-normalized TPM in the selected coordinate space."""
 
     lengths_kb = np.asarray([tx.length / 1000.0 for tx in transcripts], dtype=np.float64)
     rates = raw_counts.astype(np.float64) / lengths_kb
@@ -36,8 +36,8 @@ def write_metadata(
     tpm = calculate_tpm(sample_counts[sminput_index], transcripts)
     fields = [
         "transcript_id", "gene_id", "gene_name", "transcript_name", "transcript_type",
-        "chrom", "strand", "transcript_length", "signal_offset", "sm_input_raw_count",
-        "sm_input_tpm",
+        "chrom", "strand", "coordinate_space", "genomic_start", "genomic_end",
+        "transcript_length", "signal_offset", "sm_input_raw_count", "sm_input_tpm",
     ] + [f"{name}_raw_5p_count" for name in sample_names] + ["region_annotations"]
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t", lineterminator="\n")
@@ -57,6 +57,9 @@ def write_metadata(
                 "transcript_type": tx.transcript_type,
                 "chrom": tx.chrom,
                 "strand": tx.strand,
+                "coordinate_space": tx.coordinate_space,
+                "genomic_start": tx.genomic_start,
+                "genomic_end": tx.genomic_end,
                 "transcript_length": tx.length,
                 "signal_offset": tx.offset,
                 "sm_input_raw_count": int(sample_counts[sminput_index][index]),

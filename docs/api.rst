@@ -63,7 +63,7 @@ RBPNet/eCLIP data
    :member-order: bysource
 
 .. automodule:: transcriptml.rbpnet.bundle
-   :members: RBPNetBundleConfig, make_rbpnet_bundle, load_rbpnet_bundle
+   :members: RBPNetBundleConfig, jitter_crop_offset, make_rbpnet_bundle, load_rbpnet_bundle
    :member-order: bysource
 
 Models

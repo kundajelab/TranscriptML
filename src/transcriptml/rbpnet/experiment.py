@@ -30,6 +30,9 @@ class TranscriptRecord:
     signal_offset: int
     sminput_tpm: float
     regions: tuple[RegionRecord, ...]
+    coordinate_space: str = "mature_transcript"
+    genomic_start: int = 0
+    genomic_end: int = 0
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,9 @@ class ProcessedECLIPDataset:
             raise ValueError(
                 f"unsupported processed experiment format_version {self.manifest.get('format_version')!r}"
             )
+        self.coordinate_space = self.manifest.get("coordinate_space", "mature_transcript")
+        if self.coordinate_space not in {"mature_transcript", "gene"}:
+            raise ValueError(f"unsupported coordinate_space {self.coordinate_space!r}")
         files = self.manifest.get("files", {})
         required = {"metadata", "exon_mapping", "sequences", "signals"}
         missing_keys = sorted(required - set(files))
@@ -121,6 +127,9 @@ class ProcessedECLIPDataset:
                     transcript_id=row["transcript_id"],
                     chromosome=row["chrom"],
                     strand=row["strand"],
+                    coordinate_space=row.get("coordinate_space", self.coordinate_space),
+                    genomic_start=int(row.get("genomic_start") or 0),
+                    genomic_end=int(row.get("genomic_end") or 0),
                     length=int(row["transcript_length"]),
                     signal_offset=int(row["signal_offset"]),
                     sminput_tpm=float(row["sm_input_tpm"]),
@@ -128,6 +137,18 @@ class ProcessedECLIPDataset:
                 )
                 if record.length <= 0:
                     raise ValueError(f"transcript {record.transcript_id} has non-positive length")
+                if record.coordinate_space != self.coordinate_space:
+                    raise ValueError(
+                        f"metadata coordinate space differs for {record.transcript_id}"
+                    )
+                if record.coordinate_space == "gene" and (
+                    record.genomic_start < 0
+                    or record.genomic_end - record.genomic_start != record.length
+                ):
+                    raise ValueError(
+                        f"invalid gene span for {record.transcript_id}: "
+                        f"{record.genomic_start}-{record.genomic_end}"
+                    )
                 if (
                     not regions
                     or regions[0].start != 0
@@ -184,6 +205,11 @@ class ProcessedECLIPDataset:
                 raise ValueError("counts shape disagrees with sample and transcript metadata")
             if store["ip_pooled"].shape != (total_length,):
                 raise ValueError("ip_pooled shape disagrees with transcript metadata")
+            stored_space = store.attrs.get("coordinate_space")
+            if isinstance(stored_space, bytes):
+                stored_space = stored_space.decode()
+            if stored_space is not None and str(stored_space) != self.coordinate_space:
+                raise ValueError("coordinate space differs between manifest and signals.h5")
         with pysam.FastaFile(str(self._fasta_path)) as fasta:
             if tuple(fasta.references) != tuple(tx.transcript_id for tx in self.transcripts):
                 raise ValueError("transcript order differs between metadata and transcript FASTA")
@@ -273,9 +299,17 @@ class ProcessedECLIPDataset:
     def get_genomic_blocks(
         self, transcript_id: str, start: int, end: int
     ) -> tuple[GenomicBlock, ...]:
-        """Map one transcript interval to compact genomic exon blocks."""
+        """Map one locus interval to compact ascending genomic blocks."""
 
         tx, _ = self._slice(transcript_id, start, end)
+        if self.coordinate_space == "gene":
+            if tx.strand == "+":
+                genomic_start = tx.genomic_start + start
+                genomic_end = tx.genomic_start + end
+            else:
+                genomic_start = tx.genomic_end - end
+                genomic_end = tx.genomic_end - start
+            return (GenomicBlock(tx.chromosome, genomic_start, genomic_end),)
         if self._exons_by_transcript is None:
             self._load_exons()
         assert self._exons_by_transcript is not None
@@ -295,6 +329,58 @@ class ProcessedECLIPDataset:
         if sum(block.end - block.start for block in blocks) != end - start:
             raise ValueError(f"exon mapping does not cover {transcript_id}:{start}-{end}")
         return tuple(blocks)
+
+    def coordinate_to_genome(self, transcript_id: str, pos: int) -> tuple[str, int, str]:
+        """Map one selected-coordinate-space base to a genomic base."""
+
+        tx, _ = self._slice(transcript_id, pos, pos + 1)
+        if self.coordinate_space == "gene":
+            genomic = (
+                tx.genomic_start + pos
+                if tx.strand == "+"
+                else tx.genomic_end - 1 - pos
+            )
+            return tx.chromosome, genomic, tx.strand
+        if self._exons_by_transcript is None:
+            self._load_exons()
+        assert self._exons_by_transcript is not None
+        for exon in self._exons_by_transcript.get(transcript_id, []):
+            if exon["tx_start"] <= pos < exon["tx_end"]:
+                offset = pos - exon["tx_start"]
+                genomic = (
+                    exon["genomic_start"] + offset
+                    if tx.strand == "+"
+                    else exon["genomic_end"] - 1 - offset
+                )
+                return tx.chromosome, genomic, tx.strand
+        raise ValueError(f"exon mapping does not cover {transcript_id}:{pos}")
+
+    def genome_to_coordinate(self, transcript_id: str, chromosome: str, pos: int) -> int | None:
+        """Map one genomic base into the selected coordinate space, if represented."""
+
+        tx = self.get_transcript(transcript_id)
+        if chromosome != tx.chromosome:
+            return None
+        if self.coordinate_space == "gene":
+            if not tx.genomic_start <= pos < tx.genomic_end:
+                return None
+            return (
+                pos - tx.genomic_start
+                if tx.strand == "+"
+                else tx.genomic_end - 1 - pos
+            )
+        if self._exons_by_transcript is None:
+            self._load_exons()
+        assert self._exons_by_transcript is not None
+        for exon in self._exons_by_transcript.get(transcript_id, []):
+            if exon["genomic_start"] <= pos < exon["genomic_end"]:
+                offset = (
+                    pos - exon["genomic_start"]
+                    if tx.strand == "+"
+                    else exon["genomic_end"] - 1 - pos
+                )
+                return exon["tx_start"] + offset
+        return None
 
     def close(self) -> None:
         if self._h5 is not None:

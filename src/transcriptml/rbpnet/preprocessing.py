@@ -16,6 +16,7 @@ import pysam
 from transcriptml import __version__
 from transcriptml.progress import log_progress
 from transcriptml.rbpnet.annotation import parse_gtf
+from transcriptml.rbpnet.coordinates import COORDINATE_SPACES
 from transcriptml.rbpnet.fasta import retain_fasta_transcripts, write_transcript_fasta
 from transcriptml.rbpnet.serialization import write_exons, write_json, write_metadata, write_regions
 from transcriptml.rbpnet.signals import ExonBinIndex, create_signal_store, extract_bam_to_store, write_ip_pooled
@@ -34,13 +35,14 @@ class Sample:
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    """Configuration for canonical transcript-space eCLIP preprocessing."""
+    """Configuration for canonical transcript-oriented eCLIP preprocessing."""
 
     genome_fasta: Path
     gtf: Path
     sminput: Sample
     ips: tuple[Sample, ...]
     output_dir: Path
+    coordinate_space: str = "mature_transcript"
     read1_rna_strand: str = "opposite"
     min_mapq: int = 1
     exclude_duplicates: bool = True
@@ -72,9 +74,9 @@ def _input_record(path: Path) -> dict:
 
 
 def preprocess_eclip(config: PipelineConfig) -> dict:
-    """Create a reusable canonical transcript-space eCLIP experiment.
+    """Create a reusable canonical transcript-oriented eCLIP experiment.
 
-    The HDF5 track is concatenated transcript space and stays lazy on read.
+    The HDF5 track is concatenated selected-locus space and stays lazy on read.
     This stage deliberately performs no peak calling or region selection.
     """
 
@@ -85,6 +87,10 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
         raise ValueError("sample roles must be one 'sminput' followed by one or more 'ip' samples")
     if config.read1_rna_strand not in {"opposite", "same", "unstranded"}:
         raise ValueError("read1_rna_strand must be opposite, same, or unstranded")
+    if config.coordinate_space not in COORDINATE_SPACES:
+        raise ValueError(
+            f"coordinate_space must be one of {', '.join(COORDINATE_SPACES)}"
+        )
     if config.min_mapq < 0:
         raise ValueError("min_mapq must be non-negative")
     sample_names = [config.sminput.name] + [sample.name for sample in config.ips]
@@ -93,7 +99,11 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
 
     log_progress(f"rbpnet preprocess: prepare {config.output_dir}", enabled=config.progress)
     _prepare_output(config.output_dir, config.overwrite)
-    all_transcripts = parse_gtf(config.gtf, progress=config.progress)
+    all_transcripts = parse_gtf(
+        config.gtf,
+        coordinate_space=config.coordinate_space,
+        progress=config.progress,
+    )
     transcripts, contig_filter_qc = retain_fasta_transcripts(config.genome_fasta, all_transcripts)
     skipped = contig_filter_qc["transcripts_skipped_missing_fasta_contig"]
     if skipped:
@@ -169,17 +179,23 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
     for tx in transcripts:
         for region in tx.regions:
             region_counts[region.label] = region_counts.get(region.label, 0) + region.end - region.start
+    assignment = (
+        "unique strand-compatible selected gene at read1 5-prime aligned base, with all "
+        "reference-consuming CIGAR operations contained in the full gene span; intronic "
+        "alignments and non-annotated splice junctions inside that span are permitted"
+        if config.coordinate_space == "gene"
+        else "unique strand-compatible mature transcript at read1 5-prime aligned base, "
+        "with all aligned CIGAR segments compatible with selected exons and junctions"
+    )
     qc = {
         "format_version": "1",
         "pipeline_version": __version__,
         "configuration": {
+            "coordinate_space": config.coordinate_space,
             "read1_rna_strand": config.read1_rna_strand,
             "min_mapq": config.min_mapq,
             "exclude_duplicates": config.exclude_duplicates,
-            "assignment": (
-                "unique strand-compatible mature transcript at read1 5-prime aligned base, "
-                "with all aligned CIGAR segments compatible with selected exons and junctions"
-            ),
+            "assignment": assignment,
         },
         "annotation": {
             **contig_filter_qc,
@@ -187,6 +203,15 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
             "genes": len({tx.gene_id for tx in transcripts}),
             "exons": sum(len(tx.exons) for tx in transcripts),
             "transcriptome_bases": sum(tx.length for tx in transcripts),
+            "coordinate_space": config.coordinate_space,
+            "coordinate_space_bases": sum(tx.length for tx in transcripts),
+            "exonic_bases": sum(
+                sum(exon.end - exon.start for exon in tx.exons) for tx in transcripts
+            ),
+            "intronic_bases": sum(
+                sum(region.end - region.start for region in tx.regions if region.label == "intron")
+                for tx in transcripts
+            ),
             "chromosomes": sorted({tx.chrom for tx in transcripts}),
             "region_bases": dict(sorted(region_counts.items())),
             "sminput_transcripts_nonzero": int(np.count_nonzero(sample_counts[0])),
@@ -201,8 +226,10 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
         "format": "transcriptml-rbpnet-experiment",
         "format_version": "1",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "coordinate_space": config.coordinate_space,
         "coordinate_system": (
-            "all intervals are 0-based, half-open; sequences/tracks are transcript 5-prime to 3-prime"
+            "all intervals are 0-based, half-open in the selected locus coordinate space; "
+            "sequences and tracks run annotated RNA 5-prime to 3-prime"
         ),
         "inputs": {
             "genome_fasta": _input_record(config.genome_fasta),
@@ -231,7 +258,7 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
             "cpm_formula": "window_count / effective_library_size * 1e6",
             "sample_denominator_field": "samples[].effective_library_size",
             "effective_library_size_definition": (
-                "retained read1 5-prime events used to construct the transcript-space signal track"
+                "retained read1 5-prime events used to construct the selected-coordinate-space signal track"
             ),
             "pooled_ip_denominator": "sum of effective_library_size over IP source samples",
         },

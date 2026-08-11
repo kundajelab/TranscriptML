@@ -1,4 +1,4 @@
-"""RBPNet/eCLIP transcript-space data preparation.
+"""RBPNet/eCLIP transcript-oriented locus data preparation.
 
 The public API deliberately stops at model-ready data. Neural-network
 architectures, losses, and training are not part of this module.
