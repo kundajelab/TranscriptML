@@ -56,7 +56,9 @@ class SelectionConfig:
     min_sminput_tpm: float = 0.0
     replicate_mode: str = "per_ip"
     # Optional exact window-annotation universe. None preserves all regions.
-    region_types: tuple[str, ...] | None = None
+    region_types: tuple[str, ...] | str | None = None
+    discard_mixed: bool = False
+    only_mixed: bool = False
     # Peak / gray / confident-negative selector.
     peak_fdr: float = 0.05
     peak_min_log2_ratio: float = 1.0
@@ -119,12 +121,27 @@ def _normalize_region_types(
 
 
 def _region_is_eligible(config: SelectionConfig, row: dict) -> bool:
-    return config.region_types is None or str(row["region_type"]) in config.region_types
+    """Match a pure annotation or a mixed window overlapping requested types."""
+
+    region_type = str(row["region_type"])
+    is_mixed = region_type == "mixed"
+    if config.only_mixed and not is_mixed:
+        return False
+    if config.discard_mixed and is_mixed:
+        return False
+    if config.region_types is None:
+        return True
+    if not is_mixed:
+        return region_type in config.region_types
+    return any(
+        int(row.get(f"region_{requested}_nt", 0)) > 0
+        for requested in config.region_types
+    )
 
 
 def _window_region_counts(
     path: Path,
-    region_types: tuple[str, ...] | None,
+    config: SelectionConfig,
     *,
     batch_size: int,
 ) -> tuple[dict[str, int], dict[str, int]]:
@@ -133,11 +150,12 @@ def _window_region_counts(
     source: Counter[str] = Counter()
     eligible: Counter[str] = Counter()
     parquet = pq.ParquetFile(path)
-    for batch in parquet.iter_batches(batch_size=batch_size, columns=["region_type"]):
-        for value in batch.column(0).to_pylist():
-            region_type = str(value)
+    columns = ["region_type", *(f"region_{name}_nt" for name in REGION_TYPES)]
+    for batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+        for row in batch.to_pylist():
+            region_type = str(row["region_type"])
             source[region_type] += 1
-            if region_types is None or region_type in region_types:
+            if _region_is_eligible(config, row):
                 eligible[region_type] += 1
     order = {name: index for index, name in enumerate((*REGION_TYPES, "mixed"))}
 
@@ -489,19 +507,30 @@ def _peak_statistics(
         columns=[
             f"{input_name}_count", "ip_pooled_count", "total_ip_sminput_count",
             "sminput_tpm", "region_type",
+            *(f"region_{name}_nt" for name in REGION_TYPES),
         ],
     )
     input_counts = table[f"{input_name}_count"].to_numpy(zero_copy_only=False).astype(np.int64)
     ip_counts = table["ip_pooled_count"].to_numpy(zero_copy_only=False).astype(np.int64)
     totals = table["total_ip_sminput_count"].to_numpy(zero_copy_only=False).astype(np.int64)
     tpm = table["sminput_tpm"].to_numpy(zero_copy_only=False).astype(np.float64)
+    region_labels = np.asarray(table["region_type"].to_pylist(), dtype=object)
+    mixed = region_labels == "mixed"
     if config.region_types is None:
         eligible_region = np.ones(len(totals), dtype=bool)
     else:
-        region_types = np.asarray(
-            table["region_type"].to_pylist(), dtype=object
-        )
-        eligible_region = np.isin(region_types, config.region_types)
+        pure_match = np.isin(region_labels, config.region_types)
+        mixed_match = np.zeros(len(totals), dtype=bool)
+        for region_type in config.region_types:
+            overlap = table[f"region_{region_type}_nt"].to_numpy(
+                zero_copy_only=False
+            )
+            mixed_match |= mixed & (overlap > 0)
+        eligible_region = pure_match | mixed_match
+    if config.discard_mixed:
+        eligible_region &= ~mixed
+    if config.only_mixed:
+        eligible_region &= mixed
     adequate = (
         eligible_region
         & (totals >= config.min_total_count)
@@ -671,14 +700,18 @@ def _validate_config(config: SelectionConfig) -> None:
         raise ValueError("sminput_poisson_pseudocount must be positive")
     if config.replicate_mode not in {"combined", "per_ip"}:
         raise ValueError("replicate_mode must be combined or per_ip")
-    valid_region_types = set(REGION_TYPES) | {"mixed"}
+    valid_region_types = set(REGION_TYPES)
     if config.region_types is not None:
         invalid = sorted(set(config.region_types) - valid_region_types)
         if invalid:
             raise ValueError(
                 "unsupported region_types: "
-                f"{', '.join(invalid)}; choose from {', '.join((*REGION_TYPES, 'mixed'))}"
+                f"{', '.join(invalid)}; choose from {', '.join(REGION_TYPES)}"
             )
+    if config.discard_mixed and config.only_mixed:
+        raise ValueError("discard_mixed and only_mixed are mutually exclusive")
+    if config.only_mixed and config.region_types is None:
+        raise ValueError("only_mixed requires one or more region_types")
 
 
 def _validate_scan_dataset(
@@ -709,6 +742,7 @@ def _validate_scan_dataset(
         "total_ip_sminput_count", "log2_ip_pooled_vs_sminput",
         "max_ip_pooled_5pend", "genomic_blocks",
     }
+    required_columns.update(f"region_{name}_nt" for name in REGION_TYPES)
     for sample in ds.samples:
         required_columns.update({
             f"{sample.name}_count", f"{sample.name}_cpm", f"max_{sample.name}_5pend"
@@ -751,7 +785,7 @@ def select_regions(config: SelectionConfig) -> dict:
         _validate_scan_dataset(ds, windows_path, scan_metadata)
         source_region_counts, eligible_region_counts = _window_region_counts(
             windows_path,
-            config.region_types,
+            config,
             batch_size=config.batch_size,
         )
         provenance = {
@@ -763,9 +797,16 @@ def select_regions(config: SelectionConfig) -> dict:
             "source_windows": str(windows_path.resolve()),
             "window_scan": scan_metadata,
             "region_filter": {
-                "mode": "all" if config.region_types is None else "exact_region_type",
-                "allowed_region_types": (
+                "mode": "all" if config.region_types is None else "overlap",
+                "requested_region_types": (
                     None if config.region_types is None else list(config.region_types)
+                ),
+                "mixed_policy": (
+                    "only"
+                    if config.only_mixed
+                    else "discard"
+                    if config.discard_mixed
+                    else "include_matching"
                 ),
                 "source_window_counts": source_region_counts,
                 "eligible_window_counts": eligible_region_counts,

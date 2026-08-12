@@ -595,7 +595,7 @@ def test_selection_strategies_ids_serialization_and_stitching(tmp_path):
     assert any(row["source_window_count"] > 1 for row in load_selection_manifest(classified).rows)
 
 
-def test_exact_region_type_filtering_provenance_and_peak_bh_universe(tmp_path):
+def test_region_type_filtering_includes_matching_mixed_by_default(tmp_path):
     root = tmp_path / "processed"
     _write_processed_fixture(root)
     windows = tmp_path / "windows"
@@ -616,35 +616,74 @@ def test_exact_region_type_filtering_provenance_and_peak_bh_universe(tmp_path):
         progress=False,
     ))
     broad_manifest = load_selection_manifest(broad)
-    assert [row["region_type"] for row in broad_manifest.rows] == ["5putr", "cds"]
+    assert [row["region_type"] for row in broad_manifest.rows] == [
+        "5putr", "mixed", "cds", "mixed", "mixed"
+    ]
     assert broad_summary["region_filter"] == {
-        "mode": "exact_region_type",
-        "allowed_region_types": ["5putr", "cds"],
+        "mode": "overlap",
+        "requested_region_types": ["5putr", "cds"],
+        "mixed_policy": "include_matching",
         "source_window_counts": {"5putr": 1, "cds": 1, "mixed": 3},
-        "eligible_window_counts": {"5putr": 1, "cds": 1},
+        "eligible_window_counts": {"5putr": 1, "cds": 1, "mixed": 3},
     }
     assert broad_summary["selected_example_region_counts"] == {
         "5putr": 1,
         "cds": 1,
+        "mixed": 3,
     }
     assert broad_manifest.metadata["configuration"]["region_types"] == [
         "5putr",
         "cds",
     ]
 
-    mixed = tmp_path / "broad_mixed"
-    mixed_summary = select_regions(SelectionConfig(
+    matching_3putr = tmp_path / "broad_3putr"
+    matching_summary = select_regions(SelectionConfig(
         processed_dir=root,
         windows=windows,
-        output_prefix=mixed,
+        output_prefix=matching_3putr,
         strategy="broad_coverage",
         replicate_mode="combined",
         min_total_count=0,
-        region_types="mixed",
+        region_types="3putr",
         progress=False,
     ))
-    assert mixed_summary["n_examples"] == 3
-    assert {row["region_type"] for row in load_selection_manifest(mixed).rows} == {
+    assert matching_summary["n_examples"] == 2
+    assert {row["region_type"] for row in load_selection_manifest(matching_3putr).rows} == {
+        "mixed"
+    }
+
+    pure = tmp_path / "broad_pure"
+    pure_summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=pure,
+        strategy="broad_coverage",
+        replicate_mode="combined",
+        min_total_count=0,
+        region_types=("5putr", "cds"),
+        discard_mixed=True,
+        progress=False,
+    ))
+    assert [row["region_type"] for row in load_selection_manifest(pure).rows] == [
+        "5putr", "cds"
+    ]
+    assert pure_summary["region_filter"]["mixed_policy"] == "discard"
+
+    only_mixed = tmp_path / "broad_only_mixed"
+    only_mixed_summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=only_mixed,
+        strategy="broad_coverage",
+        replicate_mode="combined",
+        min_total_count=0,
+        region_types=("3putr",),
+        only_mixed=True,
+        progress=False,
+    ))
+    assert only_mixed_summary["n_examples"] == 2
+    assert only_mixed_summary["region_filter"]["mixed_policy"] == "only"
+    assert {row["region_type"] for row in load_selection_manifest(only_mixed).rows} == {
         "mixed"
     }
 
@@ -660,6 +699,7 @@ def test_exact_region_type_filtering_provenance_and_peak_bh_universe(tmp_path):
         peak_min_log2_ratio=100.0,
         negative_max_log2_ratio=-100.0,
         region_types=("cds",),
+        discard_mixed=True,
         progress=False,
     ))
     classified_rows = load_selection_manifest(classified).rows
@@ -674,13 +714,53 @@ def test_exact_region_type_filtering_provenance_and_peak_bh_universe(tmp_path):
         classified_rows[0]["source_min_depletion_pvalue"]
     )
 
-    with pytest.raises(ValueError, match="unsupported region_types: promoter"):
+    classified_boundary = tmp_path / "classified_3putr_boundary"
+    select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=classified_boundary,
+        strategy="peak_gray_negative",
+        min_total_count=0,
+        peak_fdr=1.0,
+        negative_fdr=1.0,
+        peak_min_log2_ratio=100.0,
+        negative_max_log2_ratio=-100.0,
+        region_types=("3putr",),
+        only_mixed=True,
+        progress=False,
+    ))
+    boundary_rows = load_selection_manifest(classified_boundary).rows
+    assert boundary_rows
+    assert all(row["region_type"] == "mixed" for row in boundary_rows)
+    assert all(row["region_3putr_nt"] > 0 for row in boundary_rows)
+
+    with pytest.raises(ValueError, match="unsupported region_types: mixed"):
         select_regions(SelectionConfig(
             processed_dir=root,
             windows=windows,
             output_prefix=tmp_path / "invalid_region",
             strategy="broad_coverage",
-            region_types=("promoter",),
+            region_types=("mixed",),
+            progress=False,
+        ))
+    with pytest.raises(ValueError, match="only_mixed requires"):
+        select_regions(SelectionConfig(
+            processed_dir=root,
+            windows=windows,
+            output_prefix=tmp_path / "missing_regions",
+            strategy="broad_coverage",
+            only_mixed=True,
+            progress=False,
+        ))
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        select_regions(SelectionConfig(
+            processed_dir=root,
+            windows=windows,
+            output_prefix=tmp_path / "conflicting_mixed",
+            strategy="broad_coverage",
+            region_types=("cds",),
+            discard_mixed=True,
+            only_mixed=True,
             progress=False,
         ))
 
@@ -694,8 +774,11 @@ def test_select_regions_cli_parses_comma_separated_region_types():
         "--output-prefix", "selected",
         "--strategy", "broad_coverage",
         "--region-types", "3putr,cds",
+        "--only-mixed",
     ])
     assert args.region_types == ("3putr", "cds")
+    assert args.only_mixed is True
+    assert args.discard_mixed is False
 
 
 def test_zero_count_peak_negative_edges_and_broad_coverage_defaults(tmp_path):

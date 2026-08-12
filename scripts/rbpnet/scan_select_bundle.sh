@@ -57,6 +57,14 @@ selection_args=(
 if [[ -n "${REGION_TYPES}" ]]; then
   selection_args+=(--region-types "${REGION_TYPES}")
 fi
+if [[ "${DISCARD_MIXED}" == "1" && "${ONLY_MIXED}" == "1" ]]; then
+  echo "DISCARD_MIXED and ONLY_MIXED cannot both be enabled." >&2
+  exit 1
+elif [[ "${DISCARD_MIXED}" == "1" ]]; then
+  selection_args+=(--discard-mixed)
+elif [[ "${ONLY_MIXED}" == "1" ]]; then
+  selection_args+=(--only-mixed)
+fi
 case "${SELECTION_STRATEGY}" in
   original_rbpnet)
     selection_args+=(--poisson-null "${POISSON_NULL}")

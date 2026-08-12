@@ -125,9 +125,20 @@ def add_rbpnet_parser(subparsers) -> None:
         default=None,
         metavar="TYPE[,TYPE...]",
         help=(
-            "restrict selection to exact window annotations: 5putr, cds, 3putr, "
-            "noncoding_exon, intron, mixed (default: all)"
+            "restrict selection by overlap with: 5putr, cds, 3putr, "
+            "noncoding_exon, intron; matching mixed windows are included by default"
         ),
+    )
+    mixed = select.add_mutually_exclusive_group()
+    mixed.add_argument(
+        "--discard-mixed",
+        action="store_true",
+        help="exclude boundary-crossing windows from the requested region types",
+    )
+    mixed.add_argument(
+        "--only-mixed",
+        action="store_true",
+        help="select only boundary-crossing windows overlapping --region-types",
     )
     select.add_argument(
         "--replicate-mode", choices=("combined", "per_ip"), default="per_ip",
@@ -242,6 +253,8 @@ def run_rbpnet_command(args: argparse.Namespace, parser: argparse.ArgumentParser
                 min_ip_count=args.min_ip_count,
                 min_sminput_tpm=args.min_sminput_tpm,
                 region_types=args.region_types,
+                discard_mixed=args.discard_mixed,
+                only_mixed=args.only_mixed,
                 replicate_mode=args.replicate_mode,
                 peak_fdr=args.peak_fdr,
                 peak_min_log2_ratio=args.peak_min_log2_ratio,

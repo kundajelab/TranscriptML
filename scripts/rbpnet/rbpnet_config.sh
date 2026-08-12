@@ -55,8 +55,10 @@ OVERWRITE="${OVERWRITE:-0}"
 WINDOW_SIZE="${WINDOW_SIZE:-100}"
 WINDOW_STRIDE="${WINDOW_STRIDE:-}"
 MIN_SMINPUT_TPM="${MIN_SMINPUT_TPM:-0}"
-# Optional comma-separated exact annotations, e.g. "3putr" or "cds,3putr".
+# Optional comma-separated biological annotations, e.g. "3putr" or "cds,3putr".
 REGION_TYPES="${REGION_TYPES:-}"
+DISCARD_MIXED="${DISCARD_MIXED:-0}"
+ONLY_MIXED="${ONLY_MIXED:-0}"
 SELECTION_STRATEGY="${SELECTION_STRATEGY:-peak_gray_negative}"
 MIN_TOTAL_COUNT="${MIN_TOTAL_COUNT:-8}"
 MIN_IP_COUNT="${MIN_IP_COUNT:-0}"

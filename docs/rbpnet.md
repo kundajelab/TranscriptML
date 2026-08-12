@@ -208,8 +208,8 @@ Selection asks which experimental loci are eligible and why. It writes a
 versioned `*.parquet` manifest, equivalent `*.tsv.gz`, and a
 `*.selection.json` provenance sidecar.
 
-Every selector can restrict its candidate universe to exact scanner
-annotations without regenerating the descriptive window table:
+Every selector can restrict its candidate universe by scanner annotation
+without regenerating the descriptive window table:
 
 ```bash
 transcriptml rbpnet select-regions \
@@ -220,14 +220,25 @@ transcriptml rbpnet select-regions \
   --output-prefix processed/chr21_exonic_selection
 ```
 
-Valid values are `5putr`, `cds`, `3putr`, `noncoding_exon`, `intron`, and
-`mixed`. The default is all types. Filtering is exact: for example,
-`--region-types 3putr` accepts only windows wholly contained in 3' UTR and
-does not accept a boundary-crossing `mixed` window. Include `mixed`
-explicitly when desired.
+Valid values are the biological classes `5putr`, `cds`, `3putr`,
+`noncoding_exon`, and `intron`. `mixed` is an annotation status, not a region
+class, and therefore is not a valid value for `--region-types`.
 
-The restriction is applied before each strategy's signal/statistical rules.
-Consequently, excluded windows do not affect coverage eligibility, the
+By default, a requested class includes both pure windows and mixed windows
+with a positive overlap with that class. Thus `--region-types 3putr` includes
+windows wholly contained in 3' UTR and CDS/3' UTR boundary windows. Two flags
+control boundary-crossing windows:
+
+- `--discard-mixed` retains only pure windows of the requested classes.
+- `--only-mixed` retains only boundary-crossing windows overlapping the
+  requested classes. It requires `--region-types`.
+
+The flags are mutually exclusive. Omitting `--region-types` preserves the
+complete window universe; `--discard-mixed` may still be used to remove all
+boundary-crossing windows.
+
+The overlap restriction and mixed-window policy are applied before each
+strategy's signal/statistical rules. Consequently, excluded windows do not affect coverage eligibility, the
 original selector's testing/50-nt advance, or the `peak_gray_negative` BH
 correction universe. The published IP locus-density Poisson null remains based
 on the complete locus; this option restricts which windows are tested, not how
