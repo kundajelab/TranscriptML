@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import Iterable, Iterator
 
 import h5py
 import numpy as np
@@ -210,6 +211,10 @@ def create_signal_store(
     transcripts: list[Transcript],
     sample_names: list[str],
     sample_roles: list[str],
+    *,
+    compression: str | None = "gzip",
+    compression_level: int | None = 1,
+    chunk_length: int = 1_048_576,
 ) -> h5py.File:
     """Create the canonical concatenated locus-coordinate HDF5 store."""
 
@@ -237,18 +242,153 @@ def create_signal_store(
     store.create_dataset("transcript_lengths", data=np.asarray([tx.length for tx in transcripts], dtype=np.int64))
     store.create_dataset("sample_names", data=np.asarray(sample_names, dtype=object), dtype=strings)
     store.create_dataset("sample_roles", data=np.asarray(sample_roles, dtype=object), dtype=strings)
-    chunk = min(total_length, 1_048_576)
+    compression, compression_opts = _normalize_compression(
+        compression, compression_level
+    )
+    chunk = min(total_length, int(chunk_length))
+    if chunk <= 0:
+        raise ValueError("chunk_length must be positive")
+    store.attrs["signal_compression"] = "none" if compression is None else compression
+    store.attrs["signal_compression_level"] = (
+        -1 if compression_opts is None else int(compression_opts)
+    )
+    store.attrs["signal_chunk_length"] = chunk
     store.create_dataset(
         "counts",
         shape=(len(sample_names), total_length),
         dtype=np.uint32,
         chunks=(1, chunk),
-        compression="gzip",
-        compression_opts=4,
+        compression=compression,
+        compression_opts=compression_opts,
         shuffle=True,
         fillvalue=0,
     )
     return store
+
+
+def _normalize_compression(
+    compression: str | None,
+    compression_level: int | None,
+) -> tuple[str | None, int | None]:
+    """Validate signal compression and return h5py keyword values."""
+
+    if compression is None or str(compression).strip().lower() in {
+        "none", "off", "uncompressed",
+    }:
+        if compression_level not in {None, 0}:
+            raise ValueError("compression_level is only valid with gzip")
+        return None, None
+    name = str(compression).strip().lower()
+    if name == "gzip":
+        level = 1 if compression_level is None else int(compression_level)
+        if level < 0 or level > 9:
+            raise ValueError("gzip compression_level must be between 0 and 9")
+        return name, level
+    if name == "lzf":
+        if compression_level not in {None, 0}:
+            raise ValueError("lzf does not accept a compression level")
+        return name, None
+    raise ValueError("signal compression must be one of: gzip, lzf, none")
+
+
+def _sqlite_sparse_batches(
+    cursor: sqlite3.Cursor,
+    *,
+    batch_size: int = 100_000,
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Yield sorted sparse position/count arrays from the aggregation table."""
+
+    while True:
+        rows = cursor.fetchmany(int(batch_size))
+        if not rows:
+            return
+        positions = np.fromiter(
+            (item[0] for item in rows), dtype=np.int64, count=len(rows)
+        )
+        values = np.fromiter(
+            (item[1] for item in rows), dtype=np.uint64, count=len(rows)
+        )
+        yield positions, values
+
+
+def write_sparse_signal_chunkwise(
+    dataset: h5py.Dataset,
+    row: int,
+    batches: Iterable[tuple[np.ndarray, np.ndarray]],
+    *,
+    reporter: ProgressReporter | None = None,
+) -> int:
+    """Write a sorted sparse signal row using one dense write per HDF5 chunk.
+
+    The input positions must be unique and strictly increasing across batches.
+    Only chunks containing at least one nonzero count are materialized. A
+    dense ``uint32`` buffer is retained when a sparse input batch ends partway
+    through a chunk, ensuring that even such chunks are written exactly once.
+    """
+
+    if dataset.ndim != 2 or dataset.chunks is None:
+        raise ValueError("signal dataset must be a two-dimensional chunked dataset")
+    if row < 0 or row >= dataset.shape[0]:
+        raise IndexError("signal dataset row is outside bounds")
+    row_chunk, chunk_length = (int(value) for value in dataset.chunks)
+    if row_chunk != 1:
+        raise ValueError("signal dataset must use one sample row per HDF5 chunk")
+    total_length = int(dataset.shape[1])
+    uint32_max = np.iinfo(np.uint32).max
+    active_chunk = -1
+    active_start = 0
+    active_buffer: np.ndarray | None = None
+    previous_position = -1
+    written_positions = 0
+
+    def flush() -> None:
+        nonlocal active_buffer
+        if active_buffer is None:
+            return
+        dataset[row, active_start : active_start + active_buffer.size] = active_buffer
+        active_buffer = None
+
+    for raw_positions, raw_values in batches:
+        positions = np.asarray(raw_positions, dtype=np.int64)
+        values = np.asarray(raw_values, dtype=np.uint64)
+        if positions.ndim != 1 or values.ndim != 1 or positions.shape != values.shape:
+            raise ValueError("sparse signal positions and values must be aligned vectors")
+        if positions.size == 0:
+            continue
+        if positions[0] <= previous_position or np.any(np.diff(positions) <= 0):
+            raise ValueError("sparse signal positions must be unique and strictly increasing")
+        if positions[0] < 0 or positions[-1] >= total_length:
+            raise IndexError("sparse signal position is outside dataset bounds")
+        if np.any(values == 0):
+            raise ValueError("sparse signal values must be positive")
+        if values.max(initial=0) > uint32_max:
+            raise OverflowError("a crosslink-position count exceeds uint32")
+
+        offset = 0
+        while offset < positions.size:
+            chunk_index = int(positions[offset] // chunk_length)
+            chunk_end_position = min((chunk_index + 1) * chunk_length, total_length)
+            end = int(np.searchsorted(positions, chunk_end_position, side="left"))
+            if chunk_index != active_chunk:
+                flush()
+                active_chunk = chunk_index
+                active_start = chunk_index * chunk_length
+                active_buffer = np.zeros(
+                    chunk_end_position - active_start, dtype=np.uint32
+                )
+            assert active_buffer is not None
+            local_positions = positions[offset:end] - active_start
+            active_buffer[local_positions] = values[offset:end].astype(
+                np.uint32, copy=False
+            )
+            written = end - offset
+            written_positions += written
+            if reporter is not None:
+                reporter.update(written)
+            offset = end
+        previous_position = int(positions[-1])
+    flush()
+    return written_positions
 
 
 def _flush_counts(connection: sqlite3.Connection, counts: Counter[int]) -> None:
@@ -358,17 +498,17 @@ def extract_bam_to_store(
             unit="positions",
             enabled=progress,
         )
-        while True:
-            rows = cursor.fetchmany(100_000)
-            if not rows:
-                break
-            unique_positions += len(rows)
-            positions = np.fromiter((item[0] for item in rows), dtype=np.int64, count=len(rows))
-            values64 = np.fromiter((item[1] for item in rows), dtype=np.uint64, count=len(rows))
-            if values64.max(initial=0) > np.iinfo(np.uint32).max:
-                raise OverflowError(f"a crosslink-position count in {bam_path} exceeds uint32")
-            dataset[row, positions] = values64.astype(np.uint32)
-            reporter.update(len(rows))
+        try:
+            unique_positions = write_sparse_signal_chunkwise(
+                dataset,
+                row,
+                _sqlite_sparse_batches(cursor),
+                reporter=reporter,
+            )
+        except OverflowError as exc:
+            raise OverflowError(
+                f"a crosslink-position count in {bam_path} exceeds uint32"
+            ) from exc
         reporter.close()
         connection.close()
     qc["unique_crosslink_positions"] = unique_positions
@@ -389,13 +529,15 @@ def write_ip_pooled(store: h5py.File, ip_rows: list[int], *, progress: bool = Tr
     counts = store["counts"]
     total = counts.shape[1]
     chunk = counts.chunks[1]
+    compression = counts.compression
+    compression_opts = counts.compression_opts if compression == "gzip" else None
     pooled = store.create_dataset(
         "ip_pooled",
         shape=(total,),
         dtype=np.uint32,
         chunks=(chunk,),
-        compression="gzip",
-        compression_opts=4,
+        compression=compression,
+        compression_opts=compression_opts,
         shuffle=True,
         fillvalue=0,
     )
@@ -411,5 +553,6 @@ def write_ip_pooled(store: h5py.File, ip_rows: list[int], *, progress: bool = Tr
         values = counts[ip_rows, start:end].astype(np.uint64).sum(axis=0)
         if values.max(initial=0) > np.iinfo(np.uint32).max:
             raise OverflowError("pooled IP count exceeds uint32")
-        pooled[start:end] = values.astype(np.uint32)
+        if np.any(values):
+            pooled[start:end] = values.astype(np.uint32)
     pooled.attrs["source_rows"] = np.asarray(ip_rows, dtype=np.int64)

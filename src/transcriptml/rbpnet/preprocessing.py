@@ -46,6 +46,8 @@ class PipelineConfig:
     read1_rna_strand: str = "opposite"
     min_mapq: int = 1
     exclude_duplicates: bool = True
+    signal_compression: str | None = "gzip"
+    signal_compression_level: int | None = 1
     overwrite: bool = False
     progress: bool = True
 
@@ -136,6 +138,8 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
         transcripts,
         sample_names,
         [sample.role for sample in samples],
+        compression=config.signal_compression,
+        compression_level=config.signal_compression_level,
     ) as store:
         for row, sample in enumerate(samples):
             log_progress(
@@ -195,6 +199,8 @@ def preprocess_eclip(config: PipelineConfig) -> dict:
             "read1_rna_strand": config.read1_rna_strand,
             "min_mapq": config.min_mapq,
             "exclude_duplicates": config.exclude_duplicates,
+            "signal_compression": config.signal_compression,
+            "signal_compression_level": config.signal_compression_level,
             "assignment": assignment,
         },
         "annotation": {

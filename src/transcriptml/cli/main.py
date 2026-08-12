@@ -118,6 +118,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_fold.add_argument("--n-folds", type=int, default=10)
     p_fold.add_argument("--seed", type=int, default=42)
     p_fold.add_argument("--val-offset", type=int, default=1)
+    p_plan = cv_sub.add_parser(
+        "create-chromosome-plan",
+        help="Balance complete chromosomes into an immutable N-fold CV plan",
+    )
+    p_plan.add_argument("--dataset", required=True, help="DatasetBundle directory")
+    p_plan.add_argument("--output", required=True, help="Output chromosome-plan JSON")
+    p_plan.add_argument("--n-folds", type=int, required=True)
+    p_plan.add_argument("--group-col", default="group_chromosome")
+    p_resolve = cv_sub.add_parser(
+        "resolve-plan", help="Resolve one saved chromosome CV run to split indices"
+    )
+    p_resolve.add_argument("--dataset", required=True, help="DatasetBundle directory")
+    p_resolve.add_argument("--cv-plan", required=True, help="Saved chromosome-plan JSON")
+    p_resolve.add_argument("--fold", type=int, required=True)
+    p_resolve.add_argument("--output", help="Optional output splits JSON")
     p_ensemble = cv_sub.add_parser(
         "ensemble-predict",
         help="Average predictions from fold checkpoints on one shared dataset",
@@ -176,6 +191,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("train", help="Train from a JSON/TOML config")
     p.add_argument("config")
+    p.add_argument("--cv-plan", help="Immutable chromosome CV plan JSON")
+    p.add_argument("--fold", type=int, help="Zero-based CV test fold")
+    p.add_argument("--dataset", help="Override config dataset path")
+    p.add_argument("--output-dir", help="Override config output_dir (useful for job arrays)")
 
     p = sub.add_parser("evaluate", help="Evaluate a checkpoint on a dataset bundle")
     p.add_argument("checkpoint", nargs="?", metavar="CHECKPOINT", help="Checkpoint path; prefer --checkpoint")
@@ -406,6 +425,49 @@ def main(argv: list[str] | None = None) -> None:
             )
             print(config_path)
             return
+        if args.cv_command in {"create-chromosome-plan", "resolve-plan"}:
+            from transcriptml.data.bundle import load_bundle
+            from transcriptml.workflows import (
+                create_chromosome_cv_plan,
+                load_chromosome_cv_plan,
+                resolve_chromosome_cv_plan,
+                save_chromosome_cv_plan,
+            )
+
+            bundle = load_bundle(args.dataset, mmap_mode="r")
+            if bundle.metadata is None:
+                raise SystemExit("Dataset bundle has no metadata for chromosome CV")
+            if args.cv_command == "create-chromosome-plan":
+                plan = create_chromosome_cv_plan(
+                    bundle.metadata,
+                    n_folds=args.n_folds,
+                    group_col=args.group_col,
+                )
+                output = save_chromosome_cv_plan(plan, args.output)
+                print(output)
+                return
+            plan = load_chromosome_cv_plan(args.cv_plan)
+            resolution = resolve_chromosome_cv_plan(
+                plan, bundle.metadata, fold=args.fold
+            )
+            result = {
+                "plan_id": plan.plan_id,
+                "fold": resolution.fold,
+                "validation_fold": resolution.validation_fold,
+                "chromosomes": {
+                    name: list(values) for name, values in resolution.groups.items()
+                },
+                "indices": resolution.indices,
+            }
+            if args.output:
+                Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.output).write_text(
+                    json.dumps(result, indent=2) + "\n", encoding="utf-8"
+                )
+                print(args.output)
+            else:
+                print(json.dumps(result, indent=2))
+            return
         if args.cv_command == "ensemble-predict":
             from transcriptml.progress import log_progress
             from transcriptml.training.evaluation import evaluate_fold_checkpoints
@@ -537,7 +599,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "train":
         from transcriptml.training.trainer import train_from_config
 
-        train_from_config(args.config)
+        train_from_config(
+            args.config,
+            cv_plan=args.cv_plan,
+            fold=args.fold,
+            dataset=args.dataset,
+            output_dir=args.output_dir,
+        )
         return
     if args.command == "evaluate":
         from transcriptml.progress import log_progress

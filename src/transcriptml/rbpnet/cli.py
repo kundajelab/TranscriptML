@@ -41,6 +41,18 @@ def add_rbpnet_parser(subparsers) -> None:
     )
     preprocess.add_argument("--min-mapq", type=int, default=1)
     preprocess.add_argument("--include-duplicates", action="store_true")
+    preprocess.add_argument(
+        "--signal-compression",
+        choices=("gzip", "lzf", "none"),
+        default="gzip",
+        help="HDF5 signal compression (default: gzip)",
+    )
+    preprocess.add_argument(
+        "--signal-compression-level",
+        type=int,
+        default=None,
+        help="gzip level 0-9 (default: 1; invalid for lzf/none)",
+    )
     preprocess.add_argument("--overwrite", action="store_true")
     preprocess.add_argument("--no-progress", action="store_true")
 
@@ -157,6 +169,9 @@ def run_rbpnet_command(args: argparse.Namespace, parser: argparse.ArgumentParser
         if args.rbpnet_command == "preprocess":
             from transcriptml.rbpnet.preprocessing import PipelineConfig, preprocess_eclip
 
+            compression_level = args.signal_compression_level
+            if compression_level is None and args.signal_compression == "gzip":
+                compression_level = 1
             qc = preprocess_eclip(PipelineConfig(
                 genome_fasta=args.genome_fasta,
                 gtf=args.gtf,
@@ -167,6 +182,8 @@ def run_rbpnet_command(args: argparse.Namespace, parser: argparse.ArgumentParser
                 read1_rna_strand=args.read1_rna_strand,
                 min_mapq=args.min_mapq,
                 exclude_duplicates=not args.include_duplicates,
+                signal_compression=args.signal_compression,
+                signal_compression_level=compression_level,
                 overwrite=args.overwrite,
                 progress=not args.no_progress,
             ))

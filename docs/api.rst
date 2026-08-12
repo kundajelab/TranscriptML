@@ -173,6 +173,10 @@ Plotting
 Run setup
 ---------
 
+.. automodule:: transcriptml.workflows.chromosome_cv
+   :members: ChromosomeCVPlan, ChromosomeCVResolution, create_chromosome_cv_plan, save_chromosome_cv_plan, load_chromosome_cv_plan, resolve_chromosome_cv_plan
+   :member-order: bysource
+
 .. automodule:: transcriptml.workflows.init_run
    :members: init_run
    :member-order: bysource

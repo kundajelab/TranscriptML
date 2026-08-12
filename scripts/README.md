@@ -17,6 +17,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `motif_ablation_by_fold.sh` and `motif_ablation_all_folds.sh`: motif ablations across the configured motif list.
 - `motif_epistasis_by_fold.sh` and `motif_epistasis_all_folds.sh`: motif epistasis across the configured motif-pair list.
 - `mpra/`: MPRA 3-prime UTR insert workflows for building 4-channel LegNet input, training LegNet, and running single-nucleotide ISM. See `mpra/README.md`.
+- `rbpnet/`: eCLIP preprocessing, scan/selection/bundle construction, immutable balanced chromosome CV planning, and one RBPNet training job per chromosome fold. See `rbpnet/README.md`.
 
 ## Configure A Run
 

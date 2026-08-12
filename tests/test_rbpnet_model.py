@@ -21,6 +21,11 @@ from transcriptml.rbpnet.losses import (
 from transcriptml.training.splits import group_split_indices, validate_group_disjoint
 from transcriptml.training.evaluation import evaluate_checkpoint
 from transcriptml.training.trainer import train_model
+from transcriptml.workflows.chromosome_cv import (
+    create_chromosome_cv_plan,
+    load_chromosome_cv_plan,
+    save_chromosome_cv_plan,
+)
 
 
 def _synthetic_bundle(n=9, length=16, jitter=2):
@@ -66,7 +71,7 @@ def _synthetic_bundle(n=9, length=16, jitter=2):
                 "profile_materialized_end": materialized_start + width,
                 "group_gene_id": f"g{index // 3}",
                 "group_transcript_id": f"tx{index // 3}",
-                "group_chromosome": "chr1",
+                "group_chromosome": f"chr{index // 3 + 1}",
             }
         )
     arrays = {
@@ -429,3 +434,50 @@ def test_tiny_batch_can_overfit():
         step(True)
     final = step(False)
     assert final < initial
+
+
+def test_rbpnet_training_consumes_saved_chromosome_cv_plan(tmp_path):
+    bundle = _synthetic_bundle()
+    plan_path = save_chromosome_cv_plan(
+        create_chromosome_cv_plan(
+            bundle.metadata, n_folds=3, group_col="group_chromosome"
+        ),
+        tmp_path / "cv3.json",
+    )
+    result = train_model(
+        bundle,
+        {
+            "dataset": "unused",
+            "output_dir": str(tmp_path / "fold1"),
+            "batch_size": 3,
+            "epochs": 1,
+            "patience": 0,
+            "progress": False,
+            "learning_rate": 0.005,
+            "model": {
+                "name": "rbpnet",
+                "params": {
+                    "n_filters": 8,
+                    "initial_kernel_size": 3,
+                    "n_residual_blocks": 1,
+                    "residual_kernel_size": 3,
+                    "dilations": [1],
+                    "normalization": "none",
+                    "dropout": 0.0,
+                    "profile_head_kernel_size": 3,
+                    "profile_length": 16,
+                    "enrichment_head_type": "none",
+                },
+            },
+            "loss": {"name": "rbpnet"},
+            "cv_plan": str(plan_path),
+            "fold": 1,
+        },
+    )
+    assert result["summary"]["split_source_used"] == "cv_plan"
+    assert result["summary"]["cv_plan_id"] == load_chromosome_cv_plan(
+        plan_path
+    ).plan_id
+    assert result["summary"]["fold"] == 1
+    assert result["summary"]["split_group_col"] == "group_chromosome"
+    assert result["summary"]["split_counts"] == {"train": 3, "val": 3, "test": 3}

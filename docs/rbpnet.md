@@ -130,6 +130,15 @@ Each sample's `effective_library_size` is exactly the number of retained read1
 Pooled-IP CPM uses the sum of IP counts divided by the sum of IP effective
 library sizes.
 
+Signal rows are sparse-aggregated and then written one complete touched HDF5
+chunk at a time. Zero-only chunks retain the HDF5 fill value and are not
+allocated. The default is shuffled gzip level 1, chosen to reduce write and
+slice-decompression time while retaining compact sparse storage. Use
+`--signal-compression gzip --signal-compression-level 4` for smaller but slower
+files, `--signal-compression lzf` for faster/larger files, or
+`--signal-compression none` when storage is unimportant. Compression and chunk
+length are recorded as `signals.h5` attributes and in preprocessing provenance.
+
 ### HDF5 signal layout
 
 HDF5 is a hierarchical binary container: datasets behave like typed,
@@ -547,6 +556,30 @@ Every non-random split is checked for group overlap. Row-random splitting is
 rejected unless `allow_random_window_split=true` explicitly acknowledges the
 leakage risk. Replicate-specific selection rows describing an identical locus
 are deduplicated by default while retaining the complete replicate axis.
+
+For chromosome cross-validation, create one plan from the final bundle and
+reuse it for every training job:
+
+```bash
+transcriptml cv create-chromosome-plan \
+  --dataset data/rbpnet \
+  --group-col group_chromosome \
+  --n-folds 5 \
+  --output runs/rbpnet/cv5.json
+
+transcriptml train configs/rbpnet/train_config.json \
+  --dataset data/rbpnet \
+  --cv-plan runs/rbpnet/cv5.json \
+  --fold 0 \
+  --output-dir runs/rbpnet/fold0/model
+```
+
+Chromosomes are sorted by decreasing example count and greedily assigned to
+the currently smallest fold group, with deterministic ties. Run `k` uses group
+`k` for test, `(k+1) mod N` for validation, and every remaining group for
+training. Resolution verifies that the dataset's chromosome membership and
+counts still exactly match the immutable, content-hashed plan. Training records
+both the plan path and its validated `plan_id` in summaries and checkpoints.
 
 AdamW, Adam, and SGD; plateau, cosine, and step schedulers; clipping; early
 stopping; device selection; DataLoader workers; seeds; and mixed precision are

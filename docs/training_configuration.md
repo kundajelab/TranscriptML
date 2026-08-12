@@ -196,6 +196,8 @@ above.
 | `max_train_jitter` | integer | `0` | Structured RBPNet shift range; cannot exceed the bundle's materialized margin. Evaluation remains shift zero. |
 | `deduplicate_loci` | boolean | `true` | Collapse repeated eligibility rows for an identical RBPNet locus while retaining all replicate arrays. |
 | `allow_random_window_split` | boolean | `false` | Explicitly permit unsafe RBPNet row-random splitting. Grouped splitting is the safe default. |
+| `cv_plan` | path or `null` | `null` | Saved balanced chromosome CV plan. Must be provided together with `fold`; it takes precedence over `split_source`. |
+| `fold` | integer or `null` | `null` | Zero-based chromosome CV test-fold index. Validation is the following fold modulo `n_folds`. |
 
 The canonical model mapping contains a registered `name` and a `params`
 mapping:
@@ -531,6 +533,50 @@ bundle or constructs them from the `split` block.
 Cross-validation fold preparation writes `splits.json` inside each fold bundle.
 The usual CV workflow therefore uses those fold assignments under the default
 `"auto"` setting.
+
+### Balanced chromosome CV plans
+
+Create one content-hashed plan from a dataset's chromosome grouping metadata:
+
+```bash
+transcriptml cv create-chromosome-plan \
+  --dataset data/rbpnet \
+  --group-col group_chromosome \
+  --n-folds 5 \
+  --output cv/cv5.json
+```
+
+The JSON records the grouping column, example count on every chromosome,
+chromosome membership and total examples for every fold group, algorithm and
+tie-breaking rules, format and TranscriptML versions, and a SHA-256 `plan_id`.
+Generation sorts chromosomes from largest to smallest and assigns each to the
+group with the smallest current example count; ties use chromosome name and
+then fold index deterministically. This balances examples rather than numbers
+of chromosomes. Plans require at least three folds and at least one chromosome
+per fold. The plan path and validated `plan_id` are recorded in training
+summaries and checkpoints.
+
+For run `k`, test is group `k`, validation is `(k+1) mod N`, and training is all
+remaining groups. Inspect or materialize one resolution with:
+
+```bash
+transcriptml cv resolve-plan \
+  --dataset data/rbpnet --cv-plan cv/cv5.json --fold 0 \
+  --output cv/fold0_splits.json
+```
+
+Training accepts overrides suitable for a Slurm job array:
+
+```bash
+transcriptml train configs/rbpnet/train_config.json \
+  --dataset data/rbpnet \
+  --cv-plan cv/cv5.json \
+  --fold "${SLURM_ARRAY_TASK_ID}" \
+  --output-dir "cv/fold${SLURM_ARRAY_TASK_ID}/model"
+```
+
+Resolution rejects missing chromosomes, new chromosomes, or changed example
+counts rather than silently applying an obsolete plan.
 
 ### Random Splits
 

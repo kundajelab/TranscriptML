@@ -160,6 +160,26 @@ def _select_rbpnet_splits(
     bundle: DatasetBundle,
     cfg,
 ) -> tuple[dict[str, list[int]], str, str, bool]:
+    if getattr(cfg, "cv_plan", None) is not None or getattr(cfg, "fold", None) is not None:
+        if getattr(cfg, "cv_plan", None) is None or getattr(cfg, "fold", None) is None:
+            raise ValueError("cv_plan and fold must be provided together")
+        if bundle.metadata is None:
+            raise ValueError("chromosome CV requires RBPNet bundle metadata")
+        from transcriptml.workflows.chromosome_cv import (
+            load_chromosome_cv_plan,
+            resolve_chromosome_cv_plan,
+        )
+
+        plan = load_chromosome_cv_plan(cfg.cv_plan)
+        resolution = resolve_chromosome_cv_plan(
+            plan, bundle.metadata, fold=cfg.fold
+        )
+        return (
+            normalize_splits(resolution.indices),
+            "cv_plan",
+            plan.group_col,
+            False,
+        )
     source = str(cfg.split_source or "auto").strip().lower()
     if source not in {"auto", "bundle", "config"}:
         raise ValueError("split_source must be one of: auto, bundle, config")
@@ -178,6 +198,16 @@ def _select_rbpnet_splits(
             raise ValueError("leakage validation requires RBPNet bundle metadata")
         validate_group_disjoint(splits, bundle.metadata, group_col=group_col)
     return splits, source_used, group_col, allow_random
+
+
+def _cv_plan_id(cfg) -> str | None:
+    """Return the validated plan identifier recorded by CV training artifacts."""
+
+    if getattr(cfg, "cv_plan", None) is None:
+        return None
+    from transcriptml.workflows.chromosome_cv import load_chromosome_cv_plan
+
+    return load_chromosome_cv_plan(cfg.cv_plan).plan_id
 
 
 def _deduplicate_splits(
@@ -433,6 +463,7 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
         enrichment_enabled=model.enrichment_enabled,
     ).to(device)
     splits, split_source, group_col, random_split = _select_rbpnet_splits(bundle, cfg)
+    cv_plan_id = _cv_plan_id(cfg)
     splits, n_deduplicated = _deduplicate_splits(
         bundle,
         splits,
@@ -544,6 +575,7 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
         checkpoint_extra = {
             "splits": splits,
             "split_source_used": split_source,
+            "cv_plan_id": cv_plan_id,
             "train_config": asdict(cfg),
             "loss_config": loss_config.to_dict(
                 enrichment_enabled=model.enrichment_enabled
@@ -636,6 +668,9 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
         "mixed_precision": mixed_precision,
         "max_train_jitter": train_dataset.max_train_jitter,
         "split_source_used": split_source,
+        "cv_plan": cfg.cv_plan,
+        "cv_plan_id": cv_plan_id,
+        "fold": cfg.fold,
         "split_group_col": group_col,
         "unsafe_random_window_split": random_split,
         "split_counts": split_counts,

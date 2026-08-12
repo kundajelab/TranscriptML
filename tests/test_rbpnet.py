@@ -31,6 +31,7 @@ from transcriptml.rbpnet.signals import (
     extract_bam_to_store,
     five_prime_reference_position,
     read1_rna_strand,
+    write_sparse_signal_chunkwise,
 )
 from transcriptml.rbpnet.windows import WindowScanConfig, generate_window_bounds, scan_windows
 
@@ -186,6 +187,56 @@ def test_bam_assignment_reports_transcript_incompatibility(tmp_path):
     assert qc["retained"] == 1
     assert qc["transcript_incompatible"] == 1
     assert counts.tolist() == [1]
+
+
+@pytest.mark.parametrize(
+    ("compression", "level"),
+    [("gzip", 1), ("gzip", 4), ("lzf", None), (None, None)],
+)
+def test_chunkwise_sparse_signal_write_matches_fancy_indexing_and_skips_empty_chunks(
+    tmp_path, compression, level
+):
+    positions = np.asarray([1, 7, 8, 15, 33, 39], dtype=np.int64)
+    values = np.asarray([2, 4, 1, 8, 3, 9], dtype=np.uint64)
+    expected = np.zeros(40, dtype=np.uint32)
+    expected[positions] = values.astype(np.uint32)
+    path = tmp_path / f"signal_{compression or 'none'}_{level}.h5"
+    with h5py.File(path, "w") as store:
+        kwargs = {"compression": compression, "shuffle": compression is not None}
+        if compression == "gzip":
+            kwargs["compression_opts"] = level
+        dataset = store.create_dataset(
+            "counts",
+            shape=(1, 40),
+            dtype=np.uint32,
+            chunks=(1, 8),
+            fillvalue=0,
+            **kwargs,
+        )
+        batches = [
+            (positions[:3], values[:3]),
+            (positions[3:5], values[3:5]),
+            (positions[5:], values[5:]),
+        ]
+        assert write_sparse_signal_chunkwise(dataset, 0, batches) == len(positions)
+        np.testing.assert_array_equal(dataset[0], expected)
+        # Positions touch chunks 0, 1, and 4. Chunks 2 and 3 stay at the
+        # HDF5 fill value and are never explicitly allocated.
+        if hasattr(dataset.id, "get_num_chunks"):
+            assert dataset.id.get_num_chunks() == 3
+
+
+def test_chunkwise_sparse_signal_write_validates_sorted_unique_positions(tmp_path):
+    with h5py.File(tmp_path / "invalid.h5", "w") as store:
+        dataset = store.create_dataset(
+            "counts", shape=(1, 16), dtype=np.uint32, chunks=(1, 8), fillvalue=0
+        )
+        with pytest.raises(ValueError, match="strictly increasing"):
+            write_sparse_signal_chunkwise(
+                dataset,
+                0,
+                [(np.asarray([4, 3]), np.asarray([1, 1]))],
+            )
 
 
 def test_gene_space_bam_assignment_retains_intronic_and_spliced_reads(tmp_path):
