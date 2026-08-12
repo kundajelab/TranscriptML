@@ -92,6 +92,26 @@ def test_evaluate_cli_resolves_named_and_legacy_positional_args():
     mixed = parser.parse_args(["evaluate", "model/best.pt", "data/saluki", "--out-csv", "eval/predictions.csv"])
     assert _resolve_evaluate_args(mixed, parser)["out_csv"] == "eval/predictions.csv"
 
+    report = parser.parse_args(
+        [
+            "evaluate",
+            "--checkpoint",
+            "model/best.pt",
+            "--dataset",
+            "data/rbpnet",
+            "--out-dir",
+            "eval/report",
+            "--save-profiles",
+        ]
+    )
+    assert _resolve_evaluate_args(report, parser) == {
+        "checkpoint": "model/best.pt",
+        "dataset": "data/rbpnet",
+        "out_dir": "eval/report",
+    }
+    assert report.split is None
+    assert report.save_profiles is True
+
 
 def test_evaluate_cli_rejects_conflicting_named_and_positional_args():
     parser = build_parser()

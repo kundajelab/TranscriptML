@@ -11,8 +11,9 @@ from transcriptml.models.rbpnet import (
     SameLengthConvTranspose1d,
     SamePadConv1d,
 )
-from transcriptml.models.registry import build_model
+from transcriptml.models.registry import build_model, load_checkpoint
 from transcriptml.rbpnet.dataset import RBPNetDataset, collate_rbpnet
+from transcriptml.rbpnet.evaluation import evaluate_rbpnet_report
 from transcriptml.rbpnet.losses import (
     RBPNetObjective,
     multinomial_nll,
@@ -65,6 +66,8 @@ def _synthetic_bundle(n=9, length=16, jitter=2):
                 "transcript_anchor": anchor,
                 "selection_start": selection[0],
                 "selection_end": selection[1],
+                "selection_state": ("peak", "gray", "negative")[index % 3],
+                "region_type": ("cds", "3putr", "mixed")[index % 3],
                 "sequence_materialized_start": materialized_start,
                 "sequence_materialized_end": materialized_start + width,
                 "profile_materialized_start": materialized_start,
@@ -388,6 +391,13 @@ def test_group_split_and_structured_training_profile_only_and_enrichment(tmp_pat
     assert (tmp_path / "enrichment" / "test_predictions.csv").is_file()
 
     bundle_dir = tmp_path / "bundle"
+    # Deliberately disagree with the checkpoint: RBPNet evaluation must use
+    # the immutable training artifact and never silently use bundle.splits.
+    bundle.splits = {
+        "train": list(range(1, len(bundle.ids) - 1)),
+        "val": [len(bundle.ids) - 1],
+        "test": [0],
+    }
     save_bundle(bundle, bundle_dir)
     predictions_path = tmp_path / "checkpoint_predictions.csv"
     evaluated = evaluate_checkpoint(
@@ -397,9 +407,57 @@ def test_group_split_and_structured_training_profile_only_and_enrichment(tmp_pat
         batch_size=3,
         progress=False,
     )
-    assert evaluated["pi"].shape == (len(bundle.ids),)
-    assert evaluated["enrichment_logit"].shape == (len(bundle.ids),)
+    _, saved_checkpoint = load_checkpoint(
+        tmp_path / "enrichment" / "best.pt", map_location="cpu"
+    )
+    checkpoint_test = saved_checkpoint["splits"]["test"]
+    assert evaluated["indices"] == checkpoint_test
+    assert evaluated["pi"].shape == (len(checkpoint_test),)
+    assert evaluated["enrichment_logit"].shape == (len(checkpoint_test),)
     assert predictions_path.is_file()
+
+    report_dir = tmp_path / "evaluation_report"
+    report = evaluate_checkpoint(
+        tmp_path / "enrichment" / "best.pt",
+        bundle_dir,
+        out_dir=report_dir,
+        batch_size=3,
+        save_profiles=True,
+        representative_per_tier=1,
+        progress=False,
+    )
+    assert report["indices"] == checkpoint_test
+    assert report["indices"] != bundle.splits["test"]
+    for name in (
+        "summary.json",
+        "examples.parquet",
+        "stratified_metrics.parquet",
+        "calibration.parquet",
+    ):
+        assert (report_dir / name).is_file()
+    assert (report_dir / "plots" / "profile_performance_vs_read_depth.png").is_file()
+    assert (report_dir / "plots" / "enrichment_calibration.png").is_file()
+    assert (
+        report_dir / "plots" / "stratified_performance_summaries.png"
+    ).is_file()
+    predicted_ip = np.load(
+        report_dir / "predicted_ip_profiles.npy", mmap_mode="r"
+    )
+    assert isinstance(predicted_ip, np.memmap)
+    assert predicted_ip.shape == (len(checkpoint_test), 16)
+
+    profile_report_dir = tmp_path / "profile_evaluation_report"
+    evaluate_checkpoint(
+        tmp_path / "profile" / "best.pt",
+        bundle_dir,
+        out_dir=profile_report_dir,
+        representative_per_tier=0,
+        progress=False,
+    )
+    import pyarrow.parquet as pq
+
+    assert pq.read_table(profile_report_dir / "calibration.parquet").num_rows == 0
+    assert not (profile_report_dir / "plots" / "enrichment_calibration.png").exists()
 
     unsafe = dict(base_config)
     unsafe["output_dir"] = str(tmp_path / "unsafe")
@@ -434,6 +492,54 @@ def test_tiny_batch_can_overfit():
         step(True)
     final = step(False)
     assert final < initial
+
+
+def test_rbpnet_report_gracefully_handles_one_replicate_and_optional_metadata(
+    tmp_path,
+):
+    original = _synthetic_bundle(n=4)
+    arrays = dict(original.arrays)
+    arrays["ip_profiles"] = arrays["ip_profiles"][:, :1, :]
+    arrays["profile_ip_totals"] = arrays["profile_ip_totals"][:, :1]
+    arrays["selection_ip_counts"] = arrays["selection_ip_counts"][:, :1]
+    config = dict(original.config)
+    config["sample_metadata"] = {
+        "sminput": {"name": "sminput", "effective_library_size": 100},
+        "ip": [{"name": "ip1", "effective_library_size": 50}],
+        "ip_axis_order": ["ip1"],
+    }
+    metadata = [
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"selection_state", "region_type"}
+        }
+        for row in original.metadata
+    ]
+    bundle = DatasetBundle(
+        X=original.X,
+        ids=original.ids,
+        metadata=metadata,
+        arrays=arrays,
+        config=config,
+    )
+    result = evaluate_rbpnet_report(
+        _small_model(enrichment="none"),
+        {"splits": {"train": [0, 1], "val": [2], "test": [3]}},
+        bundle,
+        tmp_path / "report",
+        representative_per_tier=0,
+        progress=False,
+    )
+    assert result["indices"] == [3]
+    summary = result["summary"]
+    assert summary["enrichment_head_enabled"] is False
+    assert "eta_vs_empirical_enrichment.png" in summary["plots"]["skipped"]
+    assert "stratified_performance_summaries.png" in summary["plots"]["skipped"]
+    assert not any(
+        row["track"] == "replicate_ceiling"
+        for row in summary["overall_metrics"]
+    )
 
 
 def test_rbpnet_training_consumes_saved_chromosome_cv_plan(tmp_path):

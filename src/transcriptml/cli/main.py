@@ -57,16 +57,30 @@ def _resolve_named_or_positional_args(
 def _resolve_evaluate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> dict[str, str]:
     """Resolve evaluate paths from named flags or legacy positional arguments."""
 
-    return _resolve_named_or_positional_args(
+    resolved = _resolve_named_or_positional_args(
         args,
         parser,
         command="evaluate",
         specs=[
             ("checkpoint", "checkpoint_flag", "--checkpoint", "CHECKPOINT"),
             ("dataset", "dataset_flag", "--dataset", "DATASET"),
-            ("out_csv", "out_csv_flag", "--out-csv", "OUT_CSV"),
         ],
     )
+    positional_csv = getattr(args, "out_csv", None)
+    flagged_csv = getattr(args, "out_csv_flag", None)
+    out_dir = getattr(args, "out_dir_flag", None)
+    if positional_csv is not None and flagged_csv is not None and str(positional_csv) != str(flagged_csv):
+        parser.error("evaluate got both --out-csv and positional OUT_CSV; use only one")
+    out_csv = flagged_csv if flagged_csv is not None else positional_csv
+    if out_csv is not None and out_dir is not None:
+        parser.error("evaluate accepts either --out-csv or --out-dir, not both")
+    if out_csv is None and out_dir is None:
+        parser.error("evaluate requires --out-dir, --out-csv, or legacy positional OUT_CSV")
+    if out_dir is not None:
+        resolved["out_dir"] = out_dir
+    else:
+        resolved["out_csv"] = out_csv
+    return resolved
 
 
 def _resolve_interpret_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> dict[str, str]:
@@ -203,9 +217,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoint", dest="checkpoint_flag", help="Checkpoint path")
     p.add_argument("--dataset", dest="dataset_flag", help="Dataset bundle directory")
     p.add_argument("--out-csv", dest="out_csv_flag", help="Prediction CSV output path")
-    p.add_argument("--split")
+    p.add_argument(
+        "--out-dir",
+        dest="out_dir_flag",
+        help="Structured RBPNet evaluation report directory",
+    )
+    p.add_argument(
+        "--split",
+        help=(
+            "Split to evaluate; RBPNet accepts train/val/test/all and defaults "
+            "to checkpoint-recorded test indices"
+        ),
+    )
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--device", default="cpu")
+    p.add_argument(
+        "--save-profiles",
+        action="store_true",
+        help="Save RBPNet target/control/IP predicted profiles as memory-mappable .npy arrays",
+    )
+    p.add_argument("--calibration-bins", type=int, default=10)
+    p.add_argument("--enrichment-pseudocount", type=float, default=0.5)
+    p.add_argument("--representative-seed", type=int, default=123)
+    p.add_argument("--representative-per-tier", type=int, default=3)
+    p.add_argument("--representative-min-profile-count", type=int, default=10)
 
     for name, help_text in [
         ("ism", "Run single-nucleotide ISM"),
@@ -615,11 +650,21 @@ def main(argv: list[str] | None = None) -> None:
         result = evaluate_checkpoint(
             evaluate_paths["checkpoint"],
             evaluate_paths["dataset"],
-            evaluate_paths["out_csv"],
+            evaluate_paths.get("out_csv"),
+            out_dir=evaluate_paths.get("out_dir"),
             split=args.split,
             batch_size=args.batch_size,
             device=args.device,
+            save_profiles=args.save_profiles,
+            calibration_bins=args.calibration_bins,
+            enrichment_pseudocount=args.enrichment_pseudocount,
+            representative_seed=args.representative_seed,
+            representative_per_tier=args.representative_per_tier,
+            representative_min_profile_count=args.representative_min_profile_count,
         )
+        if "report_dir" in result:
+            log_progress(f"evaluate: wrote RBPNet report to {result['report_dir']}")
+            return
         non_summary_fields = {
             "predictions", "targets", "indices", "example_ids", "pi",
             "enrichment_logit", "depth_offsets", "replicate_names",

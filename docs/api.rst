@@ -78,6 +78,14 @@ RBPNet/eCLIP data
    :members: train_rbpnet_model, evaluate_rbpnet_model, write_rbpnet_predictions
    :member-order: bysource
 
+.. automodule:: transcriptml.rbpnet.evaluation
+   :members: evaluate_rbpnet_report, resolve_rbpnet_checkpoint_indices
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.evaluation_metrics
+   :members: profile_metrics, enrichment_metrics, replicate_ceiling_metrics, aggregate_observations, calibration_rows, select_representative_examples
+   :member-order: bysource
+
 Models
 ------
 

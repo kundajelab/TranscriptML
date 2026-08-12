@@ -12,6 +12,7 @@ __all__ = [
     "SelectionConfig",
     "WindowScanConfig",
     "make_rbpnet_bundle",
+    "evaluate_rbpnet_report",
     "evaluate_rbpnet_model",
     "preprocess_eclip",
     "scan_windows",
@@ -64,4 +65,8 @@ def __getattr__(name: str):
             "train_rbpnet_model": train_rbpnet_model,
             "write_rbpnet_predictions": write_rbpnet_predictions,
         }[name]
+    if name == "evaluate_rbpnet_report":
+        from transcriptml.rbpnet.evaluation import evaluate_rbpnet_report
+
+        return evaluate_rbpnet_report
     raise AttributeError(f"module 'transcriptml.rbpnet' has no attribute {name!r}")

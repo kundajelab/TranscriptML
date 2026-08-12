@@ -468,7 +468,9 @@ transcriptml train configs/rbpnet/train_config.json
 transcriptml evaluate \
   --checkpoint runs/rbpnet/model/best.pt \
   --dataset data/rbpnet_chr21 \
-  --out-csv runs/rbpnet/predictions.csv
+  --out-dir runs/rbpnet/evaluation \
+  --split test \
+  --save-profiles
 ```
 
 `transcriptml models show rbpnet --json` prints every architectural default.
@@ -627,6 +629,108 @@ optimizer, samples, coordinate space, split, receptive-field, and training
 provenance. Evaluation CSVs contain `pi`, optional `eta`, and each replicate's
 depth-adjusted predicted IP fraction. The raw structured tensors remain
 available through the Python model output for future attribution work.
+
+### Scientific evaluation reports
+
+For an RBPNet checkpoint, `transcriptml evaluate` writes a structured report
+when given `--out-dir`. The default split is `test`; `--split` accepts `train`,
+`val`, `test`, or `all`. These indices are resolved **only** from `splits` stored
+in the checkpoint used for training. RBPNet evaluation deliberately does not
+fall back to `bundle.splits`, because a reused or edited bundle must not change
+which observations are considered held out. Evaluation always uses jitter
+shift zero and is deterministic apart from platform-level floating-point
+details.
+
+```text
+evaluation/
+  summary.json
+  examples.parquet
+  stratified_metrics.parquet
+  calibration.parquet
+  plots/
+  predicted_target_profiles.npy   # only with --save-profiles
+  predicted_control_profiles.npy
+  predicted_ip_profiles.npy
+```
+
+The optional profile arrays are normalized positional probabilities (`float32`)
+with shape `(N_evaluated, profile_length)`; each row sums to one over valid
+positions. Their first axis is exactly `evaluation_row` in
+`examples.parquet`; they can be opened without loading them into memory using
+`np.load(path, mmap_mode="r")`. `predicted_ip_profiles.npy` stores the final
+target/control mixture, not just the latent target component.
+
+For observed counts `y`, total `N`, empirical distribution `q=y/N`, predicted
+distribution `p`, uniform distribution `u` over valid positions, and predicted
+control distribution `p_control`, profile metrics use natural logarithms:
+
+| Metric | Definition |
+| --- | --- |
+| complete multinomial NLL | `-log Multinomial(y | N, p)`, including the count combinatorial constant |
+| KL/read (saturated gap) | `(NLL_model - NLL_saturated) / N = KL(q || p)` |
+| JSD | `0.5 KL(q || m) + 0.5 KL(p || m)`, where `m=(q+p)/2` |
+| information gain over uniform/read | `(LL_model - LL_uniform) / N` |
+| pooled-IP information gain over control/read | `(LL_predicted_IP - LL_predicted_control) / N` |
+| Wasserstein | one-dimensional earth-mover distance between `q` and `p`, in nucleotides |
+
+Empirical-profile metrics are undefined and recorded as null/NaN when the
+observed profile total is zero. Counts outside a validity mask are rejected;
+all probability distributions are restricted and normalized over valid
+positions. The report always exposes the scientifically comparable complete
+NLL, while its checkpoint-objective reconstruction honors the checkpoint's
+`include_multinomial_constant` and `include_binomial_constant` settings.
+
+With the enrichment head enabled, the report retains the complete
+replicate-aware binomial NLL and compares it with the depth-only null
+`eta=0`. Its information gain is
+`(LL_model - LL_eta=0) / (IP+SMInput)`. The descriptive empirical enrichment is
+
+```text
+eta_hat = log((IP + c) / (SMInput + c)) - log(L_IP / L_SM)
+```
+
+where `c=0.5` by default and is configurable with
+`--enrichment-pseudocount`. This pseudocount is used only for Pearson/Spearman
+diagnostics, never for either likelihood. `calibration.parquet` contains both
+locus rows and fixed-width predicted-probability bins. Each bin uses
+read-weighted summaries:
+
+```text
+predicted_bin = sum(N * p) / sum(N)
+observed_bin  = sum(IP) / sum(N)
+```
+
+With multiple IP replicates, each observed replicate is also compared with the
+pooled profile of all other replicates. The resulting leave-one-replicate-out
+JSD and Wasserstein values are an experimental reproducibility reference, not
+a guaranteed upper bound on every model metric.
+
+`stratified_metrics.parquet` is long-form. It reports locus macro (replicates
+within a locus averaged first), gene macro (loci within a gene averaged first),
+and read micro summaries. Read micro likelihood and information values sum the
+appropriate likelihood/information numerators and divide by contributing
+reads; JSD and Wasserstein use read-count-weighted means. Every row records its
+informative observation, locus, gene, and read counts. Summaries include
+pooled-IP and SMInput read-depth bins, chromosome, and optional
+`selection_state` and `region_type` strata.
+
+`examples.parquet` is the inspectable per-locus table. It includes bundle and
+evaluation indices, stable example and biological identifiers, selection
+metadata where available, profile and selection-interval counts, effective
+library sizes/depth offsets, `pi`, optional `eta` and replicate predicted IP
+fractions, every per-example profile metric, and replicate-ceiling metrics.
+`summary.json` records metric definitions, sample depths, aggregate metrics,
+correlations, representative-example sampling, plot provenance, and all output
+paths.
+
+The plot collection includes performance versus depth, metric distributions,
+eta agreement, read-weighted calibration, fixed-seed representative profiles
+(default: at least 10 pooled-IP and 10 SMInput profile reads),
+selection/region stratification, and `pi` diagnostics. Missing optional
+metadata, a disabled enrichment head, or a single IP replicate causes only the
+inapplicable plot/metric to be skipped; `summary.json` records why. The legacy
+`--out-csv` route remains available for compact `pi`/`eta` predictions, but the
+structured report is preferred for scientific evaluation.
 
 Profile-only model block:
 
