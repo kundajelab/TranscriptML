@@ -1,14 +1,15 @@
 # Training Configuration
 
-TranscriptML model training is controlled by a JSON or TOML file. The same top-level
-training settings are used for Saluki and MPRA-LegNet runs; the main difference
-between the workflows is the model selected under `model`.
+TranscriptML model training is controlled by a JSON or TOML file. The same
+top-level training settings are used across Saluki, MPRA-LegNet, and structured
+RBPNet runs; the model and loss determine the batch contract.
 
 Create a starter JSON config with:
 
 ```bash
 transcriptml init-run --workflow saluki --out-dir configs/saluki
 transcriptml init-run --workflow legnet --out-dir configs/legnet
+transcriptml init-run --workflow rbpnet --out-dir configs/rbpnet
 ```
 
 Then train directly:
@@ -105,6 +106,60 @@ Fields omitted from this starter, such as `gradient_clip_norm`,
 section. The Sherlock MPRA workflow has its own editable base config at
 `scripts/mpra/example_legnet_train_config.json`.
 
+## RBPNet Starter Configuration
+
+`transcriptml init-run --workflow rbpnet` selects the structured RBPNet trainer.
+Edit the bundle path, output path, and `profile_length` to match the bundle:
+
+```json
+{
+  "dataset": "__EDIT_ME_RBPNET_BUNDLE_DIR__",
+  "output_dir": "__EDIT_ME_RUN_DIR__/model",
+  "model": {
+    "name": "rbpnet",
+    "params": {
+      "profile_length": 300,
+      "enrichment_head_type": "none"
+    }
+  },
+  "batch_size": 64,
+  "epochs": 100,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0,
+  "optimizer": {"name": "adamw"},
+  "lr_scheduler": {"name": "reduce_on_plateau", "patience": 3},
+  "mixed_precision": false,
+  "gradient_clip_norm": 0.5,
+  "patience": 10,
+  "monitor": "val_loss",
+  "loss": {
+    "name": "rbpnet",
+    "lambda_ip_profile": 1.0,
+    "lambda_sm_profile": 1.0,
+    "lambda_enrichment": 1.0
+  },
+  "device": "auto",
+  "num_workers": 0,
+  "mmap_mode": "r",
+  "seed": 123,
+  "max_train_jitter": 0,
+  "deduplicate_loci": true,
+  "split_source": "config",
+  "split": {
+    "method": "group",
+    "group_col": "group_gene_id",
+    "val_frac": 0.1,
+    "test_frac": 0.1
+  }
+}
+```
+
+Set `enrichment_head_type` to `linear` (or `mlp`) to add the independent
+replicate-aware enrichment likelihood. The three RBPNet component weights are
+independent; `lambda_enrichment` has no effect when the head is disabled. See
+the [RBPNet guide](rbpnet.md#rbpnet-model-and-training) for the equations,
+bundle fields, and jitter semantics.
+
 ## Top-Level Training Settings
 
 The following fields are accepted by `transcriptml train`. The default column
@@ -116,11 +171,14 @@ above.
 | --- | --- | --- | --- |
 | `dataset` | path | required | Dataset bundle containing `X.npy` and its sidecar files. |
 | `output_dir` | path | required | Directory for checkpoints, history, split information, predictions, and the run summary. |
-| `model` | mapping or string | `small_cnn` | Registered model name and optional constructor parameters. Saluki and MPRA starters explicitly select their workflow model. |
+| `model` | mapping or string | `small_cnn` | Registered model name and optional constructor parameters. Workflow starters explicitly select their model. |
 | `batch_size` | integer | `64` | Number of examples per optimizer or evaluation batch. A final singleton training batch is dropped because batch-normalized models cannot train on it reliably. |
 | `epochs` | integer | `20` | Maximum number of training epochs before early stopping. |
-| `learning_rate` | float | `0.001` | Learning rate passed to the AdamW optimizer. |
-| `weight_decay` | float | `0.0` | AdamW weight-decay coefficient. |
+| `learning_rate` | float | `0.001` | Learning rate. Structured RBPNet passes this to the selected optimizer unless overridden there. |
+| `weight_decay` | float | `0.0` | Weight-decay coefficient. |
+| `optimizer` | string or mapping | `"adamw"` | Structured RBPNet supports AdamW, Adam, and SGD, with optional optimizer parameters. Scalar workflows retain AdamW. |
+| `lr_scheduler` | string, mapping, or `null` | `null` | Structured RBPNet supports plateau, cosine, and step schedulers. |
+| `mixed_precision` | boolean | `false` | Enable autocast; CUDA also uses gradient scaling. |
 | `gradient_clip_norm` | float or `null` | `0.5` | Maximum global gradient norm. Set to `null`, `0`, or a negative value to disable clipping. |
 | `patience` | integer | `5` | Number of consecutive non-improving epochs tolerated by early stopping. A negative value disables early stopping. |
 | `monitor` | string or list | `"val_loss"` | Validation metric or metrics used to select `best.pt` and reset early-stopping patience. |
@@ -135,6 +193,9 @@ above.
 | `sequence_controls` | mapping, list, or `null` | `null` | Optional sequence ablations applied before split selection. |
 | `split_source` | string | `"auto"` | Whether splits come from the bundle or from the `split` block. |
 | `split` | mapping | random 80/10/10 | Config-defined split settings, used according to `split_source`. |
+| `max_train_jitter` | integer | `0` | Structured RBPNet shift range; cannot exceed the bundle's materialized margin. Evaluation remains shift zero. |
+| `deduplicate_loci` | boolean | `true` | Collapse repeated eligibility rows for an identical RBPNet locus while retaining all replicate arrays. |
+| `allow_random_window_split` | boolean | `false` | Explicitly permit unsafe RBPNet row-random splitting. Grouped splitting is the safe default. |
 
 The canonical model mapping contains a registered `name` and a `params`
 mapping:
@@ -160,6 +221,10 @@ The metrics available to `monitor` are:
 - `train_pearson`
 - `val_loss`
 - `val_pearson`
+
+Structured RBPNet runs instead expose `train_loss`, `val_loss`, and the
+corresponding `train_`/`val_` forms of `ip_profile_loss`, `sm_profile_loss`, and
+`enrichment_loss`. Profile-only runs report enrichment loss as zero.
 
 Loss metrics improve when they decrease; Pearson metrics improve when they
 increase. A string can name one metric:

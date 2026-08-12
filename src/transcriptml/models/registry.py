@@ -9,6 +9,7 @@ from torch import nn
 
 from transcriptml.models.cnn import SmallCNN, SmallCNNConfig
 from transcriptml.models.legnet import LegNet, LegNetConfig
+from transcriptml.models.rbpnet import RBPNet, RBPNetConfig
 from transcriptml.models.reproduce import SalukiExact, SalukiExactConfig
 from transcriptml.models.saluki import SalukiLike, SalukiLikeConfig
 
@@ -35,6 +36,7 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
     "saluki_like": ModelSpec(SalukiLike, SalukiLikeConfig),
     "saluki_gru": ModelSpec(SalukiLike, SalukiLikeConfig),
     "legnet": ModelSpec(LegNet, LegNetConfig),
+    "rbpnet": ModelSpec(RBPNet, RBPNetConfig),
     "saluki_exact": ModelSpec(SalukiExact, SalukiExactConfig),
 }
 

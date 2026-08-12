@@ -2,13 +2,19 @@
 
 from transcriptml.training.evaluation import evaluate_checkpoint, evaluate_fold_checkpoints, predict_to_csv
 from transcriptml.training.metrics import mse, pearson_corr
-from transcriptml.training.splits import predefined_split_indices, random_split_indices
+from transcriptml.training.splits import (
+    group_split_indices,
+    predefined_split_indices,
+    random_split_indices,
+    validate_group_disjoint,
+)
 from transcriptml.training.trainer import TrainConfig, train_from_config, train_model
 
 __all__ = [
     "TrainConfig",
     "evaluate_checkpoint",
     "evaluate_fold_checkpoints",
+    "group_split_indices",
     "mse",
     "pearson_corr",
     "predict_to_csv",
@@ -16,4 +22,5 @@ __all__ = [
     "random_split_indices",
     "train_from_config",
     "train_model",
+    "validate_group_disjoint",
 ]

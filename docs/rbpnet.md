@@ -1,10 +1,10 @@
 # RBPNet/eCLIP data workflow
 
-TranscriptML includes the complete data path needed before implementing an
-RBPNet model. It starts from ordinary eCLIP alignments and ends with fixed-shape,
-memory-mappable NumPy arrays. It does **not** implement an RBPNet architecture,
-loss, trainer, peak caller intended for general use, GC matching, or training
-example sampling.
+TranscriptML includes an eCLIP path from ordinary alignments through fixed-shape,
+memory-mappable arrays and structured RBPNet training. The scanner is
+descriptive and the selectors prepare model examples; none is intended as a
+general-purpose peak caller. GC matching and post-selection sampling are not
+implemented.
 
 ```text
 FASTA + one-transcript-per-gene GTF + IP BAM(s) + SMInput BAM
@@ -29,6 +29,9 @@ FASTA + one-transcript-per-gene GTF + IP BAM(s) + SMInput BAM
                               |
                               v
               fixed-shape, memory-mappable .npy arrays
+                              |
+                              v
+           structured RBPNet profile/enrichment training
 ```
 
 Install the optional assay dependencies with:
@@ -404,3 +407,184 @@ The canonical experiment uses HDF5 because it provides compressed lazy slicing
 over an entire transcriptome. The model bundle uses separate `.npy` files
 because its selected fixed-shape arrays are simple to inspect and memory-map.
 Changing selection, context, or jitter does not require reprocessing BAMs.
+
+## 5. RBPNet model and training
+
+Create a native starter config and train it with the same TranscriptML command
+used by other registered models:
+
+```bash
+transcriptml init-run --workflow rbpnet --out-dir configs/rbpnet
+# Edit dataset/output paths and profile_length, then:
+transcriptml train configs/rbpnet/train_config.json
+
+transcriptml evaluate \
+  --checkpoint runs/rbpnet/model/best.pt \
+  --dataset data/rbpnet_chr21 \
+  --out-csv runs/rbpnet/predictions.csv
+```
+
+`transcriptml models show rbpnet --json` prints every architectural default.
+The first model family intentionally requires equal sequence and profile crop
+lengths. It uses no observed-control input, pooling, reverse-complement
+augmentation, valid convolution, absolute-count head, or larger sequence
+context than prediction context.
+
+### Default architecture
+
+The RNA4 sequence alone enters a same-padded 1D convolution with 128 filters
+and kernel 12 followed by ReLU, then five residual blocks. Each block is a dilated
+kernel-6 convolution, BatchNorm, ReLU, dropout 0.25, and residual addition. The
+dilations are `[2, 4, 8, 16, 32]`; no positional pooling occurs. Two independent
+kernel-25, stride-one transposed-convolution heads produce target and control
+positional logits. A global-average-pooled linear head produces the scalar
+mixture logit. Important dimensions, normalization, biases, kernels, dilation
+schedule, dropout, head kinds, and profile length are configurable.
+
+The trunk receptive field is reported in checkpoints and `summary.json` and is
+
+```text
+RF = 1 + (initial_kernel - 1)
+       + sum((residual_kernel - 1) * dilation)
+```
+
+which is 322 bases for the defaults (160 indexed positions to the left and 161
+to the right under the documented asymmetric even-kernel padding). Explicit
+left/right padding preserves output index `i` as index `i`; the extra base of
+an even effective kernel is placed on the right.
+
+| Model parameter | Default | Meaning |
+| --- | --- | --- |
+| `in_ch` | `4` | RNA4 input channels. |
+| `n_filters` | `128` | Shared positional hidden width. |
+| `initial_kernel_size` | `12` | Initial same-padded convolution kernel. |
+| `n_residual_blocks` | `5` | Number of residual convolutions. |
+| `residual_kernel_size` | `6` | Residual convolution kernel. |
+| `dilations` | `null` | Explicit schedule; `null` resolves powers of two starting at 2. |
+| `normalization` | `batch` | `batch`, `layer`, or `none`. |
+| `dropout` | `0.25` | Dropout in each residual branch. |
+| `profile_head_type` | `transpose_conv` | `transpose_conv` or ordinary same-padded `conv`. |
+| `profile_head_kernel_size` | `25` | Kernel shared by the two separately parameterized profile heads. |
+| `profile_head_bias` | `true` | Whether profile heads include a bias. |
+| `enrichment_head_type` | `none` | `none`, `linear`, or `mlp`. |
+| `enrichment_hidden` | `64` | Hidden width for the optional MLP only. |
+| `enrichment_dropout` | `0` | Optional MLP dropout. |
+| `profile_length` | `300` | Required input/output crop length, or `null` to accept any length. |
+
+### Profile model: target, control, and pi
+
+The two heads define independently normalized distributions
+`p_target=softmax(target_logits)` and
+`p_control=softmax(control_logits)`. With global mixing logit `a`,
+`pi=sigmoid(a)` and the predicted IP distribution is
+
+```text
+p_IP = pi * p_target + (1 - pi) * p_control
+```
+
+The mixture is evaluated with `logsigmoid` and `logaddexp` for stability. `pi`
+is the latent fraction of the **positional IP profile** assigned to the target
+component. It is not IP/SMInput enrichment and is never given an IP-vs-SMInput
+binomial loss. SMInput is a profile training target, not a neural-network
+input.
+
+By default, individual IP profiles are summed once across their replicate axis
+and the complete multinomial NLL is calculated for the pooled IP counts under
+`p_IP`. A second complete multinomial NLL compares SMInput counts with
+`p_control`. The `lgamma` combinatorial constant is included by default and can
+be disabled. A zero-total profile has no positional information, so that locus
+is excluded from that profile component's mean instead of producing a NaN.
+Components are reduced over informative loci and weighted by
+`lambda_ip_profile` and `lambda_sm_profile` (both 1 by default).
+
+### Optional enrichment model
+
+Set `"enrichment_head_type": "linear"` to enable the default enrichment head,
+or `"mlp"` for a configurable two-layer head. The head average-pools the shared
+hidden representation only over the biological selection interval, using the
+coordinate-derived mask for the current jittered crop. It supports variable
+measurement widths. The result `eta_i` is a sequence-predicted log enrichment,
+independent of `pi`.
+
+For replicate `j`, effective retained-event library sizes supply the known
+offset and the observed selection-interval counts supply the binomial data:
+
+```text
+depth_offset_j = log(L_IP_j / L_SM)
+logit(p_ij)    = eta_i + depth_offset_j
+N_ij           = IP_ij + SM_i
+IP_ij          ~ Binomial(N_ij, p_ij)
+```
+
+The logits-based complete binomial NLL is evaluated independently for each
+valid locus-replicate pair and averaged over those pairs. One sequence row and
+one `eta_i` therefore use every IP replicate without duplicating the locus.
+`IP=0` and `SMInput=0` edge cases are exact and require no pseudocount; only a
+pair with both counts zero is excluded because it has no information. Enabling
+the head adds `lambda_enrichment * L_enrichment`, with weight 1 by default.
+
+### Jitter-ready structured batches
+
+`RBPNetDataset` memory-maps the bundle arrays and returns sequence, pooled and
+individual IP profiles, SMInput profile, exact selection counts, effective
+library sizes/depth offsets, selection mask, valid-position masks, coordinates,
+and identifiers. With `max_train_jitter=J`, a deterministic RNG keyed by
+seed/epoch/example samples a shift from `[-J,+J]` for training. Sequence and all
+profiles use the same biological crop. The crop start is derived from anchor,
+actual materialized start, and locus bounds, so boundary-shifted contexts do
+not incorrectly assume offset `J+s`. Evaluation always uses shift zero.
+
+When enrichment is enabled, every allowed jittered crop must fully contain its
+selection interval; invalid bundle/context combinations fail before training.
+`max_train_jitter` cannot exceed the materialized bundle margin.
+
+### Splits, optimization, and outputs
+
+RBPNet starter configs use a `group` split on `group_gene_id`, keeping all
+overlapping loci from one gene together. Transcript, chromosome, metadata, and
+explicit predefined groups are also usable through their metadata columns.
+Every non-random split is checked for group overlap. Row-random splitting is
+rejected unless `allow_random_window_split=true` explicitly acknowledges the
+leakage risk. Replicate-specific selection rows describing an identical locus
+are deduplicated by default while retaining the complete replicate axis.
+
+AdamW, Adam, and SGD; plateau, cosine, and step schedulers; clipping; early
+stopping; device selection; DataLoader workers; seeds; and mixed precision are
+configurable. `history.json` logs total, pooled-IP profile, SMInput profile, and
+enrichment losses independently. `best.pt` and `last.pt` retain model, loss,
+optimizer, samples, coordinate space, split, receptive-field, and training
+provenance. Evaluation CSVs contain `pi`, optional `eta`, and each replicate's
+depth-adjusted predicted IP fraction. The raw structured tensors remain
+available through the Python model output for future attribution work.
+
+Profile-only model block:
+
+```json
+{
+  "model": {
+    "name": "rbpnet",
+    "params": {"profile_length": 300, "enrichment_head_type": "none"}
+  },
+  "loss": {"name": "rbpnet"},
+  "max_train_jitter": 0
+}
+```
+
+To train profiles plus enrichment, change only the head and, if desired, the
+independent component weights:
+
+```json
+{
+  "model": {
+    "name": "rbpnet",
+    "params": {"profile_length": 300, "enrichment_head_type": "linear"}
+  },
+  "loss": {
+    "name": "rbpnet",
+    "lambda_ip_profile": 1.0,
+    "lambda_sm_profile": 1.0,
+    "lambda_enrichment": 1.0
+  },
+  "max_train_jitter": 32
+}
+```

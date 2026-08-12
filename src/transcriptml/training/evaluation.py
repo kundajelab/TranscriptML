@@ -498,7 +498,7 @@ def evaluate_checkpoint(
 
     device = resolve_device(device)
     log_progress(f"evaluate: loading checkpoint {checkpoint_path}", enabled=progress)
-    model, _ = load_checkpoint(checkpoint_path, map_location=device)
+    model, checkpoint = load_checkpoint(checkpoint_path, map_location=device)
     log_progress(f"evaluate: loading dataset {dataset_path}", enabled=progress)
     bundle = load_bundle(dataset_path, mmap_mode="r")
     indices = None
@@ -506,6 +506,36 @@ def evaluate_checkpoint(
         if not bundle.splits or split not in bundle.splits:
             raise ValueError(f"Dataset has no split '{split}'")
         indices = [int(i) for i in bundle.splits[split]]
+    if checkpoint.get("model_config", {}).get("name") == "rbpnet":
+        from transcriptml.models.rbpnet import RBPNet
+        from transcriptml.rbpnet.training import (
+            evaluate_rbpnet_model,
+            write_rbpnet_predictions,
+        )
+
+        if not isinstance(model, RBPNet):
+            raise TypeError("rbpnet checkpoint did not reconstruct an RBPNet model")
+        result = evaluate_rbpnet_model(
+            model,
+            bundle,
+            indices=indices,
+            batch_size=batch_size,
+            device=device,
+            loss_config=checkpoint.get("loss_config"),
+            progress=progress,
+        )
+        if out_csv is not None:
+            log_progress(f"evaluate: writing RBPNet predictions to {out_csv}", enabled=progress)
+            write_rbpnet_predictions(out_csv, result)
+        # Keep CLI summary serialization compact while preserving the scalar
+        # prediction convention for callers that expect a ``predictions`` key.
+        result["predictions"] = (
+            result["enrichment_logit"]
+            if result.get("enrichment_logit") is not None
+            else result["pi"]
+        )
+        result["targets"] = None
+        return result
     log_progress(
         f"evaluate: running on {len(indices) if indices is not None else bundle.X.shape[0]} examples",
         enabled=progress,

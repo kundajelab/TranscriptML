@@ -66,6 +66,18 @@ RBPNet/eCLIP data
    :members: RBPNetBundleConfig, jitter_crop_offset, make_rbpnet_bundle, load_rbpnet_bundle
    :member-order: bysource
 
+.. automodule:: transcriptml.rbpnet.dataset
+   :members: RBPNetBatch, RBPNetDataset, collate_rbpnet, deduplicate_locus_indices
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.losses
+   :members: RBPNetLossConfig, RBPNetLossOutput, multinomial_nll, replicate_binomial_nll, RBPNetObjective
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.training
+   :members: train_rbpnet_model, evaluate_rbpnet_model, write_rbpnet_predictions
+   :member-order: bysource
+
 Models
 ------
 
@@ -89,6 +101,10 @@ Models
    :members: SmallCNNConfig, SmallCNN
    :member-order: bysource
 
+.. automodule:: transcriptml.models.rbpnet
+   :members: RBPNetConfig, RBPNetOutput, RBPNet, SamePadConv1d, SameLengthConvTranspose1d, theoretical_receptive_field
+   :member-order: bysource
+
 Training and evaluation
 -----------------------
 
@@ -105,7 +121,7 @@ Training and evaluation
    :member-order: bysource
 
 .. automodule:: transcriptml.training.splits
-   :members: random_split_indices, predefined_split_indices, normalize_splits
+   :members: random_split_indices, predefined_split_indices, group_split_indices, validate_group_disjoint, normalize_splits
    :member-order: bysource
 
 .. automodule:: transcriptml.training.metrics

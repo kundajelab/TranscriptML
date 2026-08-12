@@ -13,7 +13,9 @@ _VALID_SAMPLE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 def add_rbpnet_parser(subparsers) -> None:
     """Add the nested ``transcriptml rbpnet`` command family."""
 
-    root = subparsers.add_parser("rbpnet", help="Prepare eCLIP data for future RBPNet models")
+    root = subparsers.add_parser(
+        "rbpnet", help="Preprocess eCLIP and construct RBPNet datasets"
+    )
     commands = root.add_subparsers(dest="rbpnet_command", required=True)
 
     preprocess = commands.add_parser(

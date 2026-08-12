@@ -5,9 +5,8 @@ This page walks through the two main TranscriptML workflows:
 - **Saluki**, for transcriptome-derived RNA stability measurements.
 - **MPRA-LegNet**, for single-insert MPRA-style measurements.
 
-The assay-aware RBPNet/eCLIP preprocessing, window scanning, selection, and
-bundle workflow has its own [RBPNet data guide](rbpnet.md). RBPNet model
-training is intentionally not implemented yet.
+The assay-aware RBPNet/eCLIP preprocessing, window scanning, selection, bundle,
+and structured training workflow has its own [RBPNet guide](rbpnet.md).
 
 For each workflow, the basic pattern is the same:
 
@@ -796,6 +795,7 @@ Create a starter config directory:
 ```bash
 transcriptml init-run --workflow saluki --out-dir configs/saluki
 transcriptml init-run --workflow legnet --out-dir configs/legnet
+transcriptml init-run --workflow rbpnet --out-dir configs/rbpnet
 ```
 
 These commands are intentionally small. They are meant to make the first run

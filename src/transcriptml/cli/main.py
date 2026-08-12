@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_rbpnet_parser(sub)
 
     p = sub.add_parser("init-run", help="Write starter run configuration files")
-    p.add_argument("--workflow", required=True, choices=["saluki", "legnet"])
+    p.add_argument("--workflow", required=True, choices=["saluki", "legnet", "rbpnet"])
     p.add_argument("--out-dir", required=True)
     p.add_argument("--force", action="store_true")
 
@@ -552,7 +552,11 @@ def main(argv: list[str] | None = None) -> None:
             batch_size=args.batch_size,
             device=args.device,
         )
-        metrics = {k: v for k, v in result.items() if k not in {"predictions", "targets", "indices"}}
+        non_summary_fields = {
+            "predictions", "targets", "indices", "example_ids", "pi",
+            "enrichment_logit", "depth_offsets", "replicate_names",
+        }
+        metrics = {k: v for k, v in result.items() if k not in non_summary_fields}
         summary_path = Path(evaluate_paths["out_csv"]).with_suffix(".summary.json")
         log_progress(f"evaluate: writing summary to {summary_path}")
         summary_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")

@@ -45,6 +45,15 @@ def test_init_run_cli_writes_templates(tmp_path):
     assert not (out_dir / "run_config.json").exists()
     assert (out_dir / "README.md").exists()
 
+    rbpnet_dir = tmp_path / "rbpnet_run"
+    main(["init-run", "--workflow", "rbpnet", "--out-dir", str(rbpnet_dir)])
+    rbpnet = json.loads((rbpnet_dir / "train_config.json").read_text(encoding="utf-8"))
+    assert rbpnet["model"]["name"] == "rbpnet"
+    assert rbpnet["model"]["params"]["profile_length"] == 300
+    assert rbpnet["split"]["method"] == "group"
+    assert rbpnet["split"]["group_col"] == "group_gene_id"
+    assert rbpnet["max_train_jitter"] == 0
+
 
 def test_plot_ism_cli_demo_writes_png(tmp_path):
     out_path = tmp_path / "ism.png"

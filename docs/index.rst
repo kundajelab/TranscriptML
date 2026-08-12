@@ -15,9 +15,9 @@ motif ablations, motif context scans, motif epistasis analyses, and
 Saluki-specific codon ISM. These analyses can expose learned regulatory
 sequence features as well as technical artifacts in the model or assay.
 
-RBPNet/eCLIP data preprocessing, descriptive scanning, region selection, and
-materialized dataset construction are supported. RBPNet model training remains
-planned.
+RBPNet/eCLIP preprocessing, descriptive scanning, region selection,
+materialized dataset construction, and structured profile/enrichment training
+are supported.
 
 Start here
 ----------

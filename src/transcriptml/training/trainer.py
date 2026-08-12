@@ -33,6 +33,9 @@ class TrainConfig:
     epochs: int = 20
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
+    optimizer: str | Mapping[str, Any] = "adamw"
+    lr_scheduler: str | Mapping[str, Any] | None = None
+    mixed_precision: bool = False
     gradient_clip_norm: float | None = 0.5
     patience: int = 5
     monitor: str | Sequence[str] = "val_loss"
@@ -46,6 +49,9 @@ class TrainConfig:
     head_layernorm: bool = False
     sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     split_source: str = "auto"
+    max_train_jitter: int = 0
+    allow_random_window_split: bool = False
+    deduplicate_loci: bool = True
     split: Mapping[str, Any] = field(
         default_factory=lambda: {"method": "random", "val_frac": 0.1, "test_frac": 0.1}
     )
@@ -506,6 +512,15 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     """
 
     cfg = _as_train_config(config)
+    requested_model = normalize_model_config(cfg.model)
+    if requested_model.name == "rbpnet":
+        if cfg.sequence_controls:
+            raise ValueError(
+                "generic sequence_controls are not supported for structured RBPNet training"
+            )
+        from transcriptml.rbpnet.training import train_rbpnet_model
+
+        return train_rbpnet_model(bundle, cfg)
     _seed_everything(cfg.seed)
     device = resolve_device(cfg.device)
     out = Path(cfg.output_dir)
