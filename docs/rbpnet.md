@@ -208,6 +208,33 @@ Selection asks which experimental loci are eligible and why. It writes a
 versioned `*.parquet` manifest, equivalent `*.tsv.gz`, and a
 `*.selection.json` provenance sidecar.
 
+Every selector can restrict its candidate universe to exact scanner
+annotations without regenerating the descriptive window table:
+
+```bash
+transcriptml rbpnet select-regions \
+  --processed-dir processed/chr21 \
+  --windows processed/chr21_windows_100nt.parquet \
+  --strategy peak_gray_negative \
+  --region-types 5putr,cds,3putr \
+  --output-prefix processed/chr21_exonic_selection
+```
+
+Valid values are `5putr`, `cds`, `3putr`, `noncoding_exon`, `intron`, and
+`mixed`. The default is all types. Filtering is exact: for example,
+`--region-types 3putr` accepts only windows wholly contained in 3' UTR and
+does not accept a boundary-crossing `mixed` window. Include `mixed`
+explicitly when desired.
+
+The restriction is applied before each strategy's signal/statistical rules.
+Consequently, excluded windows do not affect coverage eligibility, the
+original selector's testing/50-nt advance, or the `peak_gray_negative` BH
+correction universe. The published IP locus-density Poisson null remains based
+on the complete locus; this option restricts which windows are tested, not how
+that published null is defined. The selection provenance records the requested
+types and source/eligible window counts, while the sidecar also reports
+selected-example counts by region type.
+
 ### Published RBPNet v1
 
 First make the published 100-nt, stride-1 descriptive scan, then select:

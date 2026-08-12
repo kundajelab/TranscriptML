@@ -55,6 +55,8 @@ class SelectionConfig:
     min_ip_count: int = 0
     min_sminput_tpm: float = 0.0
     replicate_mode: str = "per_ip"
+    # Optional exact window-annotation universe. None preserves all regions.
+    region_types: tuple[str, ...] | None = None
     # Peak / gray / confident-negative selector.
     peak_fdr: float = 0.05
     peak_min_log2_ratio: float = 1.0
@@ -97,6 +99,55 @@ def _iter_window_rows(path: Path, *, batch_size: int) -> Iterator[dict]:
     parquet = pq.ParquetFile(path)
     for batch in parquet.iter_batches(batch_size=batch_size):
         yield from batch.to_pylist()
+
+
+def _normalize_region_types(
+    region_types: str | Iterable[str] | None,
+) -> tuple[str, ...] | None:
+    """Normalize exact region-type filters while preserving user order."""
+
+    if region_types is None:
+        return None
+    raw_values = (region_types,) if isinstance(region_types, str) else region_types
+    values: list[str] = []
+    for raw in raw_values:
+        values.extend(part.strip().lower() for part in str(raw).split(","))
+    values = [value for value in values if value]
+    if not values:
+        raise ValueError("region_types must contain at least one region type")
+    return tuple(dict.fromkeys(values))
+
+
+def _region_is_eligible(config: SelectionConfig, row: dict) -> bool:
+    return config.region_types is None or str(row["region_type"]) in config.region_types
+
+
+def _window_region_counts(
+    path: Path,
+    region_types: tuple[str, ...] | None,
+    *,
+    batch_size: int,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Count source and region-filter-eligible descriptive windows."""
+
+    source: Counter[str] = Counter()
+    eligible: Counter[str] = Counter()
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=batch_size, columns=["region_type"]):
+        for value in batch.column(0).to_pylist():
+            region_type = str(value)
+            source[region_type] += 1
+            if region_types is None or region_type in region_types:
+                eligible[region_type] += 1
+    order = {name: index for index, name in enumerate((*REGION_TYPES, "mixed"))}
+
+    def sort_key(item: tuple[str, int]) -> tuple[int, str]:
+        return order.get(item[0], len(order)), item[0]
+
+    return (
+        dict(sorted(source.items(), key=sort_key)),
+        dict(sorted(eligible.items(), key=sort_key)),
+    )
 
 
 def _stable_example_id(
@@ -326,6 +377,8 @@ def _original_rows(
     try:
         for row in _iter_window_rows(windows_path, batch_size=config.batch_size):
             reporter.update()
+            if not _region_is_eligible(config, row):
+                continue
             tx_id = row["transcript_id"]
             if tx_id != current_tx:
                 tx = ds.get_transcript(tx_id)
@@ -386,6 +439,8 @@ def _broad_coverage_rows(
     try:
         for row in _iter_window_rows(windows_path, batch_size=config.batch_size):
             reporter.update()
+            if not _region_is_eligible(config, row):
+                continue
             if float(row["sminput_tpm"]) < config.min_sminput_tpm:
                 continue
             input_count = int(row[f"{input_name}_count"])
@@ -433,15 +488,23 @@ def _peak_statistics(
         windows_path,
         columns=[
             f"{input_name}_count", "ip_pooled_count", "total_ip_sminput_count",
-            "sminput_tpm",
+            "sminput_tpm", "region_type",
         ],
     )
     input_counts = table[f"{input_name}_count"].to_numpy(zero_copy_only=False).astype(np.int64)
     ip_counts = table["ip_pooled_count"].to_numpy(zero_copy_only=False).astype(np.int64)
     totals = table["total_ip_sminput_count"].to_numpy(zero_copy_only=False).astype(np.int64)
     tpm = table["sminput_tpm"].to_numpy(zero_copy_only=False).astype(np.float64)
+    if config.region_types is None:
+        eligible_region = np.ones(len(totals), dtype=bool)
+    else:
+        region_types = np.asarray(
+            table["region_type"].to_pylist(), dtype=object
+        )
+        eligible_region = np.isin(region_types, config.region_types)
     adequate = (
-        (totals >= config.min_total_count)
+        eligible_region
+        & (totals >= config.min_total_count)
         & (input_counts >= config.min_sminput_count)
         & (ip_counts >= config.min_ip_count)
         & (tpm >= config.min_sminput_tpm)
@@ -458,7 +521,8 @@ def _peak_statistics(
         ip_counts[adequate], totals[adequate], null_ip_probability
     )
     log_progress(
-        f"rbpnet select-regions: {int(adequate.sum()):,}/{len(adequate):,} windows adequately measured",
+        f"rbpnet select-regions: {int(adequate.sum()):,}/{int(eligible_region.sum()):,} "
+        "region-eligible windows adequately measured",
         enabled=config.progress,
     )
     return (
@@ -607,6 +671,14 @@ def _validate_config(config: SelectionConfig) -> None:
         raise ValueError("sminput_poisson_pseudocount must be positive")
     if config.replicate_mode not in {"combined", "per_ip"}:
         raise ValueError("replicate_mode must be combined or per_ip")
+    valid_region_types = set(REGION_TYPES) | {"mixed"}
+    if config.region_types is not None:
+        invalid = sorted(set(config.region_types) - valid_region_types)
+        if invalid:
+            raise ValueError(
+                "unsupported region_types: "
+                f"{', '.join(invalid)}; choose from {', '.join((*REGION_TYPES, 'mixed'))}"
+            )
 
 
 def _validate_scan_dataset(
@@ -649,6 +721,10 @@ def _validate_scan_dataset(
 def select_regions(config: SelectionConfig) -> dict:
     """Select biological loci and write a versioned lightweight manifest."""
 
+    config = replace(
+        config,
+        region_types=_normalize_region_types(config.region_types),
+    )
     if config.min_total_count is None:
         config = replace(
             config,
@@ -673,6 +749,11 @@ def select_regions(config: SelectionConfig) -> dict:
         if any(sample.effective_library_size is None or sample.effective_library_size <= 0 for sample in ds.samples):
             raise ValueError("all samples need positive effective_library_size values for selection")
         _validate_scan_dataset(ds, windows_path, scan_metadata)
+        source_region_counts, eligible_region_counts = _window_region_counts(
+            windows_path,
+            config.region_types,
+            batch_size=config.batch_size,
+        )
         provenance = {
             "format": "transcriptml-rbpnet-selection",
             "format_version": "1",
@@ -681,6 +762,14 @@ def select_regions(config: SelectionConfig) -> dict:
             "coordinate_space": ds.coordinate_space,
             "source_windows": str(windows_path.resolve()),
             "window_scan": scan_metadata,
+            "region_filter": {
+                "mode": "all" if config.region_types is None else "exact_region_type",
+                "allowed_region_types": (
+                    None if config.region_types is None else list(config.region_types)
+                ),
+                "source_window_counts": source_region_counts,
+                "eligible_window_counts": eligible_region_counts,
+            },
             "configuration": {
                 key: (str(value) if isinstance(value, Path) else value)
                 for key, value in config.__dict__.items()
@@ -724,6 +813,7 @@ def select_regions(config: SelectionConfig) -> dict:
 
         selected = 0
         state_counts: Counter[str] = Counter()
+        selected_region_counts: Counter[str] = Counter()
         transcript_ids: set[str] = set()
         batch: list[dict] = []
         reporter = ProgressReporter(
@@ -751,6 +841,7 @@ def select_regions(config: SelectionConfig) -> dict:
                 batch.append(row)
                 selected += 1
                 state_counts[row["selection_state"]] += 1
+                selected_region_counts[row["region_type"]] += 1
                 transcript_ids.add(row["transcript_id"])
                 reporter.update()
                 if len(batch) >= config.batch_size:
@@ -762,6 +853,9 @@ def select_regions(config: SelectionConfig) -> dict:
             "n_examples": selected,
             "n_transcripts": len(transcript_ids),
             "state_counts": dict(sorted(state_counts.items())),
+            "selected_example_region_counts": dict(
+                sorted(selected_region_counts.items())
+            ),
             "parquet": str(parquet_path),
             "tsv": str(tsv_path),
         }

@@ -10,6 +10,13 @@ from pathlib import Path
 _VALID_SAMPLE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 
 
+def _csv_tuple(value: str) -> tuple[str, ...]:
+    values = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not values:
+        raise argparse.ArgumentTypeError("expected one or more comma-separated values")
+    return values
+
+
 def add_rbpnet_parser(subparsers) -> None:
     """Add the nested ``transcriptml rbpnet`` command family."""
 
@@ -112,6 +119,16 @@ def add_rbpnet_parser(subparsers) -> None:
         help="optional pooled/per-replicate IP minimum (default: 0)",
     )
     select.add_argument("--min-sminput-tpm", type=float, default=0.0)
+    select.add_argument(
+        "--region-types",
+        type=_csv_tuple,
+        default=None,
+        metavar="TYPE[,TYPE...]",
+        help=(
+            "restrict selection to exact window annotations: 5putr, cds, 3putr, "
+            "noncoding_exon, intron, mixed (default: all)"
+        ),
+    )
     select.add_argument(
         "--replicate-mode", choices=("combined", "per_ip"), default="per_ip",
         help="broad_coverage eligibility mode (default: per_ip)",
@@ -224,6 +241,7 @@ def run_rbpnet_command(args: argparse.Namespace, parser: argparse.ArgumentParser
                 min_sminput_count=args.min_sminput_count,
                 min_ip_count=args.min_ip_count,
                 min_sminput_tpm=args.min_sminput_tpm,
+                region_types=args.region_types,
                 replicate_mode=args.replicate_mode,
                 peak_fdr=args.peak_fdr,
                 peak_min_log2_ratio=args.peak_min_log2_ratio,

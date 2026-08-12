@@ -36,6 +36,8 @@ The data-construction script chooses stride 1 automatically for
 `original_rbpnet` and stride 50 for the other selectors unless
 `WINDOW_STRIDE` is explicitly set. Its default selector is
 `peak_gray_negative`; all thresholds remain editable in the config.
+Set `REGION_TYPES` to an exact comma-separated selection universe such as
+`3putr` or `cds,3putr`; leave it empty to preserve all region types.
 
 The CV stage counts examples per chromosome, greedily balances whole
 chromosomes across `N_FOLDS`, and writes `CV_PLAN` once. Every fold job loads

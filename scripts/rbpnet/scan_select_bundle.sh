@@ -54,6 +54,9 @@ selection_args=(
   --min-sminput-tpm "${MIN_SMINPUT_TPM}"
   --output-prefix "${SELECTION_PREFIX}"
 )
+if [[ -n "${REGION_TYPES}" ]]; then
+  selection_args+=(--region-types "${REGION_TYPES}")
+fi
 case "${SELECTION_STRATEGY}" in
   original_rbpnet)
     selection_args+=(--poisson-null "${POISSON_NULL}")

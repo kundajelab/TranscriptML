@@ -10,6 +10,7 @@ import pysam
 import pytest
 from scipy.stats import poisson
 
+from transcriptml.cli.main import build_parser
 from transcriptml.data.encoding import encode_rna_sequence
 from transcriptml.rbpnet.bundle import (
     RBPNetBundleConfig,
@@ -594,6 +595,109 @@ def test_selection_strategies_ids_serialization_and_stitching(tmp_path):
     assert any(row["source_window_count"] > 1 for row in load_selection_manifest(classified).rows)
 
 
+def test_exact_region_type_filtering_provenance_and_peak_bh_universe(tmp_path):
+    root = tmp_path / "processed"
+    _write_processed_fixture(root)
+    windows = tmp_path / "windows"
+    scan_windows(WindowScanConfig(
+        processed_dir=root, output_prefix=windows, window_size=4, stride=2,
+        progress=False,
+    ))
+
+    broad = tmp_path / "broad_regions"
+    broad_summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=broad,
+        strategy="broad_coverage",
+        replicate_mode="combined",
+        min_total_count=0,
+        region_types=("5putr", "cds"),
+        progress=False,
+    ))
+    broad_manifest = load_selection_manifest(broad)
+    assert [row["region_type"] for row in broad_manifest.rows] == ["5putr", "cds"]
+    assert broad_summary["region_filter"] == {
+        "mode": "exact_region_type",
+        "allowed_region_types": ["5putr", "cds"],
+        "source_window_counts": {"5putr": 1, "cds": 1, "mixed": 3},
+        "eligible_window_counts": {"5putr": 1, "cds": 1},
+    }
+    assert broad_summary["selected_example_region_counts"] == {
+        "5putr": 1,
+        "cds": 1,
+    }
+    assert broad_manifest.metadata["configuration"]["region_types"] == [
+        "5putr",
+        "cds",
+    ]
+
+    mixed = tmp_path / "broad_mixed"
+    mixed_summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=mixed,
+        strategy="broad_coverage",
+        replicate_mode="combined",
+        min_total_count=0,
+        region_types="mixed",
+        progress=False,
+    ))
+    assert mixed_summary["n_examples"] == 3
+    assert {row["region_type"] for row in load_selection_manifest(mixed).rows} == {
+        "mixed"
+    }
+
+    classified = tmp_path / "classified_cds"
+    select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=classified,
+        strategy="peak_gray_negative",
+        min_total_count=0,
+        peak_fdr=1.0,
+        negative_fdr=1.0,
+        peak_min_log2_ratio=100.0,
+        negative_max_log2_ratio=-100.0,
+        region_types=("cds",),
+        progress=False,
+    ))
+    classified_rows = load_selection_manifest(classified).rows
+    assert len(classified_rows) == 1
+    assert classified_rows[0]["region_type"] == "cds"
+    # CDS contributes one adequately measured test, so BH adjustment over the
+    # requested region universe leaves each exact-tail p-value unchanged.
+    assert classified_rows[0]["source_min_enrichment_qvalue"] == pytest.approx(
+        classified_rows[0]["source_min_enrichment_pvalue"]
+    )
+    assert classified_rows[0]["source_min_depletion_qvalue"] == pytest.approx(
+        classified_rows[0]["source_min_depletion_pvalue"]
+    )
+
+    with pytest.raises(ValueError, match="unsupported region_types: promoter"):
+        select_regions(SelectionConfig(
+            processed_dir=root,
+            windows=windows,
+            output_prefix=tmp_path / "invalid_region",
+            strategy="broad_coverage",
+            region_types=("promoter",),
+            progress=False,
+        ))
+
+
+def test_select_regions_cli_parses_comma_separated_region_types():
+    args = build_parser().parse_args([
+        "rbpnet",
+        "select-regions",
+        "--processed-dir", "processed",
+        "--windows", "windows.parquet",
+        "--output-prefix", "selected",
+        "--strategy", "broad_coverage",
+        "--region-types", "3putr,cds",
+    ])
+    assert args.region_types == ("3putr", "cds")
+
+
 def test_zero_count_peak_negative_edges_and_broad_coverage_defaults(tmp_path):
     profiles = np.zeros((3, 12), dtype=np.uint32)
     profiles[0, 0] = 30       # informative input-only window
@@ -676,6 +780,34 @@ def test_original_rbpnet_poisson_selection_and_50nt_advance(tmp_path):
         [row["selection_pvalue"] for row in explicit_rows],
         [row["selection_pvalue"] for row in rows],
     )
+
+    matching_region = tmp_path / "original_noncoding"
+    matching_summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=matching_region,
+        strategy="original_rbpnet",
+        region_types=("noncoding_exon",),
+        progress=False,
+    ))
+    assert [row["example_id"] for row in load_selection_manifest(matching_region).rows] == [
+        row["example_id"] for row in rows
+    ]
+    assert matching_summary["region_filter"]["eligible_window_counts"] == {
+        "noncoding_exon": 401
+    }
+
+    excluded_region = tmp_path / "original_cds"
+    excluded_summary = select_regions(SelectionConfig(
+        processed_dir=root,
+        windows=windows,
+        output_prefix=excluded_region,
+        strategy="original_rbpnet",
+        region_types=("cds",),
+        progress=False,
+    ))
+    assert excluded_summary["n_examples"] == 0
+    assert excluded_summary["region_filter"]["eligible_window_counts"] == {}
 
     sminput_null = tmp_path / "original_sminput"
     sminput_summary = select_regions(SelectionConfig(
