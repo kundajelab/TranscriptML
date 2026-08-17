@@ -171,8 +171,8 @@ Edit the bundle path, output path, and `profile_length` to match the bundle:
 Set `enrichment_head_type` to `linear` (or `mlp`) to add the independent
 replicate-aware enrichment likelihood. The three RBPNet component weights are
 independent; `lambda_enrichment` has no effect when the head is disabled. See
-the [RBPNet guide](rbpnet.md#rbpnet-model-and-training) for the equations,
-bundle fields, and jitter semantics.
+the {ref}`RBPNet guide <rbpnet-model-and-training>` for the equations, bundle
+fields, and jitter semantics.
 
 ## Top-Level Training Settings
 

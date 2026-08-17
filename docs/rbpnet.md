@@ -464,6 +464,7 @@ over an entire transcriptome. The model bundle uses separate `.npy` files
 because its selected fixed-shape arrays are simple to inspect and memory-map.
 Changing selection, context, or jitter does not require reprocessing BAMs.
 
+(rbpnet-model-and-training)=
 ## 5. RBPNet model and training
 
 Create a native starter config and train it with the same TranscriptML command
