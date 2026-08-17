@@ -2,6 +2,9 @@
 
 # Shared Sherlock defaults for the eCLIP -> RBPNet chromosome-CV workflow.
 # Copy scripts/rbpnet to a writable run directory and edit this file there.
+# EXPERIMENTAL: Every preprocessing/modeling stage has been minimally tested and
+# only confirmed on PUM2 eCLIP data. Substantially more validation is required
+# than for other TranscriptML workflows.
 
 _RBPNET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_CONFIG_DIR="${SCRIPT_CONFIG_DIR:-${_RBPNET_SCRIPT_DIR}}"

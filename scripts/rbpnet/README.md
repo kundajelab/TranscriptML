@@ -1,5 +1,12 @@
 # RBPNet Sherlock workflow
 
+> **Warning — experimental workflow:** All preprocessing, scanning, selection,
+> bundle construction, training, and evaluation described here are minimally
+> tested. The workflow has only been confirmed to process data successfully and
+> train reasonable models on PUM2 eCLIP data. It needs substantially more
+> validation than other TranscriptML functionality and should not be treated as
+> production-ready or broadly validated.
+
 This directory implements the staged workflow:
 
 ```text

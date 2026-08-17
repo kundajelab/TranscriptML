@@ -1,5 +1,14 @@
 # RBPNet/eCLIP data workflow
 
+```{warning}
+Everything in this guide is experimental: eCLIP preprocessing, window scanning
+and selection, bundle construction, RBPNet modeling, training, and evaluation.
+The workflow has been minimally tested and has only been confirmed to process
+data successfully and train reasonable models on PUM2 eCLIP data. It needs
+substantially more validation should
+not be treated as production-ready or broadly validated.
+```
+
 TranscriptML includes an eCLIP path from ordinary alignments through fixed-shape,
 memory-mappable arrays and structured RBPNet training. The scanner is
 descriptive and the selectors prepare model examples; none is intended as a

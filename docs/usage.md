@@ -8,6 +8,14 @@ This page walks through the two main TranscriptML workflows:
 The assay-aware RBPNet/eCLIP preprocessing, window scanning, selection, bundle,
 and structured training workflow has its own [RBPNet guide](rbpnet.md).
 
+```{warning}
+The entire RBPNet/eCLIP workflow is experimental, including preprocessing,
+scanning and selection, bundle construction, modeling, and evaluation. It has
+been minimally tested and has only been confirmed to preprocess data
+successfully and train reasonable models on PUM2 eCLIP data. It needs
+substantially more validation than other TranscriptML functionality.
+```
+
 For each workflow, the basic pattern is the same:
 
 1. Build a TranscriptML dataset bundle.
@@ -870,4 +878,5 @@ transcriptml init-run --workflow rbpnet --out-dir configs/rbpnet
 
 These commands are intentionally small. They are meant to make the first run
 easier, not to replace project-specific judgment about splits, targets, and
-biological grouping.
+biological grouping. The RBPNet starter belongs to the experimental workflow
+described above and should not be interpreted as a broadly validated default.

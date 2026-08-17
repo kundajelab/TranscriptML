@@ -40,11 +40,18 @@ TranscriptML use.
 
 Optional extras are available for a few heavier workflows:
 
+```{warning}
+The `rbpnet` extra enables an experimental workflow. RBPNet/eCLIP preprocessing
+and modeling have been minimally tested and have only been confirmed to work
+and train reasonable models on PUM2 eCLIP data; they need substantially more
+validation than other TranscriptML functionality.
+```
+
 | Use case | Install |
 | --- | --- |
 | Write codon-ISM tables as Parquet or Arrow | `python -m pip install -e ".[arrow]"` |
 | Summarize and plot codon-ISM tables | `python -m pip install -e ".[analysis]"` |
-| Preprocess eCLIP and build RBPNet datasets | `python -m pip install -e ".[rbpnet]"` |
+| Preprocess eCLIP and build experimental RBPNet datasets | `python -m pip install -e ".[rbpnet]"` |
 | Run the test suite | `python -m pip install -e ".[dev]"` |
 
 Extras can be combined. The `analysis` extra already includes `pyarrow`, so you

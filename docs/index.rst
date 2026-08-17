@@ -19,6 +19,14 @@ RBPNet/eCLIP preprocessing, descriptive scanning, region selection,
 materialized dataset construction, and structured profile/enrichment training
 are supported.
 
+.. warning::
+
+   The entire RBPNet/eCLIP workflow is experimental, including preprocessing,
+   scanning and selection, bundle construction, modeling, and evaluation. It
+   has been minimally tested and has only been confirmed to preprocess data
+   successfully and train reasonable models on PUM2 eCLIP data. It needs
+   substantially more validation than other TranscriptML functionality.
+
 Start here
 ----------
 

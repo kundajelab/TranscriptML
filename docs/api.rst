@@ -46,6 +46,13 @@ Sequence controls
 RBPNet/eCLIP data
 -----------------
 
+.. warning::
+
+   All RBPNet/eCLIP APIs in this section are experimental. Preprocessing and
+   modeling have been minimally tested and have only been confirmed to process
+   data successfully and train reasonable models on PUM2 eCLIP data. They need
+   substantially more validation than other TranscriptML APIs.
+
 .. automodule:: transcriptml.rbpnet.preprocessing
    :members: Sample, PipelineConfig, preprocess_eclip
    :member-order: bysource
@@ -108,6 +115,11 @@ Models
 .. automodule:: transcriptml.models.cnn
    :members: SmallCNNConfig, SmallCNN
    :member-order: bysource
+
+.. warning::
+
+   The RBPNet model API below is experimental and has only received minimal
+   validation on PUM2 eCLIP data.
 
 .. automodule:: transcriptml.models.rbpnet
    :members: RBPNetConfig, RBPNetOutput, RBPNet, SamePadConv1d, SameLengthConvTranspose1d, theoretical_receptive_field

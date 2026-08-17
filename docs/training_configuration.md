@@ -4,6 +4,13 @@ TranscriptML model training is controlled by a JSON or TOML file. The same
 top-level training settings are used across Saluki, MPRA-LegNet, and structured
 RBPNet runs; the model and loss determine the batch contract.
 
+```{warning}
+RBPNet preprocessing and modeling are experimental. They have been minimally
+tested and have only been confirmed to preprocess data successfully and train
+reasonable models on PUM2 eCLIP data. They need substantially more validation
+than other TranscriptML functionality.
+```
+
 Create a starter JSON config with:
 
 ```bash
@@ -107,6 +114,13 @@ section. The Sherlock MPRA workflow has its own editable base config at
 `scripts/mpra/example_legnet_train_config.json`.
 
 ## RBPNet Starter Configuration
+
+```{warning}
+This starter config is part of the experimental RBPNet workflow. Successful
+execution and reasonable training behavior have been checked on PUM2 eCLIP,
+but the preprocessing, model, losses, and evaluation require broader
+validation before scientific or production use.
+```
 
 `transcriptml init-run --workflow rbpnet` selects the structured RBPNet trainer.
 Edit the bundle path, output path, and `profile_length` to match the bundle:

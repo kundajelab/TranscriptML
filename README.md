@@ -18,7 +18,10 @@ TranscriptML currently supports three main workflows:
   mature-transcript or full-gene coordinate experiment, descriptive windows, explicit selection
   manifests, and memory-mappable model-ready NumPy bundles, then trains a
   sequence-only target/control profile model with an optional replicate-aware
-  enrichment likelihood.
+  enrichment likelihood. **This entire workflow is experimental:** it has been
+  minimally tested and has only been confirmed to preprocess data successfully
+  and train reasonable models on PUM2 eCLIP data. It needs substantially more
+  validation than the other TranscriptML workflows.
 
 In the future, I plan to also support [RiboNN](https://www.nature.com/articles/s41587-025-02712-x) modeling of translation efficiency measurements
 and extend [RBPNet](https://link.springer.com/article/10.1186/s13059-023-03015-7) interpretation and model variants.
