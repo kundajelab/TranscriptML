@@ -11,12 +11,21 @@ two common starting points:
   with LegNet.
 
 Interpretation tools include single-nucleotide in silico mutagenesis (ISM),
-motif ablations, motif context scans, motif epistasis analyses, and
+region/junction ablations, motif ablations, motif context scans, motif epistasis analyses, and
 Saluki-specific codon ISM. These analyses can expose learned regulatory
 sequence features as well as technical artifacts in the model or assay.
 
-RiboNN support for translation measurements and RBPNet support for RBP binding
-measurements are planned but not yet implemented.
+RBPNet/eCLIP preprocessing, descriptive scanning, region selection,
+materialized dataset construction, and structured profile/enrichment training
+are supported.
+
+.. warning::
+
+   The entire RBPNet/eCLIP workflow is experimental, including preprocessing,
+   scanning and selection, bundle construction, modeling, and evaluation. It
+   has been minimally tested and has only been confirmed to preprocess data
+   successfully and train reasonable models on PUM2 eCLIP data. It needs
+   substantially more validation than other TranscriptML functionality.
 
 Start here
 ----------
@@ -33,5 +42,6 @@ guide describes every Saluki, LegNet, and shared training option. Use the
 
    installation
    usage
+   rbpnet
    training_configuration
    api

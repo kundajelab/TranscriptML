@@ -770,6 +770,27 @@ def _resolve_analysis_indices(
     return np.arange(n_sequences, dtype=np.int64)
 
 
+def resolve_analysis_indices(
+    n_sequences: int,
+    *,
+    sequence_indices: Sequence[int] | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+    sequence_shard_index: int | None = None,
+    sequence_shards: int | None = None,
+) -> np.ndarray:
+    """Resolve interpretation sequence selectors to original input indices."""
+
+    return _resolve_analysis_indices(
+        n_sequences,
+        sequence_indices=sequence_indices,
+        sequence_start=sequence_start,
+        sequence_end=sequence_end,
+        sequence_shard_index=sequence_shard_index,
+        sequence_shards=sequence_shards,
+    )
+
+
 @torch.no_grad()
 def compute_codon_ism(
     X: np.ndarray | torch.Tensor,

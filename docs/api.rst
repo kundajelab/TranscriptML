@@ -43,6 +43,56 @@ Sequence controls
    :members: SequenceControlOperation, SequenceControlConfig, normalize_sequence_control_config, apply_sequence_controls_array, apply_sequence_controls_to_bundle
    :member-order: bysource
 
+RBPNet/eCLIP data
+-----------------
+
+.. warning::
+
+   All RBPNet/eCLIP APIs in this section are experimental. Preprocessing and
+   modeling have been minimally tested and have only been confirmed to process
+   data successfully and train reasonable models on PUM2 eCLIP data. They need
+   substantially more validation than other TranscriptML APIs.
+
+.. automodule:: transcriptml.rbpnet.preprocessing
+   :members: Sample, PipelineConfig, preprocess_eclip
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.experiment
+   :members: ProcessedECLIPDataset, TranscriptRecord, SampleRecord, RegionRecord, GenomicBlock
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.windows
+   :members: WindowScanConfig, generate_window_bounds, calculate_gc_fraction, summarize_regions, scan_windows
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.selection
+   :members: SelectionConfig, SelectionManifest, select_regions, load_selection_manifest
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.bundle
+   :members: RBPNetBundleConfig, jitter_crop_offset, make_rbpnet_bundle, load_rbpnet_bundle
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.dataset
+   :members: RBPNetBatch, RBPNetDataset, collate_rbpnet, deduplicate_locus_indices
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.losses
+   :members: RBPNetLossConfig, RBPNetLossOutput, multinomial_nll, replicate_binomial_nll, RBPNetObjective
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.training
+   :members: train_rbpnet_model, evaluate_rbpnet_model, write_rbpnet_predictions
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.evaluation
+   :members: evaluate_rbpnet_report, resolve_rbpnet_checkpoint_indices
+   :member-order: bysource
+
+.. automodule:: transcriptml.rbpnet.evaluation_metrics
+   :members: profile_metrics, enrichment_metrics, replicate_ceiling_metrics, aggregate_observations, calibration_rows, select_representative_examples
+   :member-order: bysource
+
 Models
 ------
 
@@ -66,6 +116,15 @@ Models
    :members: SmallCNNConfig, SmallCNN
    :member-order: bysource
 
+.. warning::
+
+   The RBPNet model API below is experimental and has only received minimal
+   validation on PUM2 eCLIP data.
+
+.. automodule:: transcriptml.models.rbpnet
+   :members: RBPNetConfig, RBPNetOutput, RBPNet, SamePadConv1d, SameLengthConvTranspose1d, theoretical_receptive_field
+   :member-order: bysource
+
 Training and evaluation
 -----------------------
 
@@ -82,7 +141,7 @@ Training and evaluation
    :member-order: bysource
 
 .. automodule:: transcriptml.training.splits
-   :members: random_split_indices, predefined_split_indices, normalize_splits
+   :members: random_split_indices, predefined_split_indices, group_split_indices, validate_group_disjoint, normalize_splits
    :member-order: bysource
 
 .. automodule:: transcriptml.training.metrics
@@ -100,12 +159,20 @@ Interpretation
    :members: ISMResult, compute_ism, max_abs_effect_per_position, save_ism_result
    :member-order: bysource
 
+.. automodule:: transcriptml.interpret.window_ism
+   :members: WindowISMResult, generate_window_starts, compute_window_ism, save_window_ism_result
+   :member-order: bysource
+
 .. automodule:: transcriptml.interpret.codon_ism
    :members: CodonISMResult, compute_codon_ism, mutation_table_writer, save_codon_ism_result
    :member-order: bysource
 
 .. automodule:: transcriptml.interpret.ablation
    :members: MotifAblationResult, motif_ablation, save_motif_ablation_result
+   :member-order: bysource
+
+.. automodule:: transcriptml.interpret.region_ablation
+   :members: RegionAblationConfig, RegionAblationInstance, RegionAblationResult, region_ablation, save_region_ablation_result
    :member-order: bysource
 
 .. automodule:: transcriptml.interpret.context
@@ -129,6 +196,10 @@ Plotting
 
 Run setup
 ---------
+
+.. automodule:: transcriptml.workflows.chromosome_cv
+   :members: ChromosomeCVPlan, ChromosomeCVResolution, create_chromosome_cv_plan, save_chromosome_cv_plan, load_chromosome_cv_plan, resolve_chromosome_cv_plan
+   :member-order: bysource
 
 .. automodule:: transcriptml.workflows.init_run
    :members: init_run

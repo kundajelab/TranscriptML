@@ -479,9 +479,16 @@ def evaluate_checkpoint(
     dataset_path: str | Path,
     out_csv: str | Path | None = None,
     *,
+    out_dir: str | Path | None = None,
     split: str | None = None,
     batch_size: int = 128,
     device: str | torch.device = "cpu",
+    save_profiles: bool = False,
+    calibration_bins: int = 10,
+    enrichment_pseudocount: float = 0.5,
+    representative_seed: int = 123,
+    representative_per_tier: int = 3,
+    representative_min_profile_count: int = 10,
     progress: bool = True,
 ) -> dict[str, object]:
     """Load a checkpoint and evaluate it on a dataset bundle.
@@ -489,18 +496,90 @@ def evaluate_checkpoint(
     Args:
         checkpoint_path: TranscriptML checkpoint path to load.
         dataset_path: Processed dataset bundle directory.
-        out_csv: Optional destination CSV path for predictions.
-        split: Optional named split from the dataset bundle to evaluate.
+        out_csv: Optional legacy destination CSV path for predictions.
+        out_dir: Structured report directory for RBPNet checkpoints.
+        split: Named split to evaluate. RBPNet resolves this exclusively from
+            checkpoint artifacts and defaults to ``test``; scalar models retain
+            the existing dataset-bundle behavior.
         batch_size: Number of examples to score per prediction batch.
         device: Torch device used for model execution.
         progress: Whether to emit progress messages while evaluating.
     """
 
+    if out_csv is not None and out_dir is not None:
+        raise ValueError("provide either out_csv or out_dir, not both")
     device = resolve_device(device)
     log_progress(f"evaluate: loading checkpoint {checkpoint_path}", enabled=progress)
-    model, _ = load_checkpoint(checkpoint_path, map_location=device)
+    model, checkpoint = load_checkpoint(checkpoint_path, map_location=device)
     log_progress(f"evaluate: loading dataset {dataset_path}", enabled=progress)
     bundle = load_bundle(dataset_path, mmap_mode="r")
+    if checkpoint.get("model_config", {}).get("name") == "rbpnet":
+        from transcriptml.models.rbpnet import RBPNet
+        try:
+            from transcriptml.rbpnet.evaluation import (
+                evaluate_rbpnet_report,
+                resolve_rbpnet_checkpoint_indices,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "RBPNet evaluation requires optional dependencies; install "
+                "TranscriptML[rbpnet]"
+            ) from exc
+        from transcriptml.rbpnet.training import (
+            evaluate_rbpnet_model,
+            write_rbpnet_predictions,
+        )
+
+        if not isinstance(model, RBPNet):
+            raise TypeError("rbpnet checkpoint did not reconstruct an RBPNet model")
+        if out_dir is not None:
+            return evaluate_rbpnet_report(
+                model,
+                checkpoint,
+                bundle,
+                out_dir,
+                split=split,
+                batch_size=batch_size,
+                device=device,
+                save_profiles=save_profiles,
+                calibration_bins=calibration_bins,
+                enrichment_pseudocount=enrichment_pseudocount,
+                representative_seed=representative_seed,
+                representative_per_tier=representative_per_tier,
+                representative_min_profile_count=representative_min_profile_count,
+                checkpoint_path=checkpoint_path,
+                progress=progress,
+            )
+        _, indices = resolve_rbpnet_checkpoint_indices(
+            checkpoint,
+            split=split,
+            n_examples=int(bundle.X.shape[0]),
+        )
+        result = evaluate_rbpnet_model(
+            model,
+            bundle,
+            indices=indices,
+            batch_size=batch_size,
+            device=device,
+            loss_config=checkpoint.get("loss_config"),
+            progress=progress,
+        )
+        if out_csv is not None:
+            log_progress(f"evaluate: writing RBPNet predictions to {out_csv}", enabled=progress)
+            write_rbpnet_predictions(out_csv, result)
+        # Keep CLI summary serialization compact while preserving the scalar
+        # prediction convention for callers that expect a ``predictions`` key.
+        result["predictions"] = (
+            result["enrichment_logit"]
+            if result.get("enrichment_logit") is not None
+            else result["pi"]
+        )
+        result["targets"] = None
+        return result
+    if out_dir is not None:
+        raise ValueError("--out-dir structured reports are currently specific to RBPNet checkpoints")
+    if save_profiles:
+        raise ValueError("--save-profiles is only supported for RBPNet checkpoints")
     indices = None
     if split is not None:
         if not bundle.splits or split not in bundle.splits:

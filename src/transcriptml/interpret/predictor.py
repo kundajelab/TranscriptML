@@ -77,7 +77,10 @@ class Predictor:
             if isinstance(batch, torch.Tensor):
                 xb = batch.to(self.device, dtype=torch.float32)
             else:
-                xb = torch.as_tensor(np.asarray(batch), dtype=torch.float32).to(self.device)
+                batch_array = np.asarray(batch)
+                if not batch_array.flags.writeable:
+                    batch_array = np.array(batch_array, copy=True)
+                xb = torch.as_tensor(batch_array, dtype=torch.float32).to(self.device)
             y = squeeze_prediction(self.model(xb))
             outs.append(y.detach().cpu().numpy().astype(np.float32, copy=False).reshape(-1))
         return np.concatenate(outs) if outs else np.empty((0,), dtype=np.float32)

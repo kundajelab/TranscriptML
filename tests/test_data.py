@@ -68,6 +68,21 @@ def test_bundle_roundtrip(tmp_path):
     np.testing.assert_array_equal(loaded.y, bundle.y)
 
 
+def test_bundle_named_array_roundtrip_and_mmap(tmp_path):
+    profiles = np.arange(12, dtype=np.uint32).reshape(2, 6)
+    bundle = DatasetBundle(
+        X=np.zeros((2, 4, 6), dtype=np.uint8),
+        ids=["a", "b"],
+        arrays={"sminput_profiles": profiles},
+    )
+    save_bundle(bundle, tmp_path)
+    loaded = load_bundle(tmp_path, mmap_mode="r")
+    assert isinstance(loaded.X, np.memmap)
+    assert isinstance(loaded.arrays["sminput_profiles"], np.memmap)
+    np.testing.assert_array_equal(loaded.arrays["sminput_profiles"], profiles)
+    assert loaded.config["named_arrays"]["sminput_profiles"]["dtype"] == "uint32"
+
+
 def test_builders_reject_unknown_split_labels(tmp_path):
     table = tmp_path / "mpra.csv"
     table.write_text("id,seq,y,split\nx,ACGU,1.0,holdout\n", encoding="utf-8")

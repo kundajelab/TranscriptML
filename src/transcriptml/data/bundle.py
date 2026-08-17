@@ -12,7 +12,13 @@ from transcriptml.data.schemas import SequenceSchema, get_schema
 
 @dataclass
 class DatasetBundle:
-    """Self-describing processed dataset."""
+    """Self-describing processed dataset.
+
+    ``X`` and optional ``y`` retain TranscriptML's original compact contract.
+    Workflows with additional aligned targets (for example, RBPNet count
+    profiles) may use ``arrays``. Every named array must share ``X``'s first
+    dimension and is serialized as an ordinary ``<name>.npy`` file.
+    """
 
     X: np.ndarray
     y: np.ndarray | None = None
@@ -21,6 +27,7 @@ class DatasetBundle:
     metadata: Sequence[Mapping[str, Any]] | None = None
     splits: Mapping[str, Sequence[int]] | None = None
     config: Mapping[str, Any] = field(default_factory=dict)
+    arrays: Mapping[str, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize schema and validate array-aligned fields."""
@@ -32,6 +39,14 @@ class DatasetBundle:
             raise ValueError("ids length must match X.shape[0]")
         if self.y is not None and int(self.y.shape[0]) != int(self.X.shape[0]):
             raise ValueError("y length must match X.shape[0]")
+        if self.metadata is not None and len(self.metadata) != int(self.X.shape[0]):
+            raise ValueError("metadata length must match X.shape[0]")
+        reserved = {"X", "y"}
+        for name, array in self.arrays.items():
+            if not name or name in reserved or not name.replace("_", "").isalnum():
+                raise ValueError(f"invalid named array key: {name!r}")
+            if int(array.shape[0]) != int(self.X.shape[0]):
+                raise ValueError(f"named array {name!r} length must match X.shape[0]")
 
 
 def _json_default(obj: Any) -> Any:
@@ -78,6 +93,15 @@ def save_bundle_metadata(bundle: DatasetBundle, out_dir: str | Path) -> None:
     config = dict(bundle.config)
     config.setdefault("n_examples", int(bundle.X.shape[0]))
     config.setdefault("shape", [int(x) for x in bundle.X.shape])
+    if bundle.arrays:
+        config["named_arrays"] = {
+            name: {
+                "file": f"{name}.npy",
+                "shape": [int(x) for x in array.shape],
+                "dtype": str(array.dtype),
+            }
+            for name, array in bundle.arrays.items()
+        }
     (out / "config.json").write_text(json.dumps(config, indent=2, default=_json_default), encoding="utf-8")
 
 
@@ -95,6 +119,8 @@ def save_bundle(bundle: DatasetBundle, out_dir: str | Path) -> None:
     np.save(out / "X.npy", bundle.X)
     if bundle.y is not None:
         np.save(out / "y.npy", bundle.y)
+    for name, array in bundle.arrays.items():
+        np.save(out / f"{name}.npy", array)
     save_bundle_metadata(bundle, out)
 
 
@@ -118,4 +144,27 @@ def load_bundle(path: str | Path, *, mmap_mode: str | None = None) -> DatasetBun
     splits = json.loads(splits_path.read_text(encoding="utf-8")) if splits_path.exists() else None
     config_path = root / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
-    return DatasetBundle(X=X, y=y, ids=ids, schema=schema, metadata=metadata, splits=splits, config=config)
+    arrays = {}
+    for name, spec in config.get("named_arrays", {}).items():
+        filename = Path(spec["file"])
+        if filename.is_absolute() or len(filename.parts) != 1 or filename.suffix != ".npy":
+            raise ValueError(f"invalid named array file for {name!r}: {filename}")
+        array = np.load(root / filename, mmap_mode=mmap_mode)
+        expected_shape = tuple(int(value) for value in spec.get("shape", array.shape))
+        expected_dtype = np.dtype(spec.get("dtype", array.dtype))
+        if array.shape != expected_shape or array.dtype != expected_dtype:
+            raise ValueError(
+                f"named array {name!r} does not match config metadata: "
+                f"found {array.shape}/{array.dtype}, expected {expected_shape}/{expected_dtype}"
+            )
+        arrays[name] = array
+    return DatasetBundle(
+        X=X,
+        y=y,
+        ids=ids,
+        schema=schema,
+        metadata=metadata,
+        splits=splits,
+        config=config,
+        arrays=arrays,
+    )

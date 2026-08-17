@@ -50,7 +50,48 @@ def _train_config(workflow: str) -> dict[str, Any]:
             "split_source": "auto",
             "split": {"method": "random", "val_frac": 0.1, "test_frac": 0.1},
         }
-    raise ValueError("workflow must be one of: saluki, legnet")
+    if workflow == "rbpnet":
+        return {
+            "dataset": "__EDIT_ME_RBPNET_BUNDLE_DIR__",
+            "output_dir": "__EDIT_ME_RUN_DIR__/model",
+            "model": {
+                "name": "rbpnet",
+                "params": {
+                    "profile_length": 300,
+                    "enrichment_head_type": "none",
+                },
+            },
+            "batch_size": 64,
+            "epochs": 100,
+            "learning_rate": 0.001,
+            "weight_decay": 0.0,
+            "optimizer": {"name": "adamw"},
+            "lr_scheduler": {"name": "reduce_on_plateau", "patience": 3},
+            "mixed_precision": False,
+            "gradient_clip_norm": 0.5,
+            "patience": 10,
+            "monitor": "val_loss",
+            "loss": {
+                "name": "rbpnet",
+                "lambda_ip_profile": 1.0,
+                "lambda_sm_profile": 1.0,
+                "lambda_enrichment": 1.0,
+            },
+            "device": "auto",
+            "num_workers": 0,
+            "mmap_mode": "r",
+            "seed": 123,
+            "max_train_jitter": 0,
+            "deduplicate_loci": True,
+            "split_source": "config",
+            "split": {
+                "method": "group",
+                "group_col": "group_gene_id",
+                "val_frac": 0.1,
+                "test_frac": 0.1,
+            },
+        }
+    raise ValueError("workflow must be one of: saluki, legnet, rbpnet")
 
 
 def _readme(workflow: str) -> str:
@@ -73,14 +114,14 @@ def init_run(workflow: str, out_dir: str | Path, *, force: bool = False) -> Path
     """Write starter configs for a TranscriptML run.
 
     Args:
-        workflow: Workflow template name, ``saluki`` or ``legnet``.
+        workflow: Workflow template name: ``saluki``, ``legnet``, or ``rbpnet``.
         out_dir: Directory to create or populate.
         force: Allow writing into a non-empty output directory.
     """
 
     workflow = str(workflow).strip().lower()
-    if workflow not in {"saluki", "legnet"}:
-        raise ValueError("workflow must be one of: saluki, legnet")
+    if workflow not in {"saluki", "legnet", "rbpnet"}:
+        raise ValueError("workflow must be one of: saluki, legnet, rbpnet")
     out = Path(out_dir)
     if out.exists() and any(out.iterdir()) and not force:
         raise FileExistsError(f"Output directory is not empty: {out}. Use --force to overwrite template files.")

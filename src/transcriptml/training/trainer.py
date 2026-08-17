@@ -33,6 +33,9 @@ class TrainConfig:
     epochs: int = 20
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
+    optimizer: str | Mapping[str, Any] = "adamw"
+    lr_scheduler: str | Mapping[str, Any] | None = None
+    mixed_precision: bool = False
     gradient_clip_norm: float | None = 0.5
     patience: int = 5
     monitor: str | Sequence[str] = "val_loss"
@@ -46,6 +49,11 @@ class TrainConfig:
     head_layernorm: bool = False
     sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     split_source: str = "auto"
+    cv_plan: str | None = None
+    fold: int | None = None
+    max_train_jitter: int = 0
+    allow_random_window_split: bool = False
+    deduplicate_loci: bool = True
     split: Mapping[str, Any] = field(
         default_factory=lambda: {"method": "random", "val_frac": 0.1, "test_frac": 0.1}
     )
@@ -129,6 +137,21 @@ def _select_splits(bundle: DatasetBundle, cfg: TrainConfig) -> tuple[dict[str, l
         cfg: Training configuration containing split source and strategy.
     """
 
+    if cfg.cv_plan is not None or cfg.fold is not None:
+        if cfg.cv_plan is None or cfg.fold is None:
+            raise ValueError("cv_plan and fold must be provided together")
+        if bundle.metadata is None:
+            raise ValueError("chromosome CV requires dataset bundle metadata")
+        from transcriptml.workflows.chromosome_cv import (
+            load_chromosome_cv_plan,
+            resolve_chromosome_cv_plan,
+        )
+
+        plan = load_chromosome_cv_plan(cfg.cv_plan)
+        resolution = resolve_chromosome_cv_plan(
+            plan, bundle.metadata, fold=cfg.fold
+        )
+        return normalize_splits(resolution.indices), "cv_plan"
     source = str(cfg.split_source or "auto").strip().lower()
     if source not in {"auto", "bundle", "config"}:
         raise ValueError("split_source must be one of: auto, bundle, config")
@@ -149,6 +172,16 @@ def _make_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]
 
     splits, _ = _select_splits(bundle, cfg)
     return splits
+
+
+def _cv_plan_id(cfg: TrainConfig) -> str | None:
+    """Return the validated plan identifier recorded by CV training artifacts."""
+
+    if cfg.cv_plan is None:
+        return None
+    from transcriptml.workflows.chromosome_cv import load_chromosome_cv_plan
+
+    return load_chromosome_cv_plan(cfg.cv_plan).plan_id
 
 
 class _ArrayRegressionDataset(Dataset):
@@ -506,6 +539,15 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     """
 
     cfg = _as_train_config(config)
+    requested_model = normalize_model_config(cfg.model)
+    if requested_model.name == "rbpnet":
+        if cfg.sequence_controls:
+            raise ValueError(
+                "generic sequence_controls are not supported for structured RBPNet training"
+            )
+        from transcriptml.rbpnet.training import train_rbpnet_model
+
+        return train_rbpnet_model(bundle, cfg)
     _seed_everything(cfg.seed)
     device = resolve_device(cfg.device)
     out = Path(cfg.output_dir)
@@ -531,6 +573,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     else:
         y_train = bundle.y
     splits, split_source_used = _select_splits(bundle, cfg)
+    cv_plan_id = _cv_plan_id(cfg)
     split_counts = {name: len(splits.get(name, [])) for name in ("train", "val", "test")}
     model_config = normalize_model_config(cfg.model)
     if cfg.head_layernorm and model_config.name != "saluki_exact":
@@ -684,6 +727,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
                 extra={
                     "splits": splits,
                     "split_source_used": split_source_used,
+                    "cv_plan_id": cv_plan_id,
                     "train_config": asdict(cfg),
                     "loss_config": normalized_loss_config,
                 },
@@ -700,6 +744,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             extra={
                 "splits": splits,
                 "split_source_used": split_source_used,
+                "cv_plan_id": cv_plan_id,
                 "train_config": asdict(cfg),
                 "loss_config": normalized_loss_config,
             },
@@ -766,6 +811,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "head_layernorm": bool(cfg.head_layernorm),
         "split_source_requested": cfg.split_source,
         "split_source_used": split_source_used,
+        "cv_plan": cfg.cv_plan,
+        "cv_plan_id": cv_plan_id,
+        "fold": cfg.fold,
         "split_counts": split_counts,
         "test_loss": test_loss_metrics.get("loss"),
         "test_mse": test_result.get("loss"),
@@ -785,15 +833,35 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     return {"model": model, "history": history, "splits": splits, "summary": summary}
 
 
-def train_from_config(config_path: str | Path, *, progress: bool | None = None) -> dict[str, Any]:
+def train_from_config(
+    config_path: str | Path,
+    *,
+    progress: bool | None = None,
+    cv_plan: str | Path | None = None,
+    fold: int | None = None,
+    dataset: str | Path | None = None,
+    output_dir: str | Path | None = None,
+) -> dict[str, Any]:
     """Load a training config and train its requested model.
 
     Args:
         config_path: Path to a JSON or TOML training configuration file.
         progress: Optional override for whether progress messages are emitted.
+        cv_plan: Optional chromosome CV plan overriding the config.
+        fold: Optional zero-based CV test fold overriding the config.
+        dataset: Optional dataset-directory override.
+        output_dir: Optional output-directory override.
     """
 
     cfg = TrainConfig(**_load_config(config_path))
+    if cv_plan is not None:
+        cfg.cv_plan = str(cv_plan)
+    if fold is not None:
+        cfg.fold = int(fold)
+    if dataset is not None:
+        cfg.dataset = str(dataset)
+    if output_dir is not None:
+        cfg.output_dir = str(output_dir)
     if progress is not None:
         cfg.progress = bool(progress)
     log_progress(f"training: loading dataset {cfg.dataset}", enabled=cfg.progress)

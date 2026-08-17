@@ -22,7 +22,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=7"
+  "pytest>=7",
+  "h5py>=3.10",
+  "pyarrow>=12",
+  "pysam>=0.22",
+  "scipy>=1.10"
 ]
 arrow = [
   "pyarrow>=12"
@@ -31,6 +35,12 @@ analysis = [
   "pyarrow>=12",
   "polars>=0.20",
   "seaborn>=0.13"
+]
+rbpnet = [
+  "h5py>=3.10",
+  "pyarrow>=12",
+  "pysam>=0.22",
+  "scipy>=1.10"
 ]
 
 [project.scripts]

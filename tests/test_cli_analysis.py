@@ -6,6 +6,7 @@ import pytest
 from transcriptml.cli.main import _resolve_evaluate_args, _resolve_interpret_args, build_parser, main
 from transcriptml.data.bundle import DatasetBundle, save_bundle
 from transcriptml.data.encoding import encode_saluki_transcript
+from transcriptml.models.registry import build_model, save_checkpoint
 
 
 def test_models_cli_list_and_show_json(capsys):
@@ -45,6 +46,15 @@ def test_init_run_cli_writes_templates(tmp_path):
     assert not (out_dir / "run_config.json").exists()
     assert (out_dir / "README.md").exists()
 
+    rbpnet_dir = tmp_path / "rbpnet_run"
+    main(["init-run", "--workflow", "rbpnet", "--out-dir", str(rbpnet_dir)])
+    rbpnet = json.loads((rbpnet_dir / "train_config.json").read_text(encoding="utf-8"))
+    assert rbpnet["model"]["name"] == "rbpnet"
+    assert rbpnet["model"]["params"]["profile_length"] == 300
+    assert rbpnet["split"]["method"] == "group"
+    assert rbpnet["split"]["group_col"] == "group_gene_id"
+    assert rbpnet["max_train_jitter"] == 0
+
 
 def test_plot_ism_cli_demo_writes_png(tmp_path):
     out_path = tmp_path / "ism.png"
@@ -83,6 +93,26 @@ def test_evaluate_cli_resolves_named_and_legacy_positional_args():
     mixed = parser.parse_args(["evaluate", "model/best.pt", "data/saluki", "--out-csv", "eval/predictions.csv"])
     assert _resolve_evaluate_args(mixed, parser)["out_csv"] == "eval/predictions.csv"
 
+    report = parser.parse_args(
+        [
+            "evaluate",
+            "--checkpoint",
+            "model/best.pt",
+            "--dataset",
+            "data/rbpnet",
+            "--out-dir",
+            "eval/report",
+            "--save-profiles",
+        ]
+    )
+    assert _resolve_evaluate_args(report, parser) == {
+        "checkpoint": "model/best.pt",
+        "dataset": "data/rbpnet",
+        "out_dir": "eval/report",
+    }
+    assert report.split is None
+    assert report.save_profiles is True
+
 
 def test_evaluate_cli_rejects_conflicting_named_and_positional_args():
     parser = build_parser()
@@ -103,13 +133,22 @@ def test_evaluate_cli_rejects_conflicting_named_and_positional_args():
 
 def test_interpret_cli_resolves_named_and_legacy_positional_args():
     parser = build_parser()
-    motif_extra = {
+    command_extra = {
+        "window-ism": ["--window-size", "100"],
         "motif-ablation": ["--motif", "AUG"],
         "motif-context": ["--motif", "AUG"],
         "epistasis": ["--motif", "AUG"],
     }
 
-    for command in ["ism", "codon-ism", "motif-ablation", "motif-context", "epistasis"]:
+    for command in [
+        "ism",
+        "window-ism",
+        "codon-ism",
+        "region-ablation",
+        "motif-ablation",
+        "motif-context",
+        "epistasis",
+    ]:
         named = parser.parse_args(
             [
                 command,
@@ -119,7 +158,7 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
                 "data/saluki",
                 "--out-dir",
                 f"interpret/{command}",
-                *motif_extra.get(command, []),
+                *command_extra.get(command, []),
             ]
         )
         assert _resolve_interpret_args(named, parser) == {
@@ -134,7 +173,7 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
                 "model/best.pt",
                 "data/saluki",
                 f"interpret/{command}",
-                *motif_extra.get(command, []),
+                *command_extra.get(command, []),
             ]
         )
         assert _resolve_interpret_args(positional, parser) == {
@@ -150,10 +189,118 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
                 "data/saluki",
                 "--out-dir",
                 f"interpret/{command}",
-                *motif_extra.get(command, []),
+                *command_extra.get(command, []),
             ]
         )
         assert _resolve_interpret_args(mixed, parser)["out_dir"] == f"interpret/{command}"
+
+
+def test_region_ablation_cli_defaults_and_overrides():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "region-ablation",
+            "--checkpoint",
+            "model.pt",
+            "--dataset",
+            "data",
+            "--out-dir",
+            "out",
+            "--junction-counts",
+            "1,3,8",
+            "--n-ablations-for",
+            "cds_random=7",
+            "--n-ablations-for",
+            "5utr_shuffle=0",
+        ]
+    )
+
+    assert args.n_ablations == 100
+    assert args.junction_counts == (1, 3, 8)
+    assert args.junction_min_spacing == 25
+    assert args.n_ablations_for == [("cds_random", 7), ("5utr_shuffle", 0)]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--junction-counts", "1,1"],
+        ["--junction-counts", "0,5"],
+        ["--n-ablations-for", "unknown=3"],
+        ["--n-ablations-for", "cds_random=-1"],
+    ],
+)
+def test_region_ablation_cli_rejects_invalid_condition_configuration(arguments):
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "region-ablation",
+                "--checkpoint",
+                "model.pt",
+                "--dataset",
+                "data",
+                "--out-dir",
+                "out",
+                *arguments,
+            ]
+        )
+
+
+def test_region_ablation_cli_tiny_bundle_and_checkpoint(tmp_path):
+    model_config = {
+        "name": "small_cnn",
+        "params": {
+            "in_ch": 6,
+            "n_filters": 2,
+            "kernel_size": 3,
+            "n_layers": 1,
+            "dropout": 0.0,
+            "head_hidden": 2,
+        },
+    }
+    checkpoint = tmp_path / "model.pt"
+    save_checkpoint(checkpoint, build_model(model_config), model_config)
+    bundle = DatasetBundle(
+        X=encode_saluki_transcript(
+            "AACCCGGGUUUA",
+            length=12,
+            cds_positions=[2, 5, 8],
+            splice_positions=[1, 6, 10],
+        )[None],
+        ids=["tx1"],
+        schema="saluki6",
+        metadata=[{"cds_length": 9}],
+    )
+    dataset = tmp_path / "dataset"
+    save_bundle(bundle, dataset)
+    out = tmp_path / "region_ablation"
+
+    main(
+        [
+            "region-ablation",
+            "--checkpoint",
+            str(checkpoint),
+            "--dataset",
+            str(dataset),
+            "--out-dir",
+            str(out),
+            "--n-ablations",
+            "1",
+            "--junction-counts",
+            "1,5",
+            "--device",
+            "cpu",
+            "--mutation-batch-size",
+            "4",
+        ]
+    )
+
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["analysis"] == "region_ablation"
+    assert summary["n_instances"] == 9
+    assert summary["n_mutants"] == 9
+    assert np.load(out / "effects.npy").shape == (9, 1)
 
 
 def test_interpret_cli_rejects_conflicting_named_and_positional_args():
