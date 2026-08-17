@@ -5,6 +5,16 @@ import json
 from pathlib import Path
 
 DEFAULT_SALUKI_LENGTH = 12288
+_REGION_ABLATION_FAMILIES = (
+    "5utr_shuffle",
+    "5utr_random",
+    "cds_nt_shuffle",
+    "cds_codon_shuffle",
+    "cds_random",
+    "3utr_shuffle",
+    "3utr_random",
+    "junction_scatter",
+)
 
 
 def _csv_list(value: str | None) -> list[str] | None:
@@ -26,6 +36,42 @@ def _maybe_int(value: str | None) -> str | int | None:
     if value is None:
         return None
     return int(value) if value.isdigit() else value
+
+
+def _positive_int_csv(value: str) -> tuple[int, ...]:
+    """Parse a non-empty comma-separated list of unique positive integers."""
+
+    try:
+        values = tuple(int(token.strip()) for token in value.split(",") if token.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected comma-separated integers") from exc
+    if not values:
+        raise argparse.ArgumentTypeError("expected at least one integer")
+    if any(item <= 0 for item in values):
+        raise argparse.ArgumentTypeError("all values must be positive")
+    if len(set(values)) != len(values):
+        raise argparse.ArgumentTypeError("values must be unique")
+    return values
+
+
+def _region_ablation_override(value: str) -> tuple[str, int]:
+    """Parse one ``FAMILY=COUNT`` region-ablation replicate override."""
+
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("expected FAMILY=COUNT")
+    family, raw_count = value.split("=", 1)
+    family = family.strip()
+    if family not in _REGION_ABLATION_FAMILIES:
+        raise argparse.ArgumentTypeError(
+            f"unknown family {family!r}; expected one of {', '.join(_REGION_ABLATION_FAMILIES)}"
+        )
+    try:
+        count = int(raw_count)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("COUNT must be an integer") from exc
+    if count < 0:
+        raise argparse.ArgumentTypeError("COUNT must be non-negative")
+    return family, count
 
 
 def _analysis_install_message() -> str:
@@ -246,6 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("ism", "Run single-nucleotide ISM"),
         ("window-ism", "Run window-level random-mutagenesis ISM"),
         ("codon-ism", "Run CDS codon-level ISM"),
+        ("region-ablation", "Run Saluki transcript-region and junction ablations"),
         ("motif-ablation", "Run motif ablation"),
         ("motif-context", "Run motif context scan"),
         ("epistasis", "Run pairwise motif epistasis"),
@@ -273,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
                 choices=["random_different", "shuffle", "dinuc_shuffle"],
             )
             p.add_argument("--seed", type=int, default=123)
-        if name in {"ism", "window-ism", "codon-ism"}:
+        if name in {"ism", "window-ism", "codon-ism", "region-ablation"}:
             p.add_argument("--mutation-batch-size", type=int, default=512)
         if name == "window-ism":
             p.add_argument("--window-size", type=int, required=True)
@@ -316,6 +363,30 @@ def build_parser() -> argparse.ArgumentParser:
                 help="Streaming long-form mutation table format",
             )
             p.add_argument("--rows-per-shard", type=int, default=100_000)
+        if name == "region-ablation":
+            p.add_argument("--n-ablations", type=int, default=100)
+            p.add_argument(
+                "--n-ablations-for",
+                type=_region_ablation_override,
+                action="append",
+                default=[],
+                metavar="FAMILY=COUNT",
+                help="Override replicates for one family; repeat as needed; zero disables it",
+            )
+            p.add_argument(
+                "--junction-counts",
+                type=_positive_int_csv,
+                default=(1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50),
+                help="Unique positive junction counts in execution order",
+            )
+            p.add_argument("--junction-min-spacing", type=int, default=25)
+            p.add_argument("--seed", type=int, default=123)
+            p.add_argument("--cds-channel", help="CDS annotation channel name or integer index")
+            p.add_argument("--splice-channel", help="Splice annotation channel name or integer index")
+            p.add_argument("--sequence-start", type=int, help="Inclusive transcript index")
+            p.add_argument("--sequence-end", type=int, help="Exclusive transcript index")
+            p.add_argument("--sequence-shard-index", type=int, help="Zero-based transcript shard")
+            p.add_argument("--sequence-shards", type=int, help="Total transcript shards")
         if name == "motif-context":
             p.add_argument("--window-size", type=int, default=5)
             p.add_argument("--context-width", type=int)
@@ -685,7 +756,10 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = interpret_paths["out_dir"]
 
     log_progress(f"{args.command}: loading dataset {dataset}")
-    bundle = load_bundle(dataset, mmap_mode="r" if args.command in {"codon-ism", "window-ism"} else None)
+    bundle = load_bundle(
+        dataset,
+        mmap_mode="r" if args.command in {"codon-ism", "window-ism", "region-ablation"} else None,
+    )
     log_progress(f"{args.command}: loading checkpoint {checkpoint}")
     predictor = Predictor.from_checkpoint(checkpoint, device=args.device, batch_size=args.batch_size)
     cds_channel = _maybe_int(getattr(args, "cds_channel", None))
@@ -744,6 +818,47 @@ def main(argv: list[str] | None = None) -> None:
             sequence_shards=args.sequence_shards,
         )
         save_codon_ism_result(result, out_dir, save_mutations=False)
+    elif args.command == "region-ablation":
+        from transcriptml.interpret.region_ablation import (
+            RegionAblationConfig,
+            region_ablation,
+            save_region_ablation_result,
+        )
+
+        overrides: dict[str, int] = {}
+        for family, count in args.n_ablations_for:
+            if family in overrides:
+                parser.error(f"region-ablation got duplicate --n-ablations-for family {family!r}")
+            overrides[family] = count
+        result = region_ablation(
+            bundle.X,
+            predictor,
+            schema=bundle.schema,
+            sequence_ids=bundle.ids,
+            metadata=bundle.metadata,
+            config=RegionAblationConfig(
+                n_ablations=args.n_ablations,
+                n_ablations_for=overrides,
+                junction_counts=tuple(args.junction_counts),
+                junction_min_spacing=args.junction_min_spacing,
+                seed=args.seed,
+            ),
+            cds_channel=cds_channel,
+            splice_channel=_maybe_int(args.splice_channel),
+            reference_batch_size=args.batch_size,
+            mutation_batch_size=args.mutation_batch_size,
+            sequence_start=args.sequence_start,
+            sequence_end=args.sequence_end,
+            sequence_shard_index=args.sequence_shard_index,
+            sequence_shards=args.sequence_shards,
+            storage_dir=out_dir,
+        )
+        save_region_ablation_result(
+            result,
+            out_dir,
+            checkpoint=checkpoint,
+            dataset=dataset,
+        )
     elif args.command == "motif-ablation":
         from transcriptml.interpret.ablation import motif_ablation, save_motif_ablation_result
 

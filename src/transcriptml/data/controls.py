@@ -10,6 +10,17 @@ from typing import Literal, Mapping, Sequence
 import numpy as np
 
 from transcriptml.data.bundle import DatasetBundle, save_bundle_metadata
+from transcriptml.data.region_edits import (
+    base_channel_indices as _shared_base_channel_indices,
+    base_symbols as _shared_base_symbols,
+    randomize_nucleotides_inplace as _shared_randomize_nucleotides,
+    region_bounds as _shared_region_bounds,
+    resolve_cds_channel as _shared_resolve_cds_channel,
+    shuffle_codons_inplace as _shared_shuffle_codons,
+    shuffle_nucleotides_inplace as _shared_shuffle_nucleotides,
+    valid_length_from_bases as _shared_valid_length,
+    write_base_symbols as _shared_write_base_symbols,
+)
 from transcriptml.data.schemas import SequenceSchema, get_schema
 from transcriptml.interpret.codon_ism import CDSCodonStarts, find_cds_codon_starts
 from transcriptml.progress import ProgressReporter, log_progress
@@ -443,49 +454,15 @@ def normalize_sequence_control_config(config: object) -> SequenceControlConfig:
 
 
 def _base_channel_indices(schema: SequenceSchema) -> np.ndarray:
-    indices = []
-    letters = []
-    for base_name in schema.base_channels:
-        if base_name not in schema.channels:
-            raise ValueError(f"Base channel '{base_name}' is not present in schema channels {schema.channels}")
-        letter = base_name.upper().replace("T", "U")
-        if letter not in {"A", "C", "G", "U"}:
-            raise ValueError(f"Unsupported base channel '{base_name}'; expected A/C/G/U/T")
-        indices.append(schema.channels.index(base_name))
-        letters.append(letter)
-    if set(letters) != {"A", "C", "G", "U"} or len(letters) != 4:
-        raise ValueError("sequence_controls requires exactly one A, C, G, and U/T base channel")
-    return np.asarray(indices, dtype=np.int64)
+    return _shared_base_channel_indices(schema)
 
 
 def _resolve_cds_channel(schema: SequenceSchema, cds_channel: str | int | None) -> int:
-    if isinstance(cds_channel, int):
-        if cds_channel < 0 or cds_channel >= schema.n_channels:
-            raise ValueError(f"cds_channel index {cds_channel} is outside schema with {schema.n_channels} channels")
-        return int(cds_channel)
-    if isinstance(cds_channel, str):
-        try:
-            return schema.channels.index(cds_channel)
-        except ValueError as exc:
-            raise ValueError(f"cds_channel '{cds_channel}' is not in schema channels {schema.channels}") from exc
-
-    preferred = ("CDS_codon_start", "cds_codon_start", "codon_start", "CDS", "cds")
-    lower_to_index = {name.lower(): i for i, name in enumerate(schema.channels)}
-    for name in preferred:
-        if name.lower() in lower_to_index:
-            return lower_to_index[name.lower()]
-    for i, name in enumerate(schema.channels):
-        lowered = name.lower()
-        if "cds" in lowered or "coding" in lowered or "codon_start" in lowered:
-            return i
-    raise ValueError("Could not infer CDS channel from schema; pass cds_channel explicitly")
+    return _shared_resolve_cds_channel(schema, cds_channel)
 
 
 def _infer_valid_length(x: np.ndarray, base_channels: np.ndarray) -> int:
-    base = np.asarray(x[base_channels])
-    nonzero = np.any(base != 0, axis=0)
-    idx = np.nonzero(nonzero)[0]
-    return int(idx[-1] + 1) if idx.size else 0
+    return _shared_valid_length(x, base_channels)
 
 
 def _mixed_rng(seed: int, seq_index: int, operation: OperationName, region: RegionName) -> np.random.Generator:
@@ -504,14 +481,7 @@ def _mixed_rng(seed: int, seq_index: int, operation: OperationName, region: Regi
 
 
 def _base_symbols(x: np.ndarray, start: int, end: int, base_channels: np.ndarray) -> np.ndarray:
-    if end <= start:
-        return np.empty((0,), dtype=np.int16)
-    region = np.asarray(x[base_channels, int(start) : int(end)])
-    called = np.count_nonzero(region, axis=0) == 1
-    symbols = np.full(region.shape[1], -1, dtype=np.int16)
-    if np.any(called):
-        symbols[called] = np.argmax(region[:, called], axis=0).astype(np.int16, copy=False)
-    return symbols
+    return _shared_base_symbols(x, start, end, base_channels)
 
 
 def _write_base_symbols(
@@ -521,17 +491,7 @@ def _write_base_symbols(
     symbols: np.ndarray,
     base_channels: np.ndarray,
 ) -> None:
-    if end <= start:
-        return
-    start = int(start)
-    end = int(end)
-    x[base_channels, start:end] = 0
-    valid = np.asarray(symbols) >= 0
-    if not np.any(valid):
-        return
-    cols = start + np.nonzero(valid)[0]
-    channel_offsets = np.asarray(symbols[valid], dtype=np.int64)
-    x[base_channels[channel_offsets], cols] = 1
+    _shared_write_base_symbols(x, start, end, symbols, base_channels)
 
 
 def _region_bounds(
@@ -540,17 +500,7 @@ def _region_bounds(
     valid_length: int,
     cds: CDSCodonStarts | None,
 ) -> tuple[int, int] | None:
-    if region == "transcript":
-        return 0, int(valid_length)
-    if cds is None or cds.cds_length < 3 or cds.starts.size == 0:
-        return None
-    cds_start = max(0, int(cds.cds_start))
-    cds_end = min(int(valid_length), int(cds.cds_end) + 1)
-    if region == "5utr":
-        return 0, cds_start
-    if region == "cds":
-        return cds_start, cds_end
-    return cds_end, int(valid_length)
+    return _shared_region_bounds(region, valid_length=valid_length, cds=cds)
 
 
 def _shuffle_nucleotides(
@@ -561,10 +511,13 @@ def _shuffle_nucleotides(
     base_channels: np.ndarray,
     rng: np.random.Generator,
 ) -> None:
-    symbols = _base_symbols(x, start, end, base_channels)
-    if symbols.size > 1:
-        symbols = symbols[rng.permutation(symbols.size)]
-    _write_base_symbols(x, start, end, symbols, base_channels)
+    _shared_shuffle_nucleotides(
+        x,
+        start=start,
+        end=end,
+        base_channels=base_channels,
+        rng=rng,
+    )
 
 
 def _randomize_nucleotides(
@@ -575,9 +528,13 @@ def _randomize_nucleotides(
     base_channels: np.ndarray,
     rng: np.random.Generator,
 ) -> None:
-    length = max(0, int(end) - int(start))
-    symbols = rng.integers(0, int(base_channels.size), size=length, dtype=np.int16)
-    _write_base_symbols(x, start, end, symbols, base_channels)
+    _shared_randomize_nucleotides(
+        x,
+        start=start,
+        end=end,
+        base_channels=base_channels,
+        rng=rng,
+    )
 
 
 def _frameshift_cds_channel(
@@ -609,15 +566,98 @@ def _shuffle_codons(
     base_channels: np.ndarray,
     rng: np.random.Generator,
 ) -> None:
-    starts = np.asarray(cds.starts, dtype=np.int64)
-    starts = starts[(starts >= int(cds.cds_start)) & (starts + 2 <= int(cds.cds_end))]
-    if starts.size == 0:
-        return
-    codons = np.stack([_base_symbols(x, int(start), int(start) + 3, base_channels) for start in starts], axis=0)
-    if codons.shape[0] > 1:
-        codons = codons[rng.permutation(codons.shape[0])]
-    for start, codon in zip(starts.tolist(), codons, strict=True):
-        _write_base_symbols(x, int(start), int(start) + 3, codon, base_channels)
+    _shared_shuffle_codons(x, cds=cds, base_channels=base_channels, rng=rng)
+
+
+def sequence_control_base_channels(schema: str | SequenceSchema = "saluki6") -> np.ndarray:
+    """Return base-channel indices using the sequence-control conventions.
+
+    This public helper lets interpretation analyses use the exact same channel
+    resolution and edit semantics as training-time sequence controls.
+    """
+
+    return _base_channel_indices(get_schema(schema))
+
+
+def resolve_sequence_control_cds_channel(
+    schema: str | SequenceSchema = "saluki6",
+    cds_channel: str | int | None = None,
+) -> int:
+    """Resolve the CDS channel using sequence-control conventions."""
+
+    return _resolve_cds_channel(get_schema(schema), cds_channel)
+
+
+def sequence_control_valid_length(x: np.ndarray, base_channels: np.ndarray) -> int:
+    """Infer represented length from the resolved base channels."""
+
+    return _infer_valid_length(x, np.asarray(base_channels, dtype=np.int64))
+
+
+def sequence_control_region_bounds(
+    region: RegionName,
+    *,
+    valid_length: int,
+    cds: CDSCodonStarts | None,
+) -> tuple[int, int] | None:
+    """Return region bounds using the training-time sequence-control rules."""
+
+    return _region_bounds(region, valid_length=valid_length, cds=cds)
+
+
+def shuffle_region_nucleotides_inplace(
+    x: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    base_channels: np.ndarray,
+    rng: np.random.Generator,
+) -> None:
+    """Shuffle one region with the same semantics as sequence controls."""
+
+    _shuffle_nucleotides(
+        x,
+        start=start,
+        end=end,
+        base_channels=np.asarray(base_channels, dtype=np.int64),
+        rng=rng,
+    )
+
+
+def randomize_region_nucleotides_inplace(
+    x: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    base_channels: np.ndarray,
+    rng: np.random.Generator,
+) -> None:
+    """Replace one region with IID bases using sequence-control semantics."""
+
+    _randomize_nucleotides(
+        x,
+        start=start,
+        end=end,
+        base_channels=np.asarray(base_channels, dtype=np.int64),
+        rng=rng,
+    )
+
+
+def shuffle_cds_codons_inplace(
+    x: np.ndarray,
+    *,
+    cds: CDSCodonStarts,
+    base_channels: np.ndarray,
+    rng: np.random.Generator,
+) -> None:
+    """Shuffle annotated CDS codons using sequence-control semantics."""
+
+    _shuffle_codons(
+        x,
+        cds=cds,
+        base_channels=np.asarray(base_channels, dtype=np.int64),
+        rng=rng,
+    )
 
 
 def _empty_nested_counts() -> dict[str, dict[str, int]]:

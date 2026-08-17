@@ -159,6 +159,10 @@ Interpretation
    :members: MotifAblationResult, motif_ablation, save_motif_ablation_result
    :member-order: bysource
 
+.. automodule:: transcriptml.interpret.region_ablation
+   :members: RegionAblationConfig, RegionAblationInstance, RegionAblationResult, region_ablation, save_region_ablation_result
+   :member-order: bysource
+
 .. automodule:: transcriptml.interpret.context
    :members: MotifContextResult, motif_context_scan, save_motif_context_result
    :member-order: bysource

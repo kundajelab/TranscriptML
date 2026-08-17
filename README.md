@@ -4,7 +4,8 @@ TranscriptML is a toolkit for training, evaluating, and interpreting RNA
 sequence-to-function models. It provides command-line tools and reusable Python
 APIs for preparing sequence datasets, training models, evaluating held-out
 predictions, and investigating learned sequence features with analyses such as
-in silico mutagenesis, motif ablation, context scans, etc.
+in silico mutagenesis, transcript-region and exon-junction ablation, motif
+ablation, context scans, etc.
 
 TranscriptML currently supports three main workflows:
 

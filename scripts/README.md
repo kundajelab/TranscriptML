@@ -14,6 +14,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
 - `codon_ism_by_fold.sh` and `submit_codon_ism_by_fold.sh`: synonymous codon ISM, one job per trained fold.
 - `all_codon_ism_shard_by_fold.sh` and `submit_all_codon_ism_shard_by_fold.sh`: all-codon ISM, one 10-task job array per fold by default.
+- `region_ablation_by_fold.sh` and `submit_region_ablation_by_fold.sh`: Saluki region and exon-junction density ablations, one job per fold.
 - `motif_ablation_by_fold.sh` and `motif_ablation_all_folds.sh`: motif ablations across the configured motif list.
 - `motif_epistasis_by_fold.sh` and `motif_epistasis_all_folds.sh`: motif epistasis across the configured motif-pair list.
 - `mpra/`: MPRA 3-prime UTR insert workflows for building 4-channel LegNet input, training LegNet, and running single-nucleotide ISM. See `mpra/README.md`.
@@ -88,6 +89,8 @@ What each group means:
 | `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `CV_MODEL`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior or model name. |
 | `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
+| `REGION_ABLATION_N`, `REGION_JUNCTION_COUNTS`, `REGION_JUNCTION_MIN_SPACING`, `REGION_ABLATION_SEED` | Universal region-ablation replicate count, junction-density grid, soft spacing target, and deterministic seed. |
+| `REGION_ABLATION_N_FOR` | Optional Bash array of `FAMILY=COUNT` overrides; a zero count disables that family. |
 | `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
 | `MOTIF_ABLATION_SPECS`, `MOTIF_EPISTASIS_SPECS` | Edit only when running motif ablation or motif epistasis with a custom motif list. |
 
@@ -332,6 +335,29 @@ ${INTERPRET_ROOT}/ism/fold0/
 ${INTERPRET_ROOT}/ism/fold1/
 ...
 ```
+
+## Run Region Ablation
+
+```bash
+bash scripts/submit_region_ablation_by_fold.sh
+```
+
+The defaults run 100 replicates for each of seven coding-region sequence
+controls and each junction count in `1,5,10,...,50`. Junction placement uses a
+soft 25-nt spacing target. Customize the copied `sherlock_config.sh`, for
+example:
+
+```bash
+REGION_ABLATION_N=100
+REGION_JUNCTION_COUNTS="1,5,10,15,20,25,30,35,40,45,50"
+REGION_JUNCTION_MIN_SPACING=25
+REGION_ABLATION_N_FOR=(
+  "cds_codon_shuffle=250"
+  "5utr_shuffle=0"
+)
+```
+
+Outputs go to `${INTERPRET_ROOT}/region_ablation/fold*/`.
 
 ## Run Synonymous Codon ISM
 

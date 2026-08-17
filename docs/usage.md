@@ -484,7 +484,75 @@ The `--region` flag can be `5utr`, `cds`, or `3utr`. Omit it to analyze motif
 instances across the full transcript. Region-aware analyses require Saluki-style
 annotation channels.
 
-### 6. Run Codon Analyses
+### 6. Run Region Ablation
+
+Region ablation measures how Saluki responds when complete transcript regions
+or exon-junction arrangements are replaced with matched controls. For a coding
+transcript, the default scan runs nucleotide shuffle and IID A/C/G/U
+replacement controls for both UTRs, nucleotide shuffle, codon shuffle, and IID
+replacement controls for the CDS, and junction-density scans at 1, 5, 10, ...,
+50 junctions in the CDS. Transcripts without represented CDS annotation receive
+the junction scan across their full valid sequence.
+
+Run one result per model fold:
+
+```bash
+transcriptml region-ablation \
+  --checkpoint runs/saluki_cv10/fold0/model/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/region_ablation/fold0 \
+  --n-ablations 100 \
+  --junction-counts 1,5,10,15,20,25,30,35,40,45,50 \
+  --junction-min-spacing 25 \
+  --seed 123 \
+  --device auto \
+  --batch-size 128 \
+  --mutation-batch-size 512
+```
+
+Sequence perturbations leave the CDS and splice channels unchanged. Junction
+perturbations leave sequence and CDS annotation unchanged, clear the eligible
+splice channel, and place exactly the requested number of new junction marks.
+Coding-transcript UTR junctions are preserved. The 25-nt minimum separation is
+a soft target: when a region cannot fit N junctions at that spacing, the command
+uses the largest feasible spacing down to one nucleotide. A condition is skipped
+only when the region length is not greater than N.
+
+`--n-ablations` sets a universal replicate count. Use repeatable overrides when
+one family needs different sampling or should be disabled:
+
+```bash
+transcriptml region-ablation \
+  --checkpoint runs/saluki_cv10/fold0/model/best.pt \
+  --dataset data/saluki \
+  --out-dir interpret/region_ablation_targeted/fold0 \
+  --n-ablations 100 \
+  --n-ablations-for cds_codon_shuffle=250 \
+  --n-ablations-for 5utr_shuffle=0
+```
+
+The accepted family names are `5utr_shuffle`, `5utr_random`,
+`cds_nt_shuffle`, `cds_codon_shuffle`, `cds_random`, `3utr_shuffle`,
+`3utr_random`, and `junction_scatter`. The sequence slicing and sharding flags
+match codon ISM: use `--sequence-start/--sequence-end` or
+`--sequence-shard-index/--sequence-shards` for large runs.
+
+`instances.csv` has one row per transcript-condition. Raw replicate predictions
+and signed `ablation - reference` effects occupy corresponding rows of
+`ablation_predictions.npy` and `effects.npy`; `replicate_mask.npy` distinguishes
+real values from NaN padding when family counts differ. The result also includes
+per-condition mean, mean-absolute, and standard-deviation arrays, an audited
+`skipped.csv`, and complete reproducibility metadata in `summary.json`.
+
+For the standard 11-point junction grid, a coding transcript with non-empty
+UTRs receives 18 condition rows and approximately `18 * n_ablations` mutant
+predictions. The Sherlock launcher is:
+
+```bash
+bash scripts/submit_region_ablation_by_fold.sh
+```
+
+### 7. Run Codon Analyses
 
 Lots of work has shown that the coding sequence of an mRNA strongly influences its
 stability. Codon analyses are designed to dissect Saluki's understanding of this influence.
@@ -516,7 +584,8 @@ per fold; see the TranscriptML [scripts](https://github.com/kundajelab/Transcrip
 ### HPC-Optimized Saluki Workflow
 
 The `scripts/` directory contains Sherlock-oriented SLURM jobs for Saluki input
-building, 10-fold CV, hyperparameter sweeps, ISM, motif analyses, and codon ISM.
+building, 10-fold CV, hyperparameter sweeps, ISM, region ablation, motif
+analyses, and codon ISM.
 The scripts are intentionally editable. Copy them to a run directory, edit the
 copied config, and leave the clean repository checkout alone.
 
@@ -559,6 +628,7 @@ hyperparameters, then submit stages:
 sbatch scripts/build_saluki_gtf.sh
 bash scripts/submit_train_eval_cv.sh
 bash scripts/submit_ism_by_fold.sh
+bash scripts/submit_region_ablation_by_fold.sh
 bash scripts/submit_motif_ablation_by_fold.sh
 bash scripts/submit_motif_epistasis_by_fold.sh
 bash scripts/submit_codon_ism_by_fold.sh
