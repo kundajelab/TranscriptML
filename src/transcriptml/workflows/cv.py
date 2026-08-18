@@ -130,6 +130,9 @@ def prepare_cv_fold(
     Notes:
         - Should `model` really be required? It should already be present in the
         base JSON training config that the user created.
+        - Why is the splits entry of config not updated? It's because local bundle splits.json
+        takes precedence, but that is so unintuitive to users. Should at the very least be documented
+        in the config
     """
 
     model = str(model).strip()
