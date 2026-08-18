@@ -126,9 +126,15 @@ def prepare_cv_fold(
         n_folds: Number of CV folds.
         seed: Seed used to shuffle examples before splitting.
         val_offset: Validation fold offset relative to the test fold.
+    
+    Notes:
+        - Should `model` really be required? It should already be present in the
+        base JSON training config that the user created.
     """
 
     model = str(model).strip()
+
+    # Basic validation and directory setup
     if not model:
         raise ValueError("model is required")
     _validate_cv_args(fold=int(fold), n_folds=int(n_folds), val_offset=int(val_offset))
@@ -140,11 +146,13 @@ def prepare_cv_fold(
     fold_dataset.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create symlinks to the dataset bundle in the fold folder
     for name in BUNDLE_FILES:
         src = dataset_path / name
         if src.exists():
             _replace_link(src, fold_dataset / name)
 
+    # Generate splits
     n_examples = int(np.load(dataset_path / "X.npy", mmap_mode="r").shape[0])
     splits = cv_splits(
         n_examples,
