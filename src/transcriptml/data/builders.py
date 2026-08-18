@@ -345,6 +345,11 @@ def build_saluki_dataset_from_gtf(
             labels.
         delimiter: Optional target-table delimiter override.
         progress: Whether to emit progress messages while building the bundle.
+
+    Notes:
+        - If you don't provide a targets table, then this defaults to encoding all transcripts
+        in the GTF, which is admittedly a bit of an extreme default. You pretty much should always
+        provide a targets table though, so might be worth just making this a strict requirement.
     """
 
     out = Path(out_dir)
@@ -380,6 +385,8 @@ def build_saluki_dataset_from_gtf(
         selected_ids = list(features_by_id)
         selected_target_rows = None
     else:
+        # selected_ids: Snag the transcript ids from the table that are actaully in the GTF
+        # selected_target_rows: Snag the target table data for the transcripts in selected_ids
         selected_ids = [str(row[target_id_col]) for row in target_rows if str(row[target_id_col]) in features_by_id]
         selected_target_rows = [target_by_id[tid] for tid in selected_ids] if target_by_id is not None else None
     if not selected_ids:
@@ -454,6 +461,10 @@ def build_saluki_dataset_from_gtf(
             if selected_target_rows is not None:
                 target_row = selected_target_rows[i]
                 exclude = {target_id_col}
+
+                # Fun thought: is it ever possible to get here if target_col is None?
+                # Would need selected_target_rows to not be None, but this is None if target_rows None, 
+                # which is None if targets_path is None, so this has to be non-None right? QED
                 if target_col:
                     exclude.add(target_col)
                 row_meta.update(_metadata_for_row(target_row, exclude, metadata_cols))
