@@ -12,6 +12,7 @@ import numpy as np
 from transcriptml.data.region_edits import (
     base_channel_indices,
     randomize_nucleotides_inplace,
+    randomize_synonymous_codons_inplace,
     region_bounds,
     resolve_cds_channel,
     shuffle_codons_inplace,
@@ -20,6 +21,7 @@ from transcriptml.data.region_edits import (
 )
 from transcriptml.data.schemas import SequenceSchema, get_schema
 from transcriptml.interpret.codon_ism import (
+    AA_TO_CODONS,
     CDSCodonStarts,
     find_cds_codon_starts,
     resolve_analysis_indices,
@@ -35,6 +37,7 @@ REGION_ABLATION_FAMILIES: tuple[str, ...] = (
     "5utr_random",
     "cds_nt_shuffle",
     "cds_codon_shuffle",
+    "cds_synonymous",
     "cds_random",
     "3utr_shuffle",
     "3utr_random",
@@ -46,11 +49,30 @@ _SEQUENCE_FAMILIES: tuple[tuple[str, str, str], ...] = (
     ("5utr_random", "5utr", "randomize_nucleotides"),
     ("cds_nt_shuffle", "cds", "shuffle_nucleotides"),
     ("cds_codon_shuffle", "cds", "shuffle_codons"),
+    ("cds_synonymous", "cds", "randomize_synonymous_codons"),
     ("cds_random", "cds", "randomize_nucleotides"),
     ("3utr_shuffle", "3utr", "shuffle_nucleotides"),
     ("3utr_random", "3utr", "randomize_nucleotides"),
 )
-_FAMILY_CODES = {family: i + 1 for i, family in enumerate(REGION_ABLATION_FAMILIES)}
+_FAMILY_CODES = {
+    # Existing values are stable so adding a family does not change historical
+    # replicate streams for the other operations.
+    "5utr_shuffle": 1,
+    "5utr_random": 2,
+    "cds_nt_shuffle": 3,
+    "cds_codon_shuffle": 4,
+    "cds_random": 5,
+    "3utr_shuffle": 6,
+    "3utr_random": 7,
+    "junction_scatter": 8,
+    "cds_synonymous": 9,
+}
+_SYNONYMOUS_ALTERNATES: dict[str, tuple[str, ...]] = {
+    codon: tuple(alternate for alternate in codons if alternate != codon)
+    for amino_acid, codons in AA_TO_CODONS.items()
+    if amino_acid != "Stop"
+    for codon in codons
+}
 
 
 @dataclass(frozen=True)
@@ -415,6 +437,9 @@ def region_ablation(
         raise ValueError("metadata length must match X.shape[0]")
 
     base_channels = base_channel_indices(resolved_schema)
+    base_letters = tuple(
+        base_name.upper().replace("T", "U") for base_name in resolved_schema.base_channels
+    )
     cds_channel_index = resolve_cds_channel(resolved_schema, cds_channel)
     splice_channel_index = _resolve_splice_channel(resolved_schema, splice_channel)
     if splice_channel_index in set(base_channels.tolist()):
@@ -689,6 +714,15 @@ def region_ablation(
                     base_channels=base_channels,
                     rng=rng,
                 )
+            elif instance.operation == "cds_synonymous":
+                randomize_synonymous_codons_inplace(
+                    mutant,
+                    cds=cds_by_sequence[instance.seq_index],
+                    base_channels=base_channels,
+                    base_letters=base_letters,
+                    synonymous_alternates=_SYNONYMOUS_ALTERNATES,
+                    rng=rng,
+                )
             elif instance.operation.endswith("_shuffle"):
                 shuffle_nucleotides_inplace(
                     mutant,
@@ -816,6 +850,10 @@ def save_region_ablation_result(
         "junction_candidate_interval": "[region_start, region_end - 1)",
         "junction_spacing_policy": "soft target relaxed to maximum feasible separation",
         "junction_sampling": "uniform compressed-coordinate layouts without replacement",
+        "synonymous_codon_policy": (
+            "uniform random alternate within the standard-code synonymous family; "
+            "stop, Met, Trp, and ambiguous codons unchanged"
+        ),
         "seed_policy": "SeedSequence(seed, seq_index, family_code, junction_count_or_0, replicate_index)",
         "config": result.config.to_dict(),
         "checkpoint": str(checkpoint) if checkpoint is not None else None,

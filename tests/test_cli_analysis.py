@@ -211,6 +211,8 @@ def test_region_ablation_cli_defaults_and_overrides():
             "--n-ablations-for",
             "cds_random=7",
             "--n-ablations-for",
+            "cds_synonymous=9",
+            "--n-ablations-for",
             "5utr_shuffle=0",
         ]
     )
@@ -218,7 +220,11 @@ def test_region_ablation_cli_defaults_and_overrides():
     assert args.n_ablations == 100
     assert args.junction_counts == (1, 3, 8)
     assert args.junction_min_spacing == 25
-    assert args.n_ablations_for == [("cds_random", 7), ("5utr_shuffle", 0)]
+    assert args.n_ablations_for == [
+        ("cds_random", 7),
+        ("cds_synonymous", 9),
+        ("5utr_shuffle", 0),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -298,9 +304,9 @@ def test_region_ablation_cli_tiny_bundle_and_checkpoint(tmp_path):
 
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["analysis"] == "region_ablation"
-    assert summary["n_instances"] == 9
-    assert summary["n_mutants"] == 9
-    assert np.load(out / "effects.npy").shape == (9, 1)
+    assert summary["n_instances"] == 10
+    assert summary["n_mutants"] == 10
+    assert np.load(out / "effects.npy").shape == (10, 1)
 
 
 def test_interpret_cli_rejects_conflicting_named_and_positional_args():

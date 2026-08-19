@@ -347,7 +347,7 @@ ${INTERPRET_ROOT}/ism/fold1/
 bash scripts/submit_region_ablation_by_fold.sh
 ```
 
-The defaults run 100 replicates for each of seven coding-region sequence
+The defaults run 100 replicates for each of eight coding-transcript sequence
 controls and each junction count in `1,5,10,...,50`. Junction placement uses a
 soft 25-nt spacing target. Customize the copied `sherlock_config.sh`, for
 example:
@@ -358,6 +358,7 @@ REGION_JUNCTION_COUNTS="1,5,10,15,20,25,30,35,40,45,50"
 REGION_JUNCTION_MIN_SPACING=25
 REGION_ABLATION_N_FOR=(
   "cds_codon_shuffle=250"
+  "cds_synonymous=250"
   "5utr_shuffle=0"
 )
 ```

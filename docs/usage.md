@@ -497,10 +497,11 @@ annotation channels.
 Region ablation measures how Saluki responds when complete transcript regions
 or exon-junction arrangements are replaced with matched controls. For a coding
 transcript, the default scan runs nucleotide shuffle and IID A/C/G/U
-replacement controls for both UTRs, nucleotide shuffle, codon shuffle, and IID
-replacement controls for the CDS, and junction-density scans at 1, 5, 10, ...,
-50 junctions in the CDS. Transcripts without represented CDS annotation receive
-the junction scan across their full valid sequence.
+replacement controls for both UTRs; nucleotide shuffle, codon shuffle, random
+synonymous-codon substitution, and IID replacement controls for the CDS; and
+junction-density scans at 1, 5, 10, ..., 50 junctions in the CDS. Transcripts
+without represented CDS annotation receive the junction scan across their full
+valid sequence.
 
 Run one result per model fold:
 
@@ -518,8 +519,11 @@ transcriptml region-ablation \
   --mutation-batch-size 512
 ```
 
-Sequence perturbations leave the CDS and splice channels unchanged. Junction
-perturbations leave sequence and CDS annotation unchanged, clear the eligible
+Sequence perturbations leave the CDS and splice channels unchanged. The
+`cds_synonymous` family independently replaces every complete, unambiguous
+codon that has an alternative with a uniformly sampled, different synonymous
+codon. Stop codons, UGG (Trp), AUG (Met), and ambiguous codons remain unchanged.
+Junction perturbations leave sequence and CDS annotation unchanged, clear the eligible
 splice channel, and place exactly the requested number of new junction marks.
 Coding-transcript UTR junctions are preserved. The 25-nt minimum separation is
 a soft target: when a region cannot fit N junctions at that spacing, the command
@@ -540,9 +544,9 @@ transcriptml region-ablation \
 ```
 
 The accepted family names are `5utr_shuffle`, `5utr_random`,
-`cds_nt_shuffle`, `cds_codon_shuffle`, `cds_random`, `3utr_shuffle`,
-`3utr_random`, and `junction_scatter`. The sequence slicing and sharding flags
-match codon ISM: use `--sequence-start/--sequence-end` or
+`cds_nt_shuffle`, `cds_codon_shuffle`, `cds_synonymous`, `cds_random`,
+`3utr_shuffle`, `3utr_random`, and `junction_scatter`. The sequence slicing and
+sharding flags match codon ISM: use `--sequence-start/--sequence-end` or
 `--sequence-shard-index/--sequence-shards` for large runs.
 
 `instances.csv` has one row per transcript-condition. Raw replicate predictions
@@ -553,7 +557,7 @@ per-condition mean, mean-absolute, and standard-deviation arrays, an audited
 `skipped.csv`, and complete reproducibility metadata in `summary.json`.
 
 For the standard 11-point junction grid, a coding transcript with non-empty
-UTRs receives 18 condition rows and approximately `18 * n_ablations` mutant
+UTRs receives 19 condition rows and approximately `19 * n_ablations` mutant
 predictions. The Sherlock launcher is:
 
 ```bash

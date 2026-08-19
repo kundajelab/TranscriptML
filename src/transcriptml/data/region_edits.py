@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -183,3 +183,55 @@ def shuffle_codons_inplace(
         codons = codons[rng.permutation(codons.shape[0])]
     for start, codon in zip(starts.tolist(), codons, strict=True):
         write_base_symbols(x, int(start), int(start) + 3, codon, base_channels)
+
+
+def randomize_synonymous_codons_inplace(
+    x: np.ndarray,
+    *,
+    cds: Any,
+    base_channels: np.ndarray,
+    base_letters: Sequence[str],
+    synonymous_alternates: Mapping[str, Sequence[str]],
+    rng: np.random.Generator,
+) -> int:
+    """Replace each decodable CDS codon with a random synonymous alternate.
+
+    Codons absent from ``synonymous_alternates`` or mapped to an empty sequence
+    are left unchanged. This lets callers explicitly preserve stop codons and
+    single-codon amino acids. Ambiguous codons are also retained verbatim.
+
+    Returns:
+        Number of codons replaced.
+    """
+
+    channels = np.asarray(base_channels, dtype=np.int64)
+    letters = tuple(str(letter).upper().replace("T", "U") for letter in base_letters)
+    if channels.size != 4 or len(letters) != 4 or set(letters) != {"A", "C", "G", "U"}:
+        raise ValueError("synonymous codon edits require aligned A/C/G/U base channels")
+    base_to_offset = {base: offset for offset, base in enumerate(letters)}
+
+    starts = np.asarray(cds.starts, dtype=np.int64)
+    starts = starts[(starts >= int(cds.cds_start)) & (starts + 2 <= int(cds.cds_end))]
+    n_replaced = 0
+    for start in starts.tolist():
+        symbols = base_symbols(x, int(start), int(start) + 3, channels)
+        if symbols.size != 3 or np.any(symbols < 0):
+            continue
+        reference = "".join(letters[int(offset)] for offset in symbols)
+        alternates = tuple(
+            codon.upper().replace("T", "U")
+            for codon in synonymous_alternates.get(reference, ())
+            if codon.upper().replace("T", "U") != reference
+        )
+        if not alternates:
+            continue
+        alternate = alternates[int(rng.integers(0, len(alternates)))]
+        try:
+            replacement = np.asarray([base_to_offset[base] for base in alternate], dtype=np.int16)
+        except KeyError as exc:
+            raise ValueError(f"Invalid synonymous codon {alternate!r}") from exc
+        if replacement.shape != (3,):
+            raise ValueError(f"Invalid synonymous codon {alternate!r}")
+        write_base_symbols(x, int(start), int(start) + 3, replacement, channels)
+        n_replaced += 1
+    return n_replaced

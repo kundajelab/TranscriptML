@@ -10,6 +10,7 @@ _REGION_ABLATION_FAMILIES = (
     "5utr_random",
     "cds_nt_shuffle",
     "cds_codon_shuffle",
+    "cds_synonymous",
     "cds_random",
     "3utr_shuffle",
     "3utr_random",

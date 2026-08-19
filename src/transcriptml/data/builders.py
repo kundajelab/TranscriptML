@@ -347,9 +347,9 @@ def build_saluki_dataset_from_gtf(
         progress: Whether to emit progress messages while building the bundle.
 
     Notes:
-        - If you don't provide a targets table, then this defaults to encoding all transcripts
-        in the GTF, which is admittedly a bit of an extreme default. You pretty much should always
-        provide a targets table though, so might be worth just making this a strict requirement.
+        If you don't provide a targets table, this defaults to encoding all
+        transcripts in the GTF. In practice, you should almost always provide a
+        targets table.
     """
 
     out = Path(out_dir)

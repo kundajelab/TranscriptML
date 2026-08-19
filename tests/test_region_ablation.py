@@ -42,6 +42,11 @@ def _coding_example(length=24):
     ).astype(np.float32)
 
 
+def _decode_codon(x, start):
+    symbols = np.argmax(x[:4, start : start + 3], axis=0)
+    return "".join("ACGU"[int(symbol)] for symbol in symbols)
+
+
 def test_region_sequence_families_preserve_annotations_and_target_bounds():
     X = _coding_example()[None]
     predictor = RecordingPredictor()
@@ -63,7 +68,7 @@ def test_region_sequence_families_preserve_annotations_and_target_bounds():
 
     assert [row.operation for row in result.instances] == list(REGION_ABLATION_FAMILIES[:-1])
     mutants = predictor.calls[1]
-    assert mutants.shape[0] == 7
+    assert mutants.shape[0] == 8
     for mutant in mutants:
         np.testing.assert_array_equal(mutant[4:], X[0, 4:])
 
@@ -82,6 +87,58 @@ def test_region_sequence_families_preserve_annotations_and_target_bounds():
     original_codons = [X[0, :4, i : i + 3].tobytes() for i in range(4, 16, 3)]
     mutant_codons = [codon_mutant[:4, i : i + 3].tobytes() for i in range(4, 16, 3)]
     assert sorted(original_codons) == sorted(mutant_codons)
+
+    synonymous_row = next(row for row in result.instances if row.operation == "cds_synonymous")
+    synonymous_mutant = mutants[synonymous_row.instance_index]
+    amino_acid_families = (
+        {"AAA", "AAG"},
+        {"CCU", "CCC", "CCA", "CCG"},
+        {"GGU", "GGC", "GGA", "GGG"},
+        {"UUU", "UUC"},
+    )
+    for start, family in zip(range(4, 16, 3), amino_acid_families, strict=True):
+        assert _decode_codon(synonymous_mutant, start) in family - {_decode_codon(X[0], start)}
+
+
+def test_synonymous_cds_ablation_preserves_stops_singletons_and_ambiguous_codons():
+    sequence = "AGCUUGGAUGUAAUAGUGANNNC"
+    X = encode_saluki_transcript(
+        sequence,
+        length=len(sequence),
+        cds_positions=[1, 4, 7, 10, 13, 16, 19],
+        splice_positions=[2, 17],
+    )[None].astype(np.float32)
+    predictor = RecordingPredictor()
+    result = region_ablation(
+        X,
+        predictor,
+        metadata=[{"cds_length": 21}],
+        config=RegionAblationConfig(
+            n_ablations=12,
+            n_ablations_for={
+                **_only("cds_synonymous"),
+                "cds_synonymous": 12,
+            },
+            junction_counts=(1,),
+            seed=41,
+        ),
+        mutation_batch_size=20,
+        progress=False,
+    )
+
+    assert [row.operation for row in result.instances] == ["cds_synonymous"]
+    mutants = predictor.calls[1]
+    assert mutants.shape == (12, *X.shape[1:])
+    for mutant in mutants:
+        assert _decode_codon(mutant, 1) in {"GCC", "GCA", "GCG"}
+        assert _decode_codon(mutant, 4) == "UGG"
+        assert _decode_codon(mutant, 7) == "AUG"
+        assert _decode_codon(mutant, 10) == "UAA"
+        assert _decode_codon(mutant, 13) == "UAG"
+        assert _decode_codon(mutant, 16) == "UGA"
+        np.testing.assert_array_equal(mutant[:4, 19:22], X[0, :4, 19:22])
+        np.testing.assert_array_equal(mutant[:4][:, [0, 22]], X[0, :4][:, [0, 22]])
+        np.testing.assert_array_equal(mutant[4:], X[0, 4:])
 
 
 def test_junction_scatter_coding_and_noncoding_scope_and_soft_spacing():
@@ -136,7 +193,7 @@ def test_junction_scatter_coding_and_noncoding_scope_and_soft_spacing():
     assert next(row for row in result.instances if row.seq_index == 0 and row.junction_count == 50).effective_min_spacing == 1
 
 
-def test_default_grid_has_18_coding_and_11_noncoding_conditions():
+def test_default_grid_has_19_coding_and_11_noncoding_conditions():
     coding = encode_saluki_transcript(
         "A" * 70,
         length=70,
@@ -154,8 +211,8 @@ def test_default_grid_has_18_coding_and_11_noncoding_conditions():
     counts = {seq_index: 0 for seq_index in (0, 1)}
     for row in result.instances:
         counts[row.seq_index] += 1
-    assert counts == {0: 18, 1: 11}
-    assert int(result.replicate_mask.sum()) == 29
+    assert counts == {0: 19, 1: 11}
+    assert int(result.replicate_mask.sum()) == 30
 
 
 def test_junction_sampling_is_exact_unique_and_rejection_free():
@@ -210,7 +267,7 @@ def test_region_ablation_reproducible_across_batching_and_sharding():
     X = np.stack([_coding_example(), _coding_example()])
     config = RegionAblationConfig(
         n_ablations=3,
-        n_ablations_for=_only("cds_random", "junction_scatter"),
+        n_ablations_for=_only("cds_random", "cds_synonymous", "junction_scatter"),
         junction_counts=(1, 5),
         seed=29,
     )
