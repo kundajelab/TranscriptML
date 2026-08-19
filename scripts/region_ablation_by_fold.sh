@@ -42,5 +42,8 @@ REGION_ARGS=(
 for spec in "${REGION_ABLATION_N_FOR[@]}"; do
   REGION_ARGS+=(--n-ablations-for "${spec}")
 done
+for family in "${REGION_ABLATION_DISABLED[@]}"; do
+  REGION_ARGS+=("--disable-${family//_/-}")
+done
 
 transcriptml region-ablation "${REGION_ARGS[@]}"

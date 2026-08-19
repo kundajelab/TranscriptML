@@ -75,6 +75,31 @@ def _region_ablation_override(value: str) -> tuple[str, int]:
     return family, count
 
 
+def _resolve_region_ablation_overrides(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> dict[str, int]:
+    """Combine replicate overrides and explicit region-ablation disable flags."""
+
+    overrides: dict[str, int] = {}
+    for family, count in args.n_ablations_for:
+        if family in overrides:
+            parser.error(f"region-ablation got duplicate --n-ablations-for family {family!r}")
+        overrides[family] = count
+
+    for family in _REGION_ABLATION_FAMILIES:
+        if not getattr(args, f"disable_{family}", False):
+            continue
+        if overrides.get(family, 0) > 0:
+            flag = f"--disable-{family.replace('_', '-')}"
+            parser.error(
+                f"region-ablation cannot combine {flag} with a positive "
+                f"--n-ablations-for {family}=COUNT"
+            )
+        overrides[family] = 0
+    return overrides
+
+
 def _analysis_install_message() -> str:
     return "This command requires the analysis extra: pip install 'TranscriptML[analysis]'"
 
@@ -374,6 +399,12 @@ def build_parser() -> argparse.ArgumentParser:
                 metavar="FAMILY=COUNT",
                 help="Override replicates for one family; repeat as needed; zero disables it",
             )
+            for family in _REGION_ABLATION_FAMILIES:
+                p.add_argument(
+                    f"--disable-{family.replace('_', '-')}",
+                    action="store_true",
+                    help=f"Disable the {family} ablation family",
+                )
             p.add_argument(
                 "--junction-counts",
                 type=_positive_int_csv,
@@ -826,11 +857,7 @@ def main(argv: list[str] | None = None) -> None:
             save_region_ablation_result,
         )
 
-        overrides: dict[str, int] = {}
-        for family, count in args.n_ablations_for:
-            if family in overrides:
-                parser.error(f"region-ablation got duplicate --n-ablations-for family {family!r}")
-            overrides[family] = count
+        overrides = _resolve_region_ablation_overrides(args, parser)
         result = region_ablation(
             bundle.X,
             predictor,

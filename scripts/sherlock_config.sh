@@ -90,13 +90,16 @@ MUTATION_BATCH_SIZE="${MUTATION_BATCH_SIZE:-512}"
 DEVICE="${DEVICE:-cuda}"
 
 # Region-ablation settings. Each FAMILY=COUNT entry overrides the universal N;
-# use COUNT=0 to disable a family for a targeted run.
+# use REGION_ABLATION_DISABLED for families that should not run.
 REGION_ABLATION_N="${REGION_ABLATION_N:-100}"
 REGION_JUNCTION_COUNTS="${REGION_JUNCTION_COUNTS:-1,5,10,15,20,25,30,35,40,45,50}"
 REGION_JUNCTION_MIN_SPACING="${REGION_JUNCTION_MIN_SPACING:-25}"
 REGION_ABLATION_SEED="${REGION_ABLATION_SEED:-123}"
 if ! declare -p REGION_ABLATION_N_FOR >/dev/null 2>&1; then
   REGION_ABLATION_N_FOR=()
+fi
+if ! declare -p REGION_ABLATION_DISABLED >/dev/null 2>&1; then
+  REGION_ABLATION_DISABLED=()
 fi
 
 # Set to all or transcript if you want to do full-transcript analysis

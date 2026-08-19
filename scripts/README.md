@@ -96,6 +96,7 @@ What each group means:
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
 | `REGION_ABLATION_N`, `REGION_JUNCTION_COUNTS`, `REGION_JUNCTION_MIN_SPACING`, `REGION_ABLATION_SEED` | Universal region-ablation replicate count, junction-density grid, soft spacing target, and deterministic seed. |
 | `REGION_ABLATION_N_FOR` | Optional Bash array of `FAMILY=COUNT` overrides; a zero count disables that family. |
+| `REGION_ABLATION_DISABLED` | Optional Bash array of region-ablation family names to disable. |
 | `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
 | `MOTIF_ABLATION_SPECS`, `MOTIF_EPISTASIS_SPECS` | Edit only when running motif ablation or motif epistasis with a custom motif list. |
 
@@ -359,8 +360,8 @@ REGION_JUNCTION_MIN_SPACING=25
 REGION_ABLATION_N_FOR=(
   "cds_codon_shuffle=250"
   "cds_synonymous=250"
-  "5utr_shuffle=0"
 )
+REGION_ABLATION_DISABLED=("5utr_shuffle" "3utr_random")
 ```
 
 Outputs go to `${INTERPRET_ROOT}/region_ablation/fold*/`.

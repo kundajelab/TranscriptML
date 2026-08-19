@@ -531,7 +531,8 @@ uses the largest feasible spacing down to one nucleotide. A condition is skipped
 only when the region length is not greater than N.
 
 `--n-ablations` sets a universal replicate count. Use repeatable overrides when
-one family needs different sampling or should be disabled:
+one family needs different sampling. Disable any combination of families with
+their dedicated flags:
 
 ```bash
 transcriptml region-ablation \
@@ -540,8 +541,15 @@ transcriptml region-ablation \
   --out-dir interpret/region_ablation_targeted/fold0 \
   --n-ablations 100 \
   --n-ablations-for cds_codon_shuffle=250 \
-  --n-ablations-for 5utr_shuffle=0
+  --disable-5utr-shuffle \
+  --disable-3utr-random
 ```
+
+Every family has a corresponding flag formed by replacing underscores with
+hyphens and prefixing `--disable-`, such as `--disable-cds-synonymous` or
+`--disable-junction-scatter`. Multiple disable flags may be supplied together.
+The existing `--n-ablations-for FAMILY=0` form remains supported. A disable flag
+cannot be combined with a positive replicate override for the same family.
 
 The accepted family names are `5utr_shuffle`, `5utr_random`,
 `cds_nt_shuffle`, `cds_codon_shuffle`, `cds_synonymous`, `cds_random`,
