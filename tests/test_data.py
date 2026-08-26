@@ -171,6 +171,10 @@ def test_gtf_fasta_extraction_and_saluki_builder(tmp_path):
 
     loaded = load_bundle(tmp_path / "bundle", mmap_mode="r")
     assert loaded.ids == ["tx_neg", "tx_pos"]
+    assert loaded.metadata[0]["cds_start"] == 0
+    assert loaded.metadata[0]["cds_end"] == 6
+    assert loaded.metadata[0]["represented_length"] == 6
+    assert loaded.metadata[0]["encoded_offset"] == 0
     assert loaded.config["builder"] == "saluki_gtf"
     assert loaded.config["n_missing_transcripts"] == 1
     assert loaded.config["n_skipped_missing_fasta_chromosome"] == 1

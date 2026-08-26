@@ -163,6 +163,10 @@ Interpretation
    :members: WindowISMResult, generate_window_starts, compute_window_ism, save_window_ism_result
    :member-order: bysource
 
+.. automodule:: transcriptml.interpret.legnet_scan
+   :members: LegNetScanResult, LegNetWindowInstance, RegionScanOutcome, generate_scan_windows, normalize_scan_regions, scan_legnet_windows, save_legnet_scan_result
+   :member-order: bysource
+
 .. automodule:: transcriptml.interpret.codon_ism
    :members: CodonISMResult, compute_codon_ism, mutation_table_writer, save_codon_ism_result
    :member-order: bysource

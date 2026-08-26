@@ -5,12 +5,14 @@ from transcriptml.interpret.context import motif_context_scan
 from transcriptml.interpret.codon_ism import compute_codon_ism
 from transcriptml.interpret.epistasis import motif_epistasis
 from transcriptml.interpret.ism import compute_ism
+from transcriptml.interpret.legnet_scan import LegNetScanResult, scan_legnet_windows
 from transcriptml.interpret.predictor import EnsemblePredictor, Predictor
 from transcriptml.interpret.region_ablation import region_ablation
 from transcriptml.interpret.window_ism import compute_window_ism
 
 __all__ = [
     "EnsemblePredictor",
+    "LegNetScanResult",
     "Predictor",
     "compute_codon_ism",
     "compute_ism",
@@ -19,4 +21,5 @@ __all__ = [
     "motif_context_scan",
     "motif_epistasis",
     "region_ablation",
+    "scan_legnet_windows",
 ]

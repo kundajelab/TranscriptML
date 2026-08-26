@@ -280,7 +280,21 @@ def build_saluki_dataset(
     for col in (target_col, cds_positions_col, splice_positions_col):
         if col:
             exclude.add(col)
-    metadata = [_metadata_for_row(row, exclude, metadata_cols) for row in rows]
+    metadata = []
+    for row in rows:
+        row_metadata = _metadata_for_row(row, exclude, metadata_cols)
+        transcript_length = len(str(row[sequence_col]))
+        row_metadata["transcript_length"] = transcript_length
+        row_metadata["represented_length"] = min(transcript_length, int(length))
+        row_metadata["encoded_offset"] = max(0, transcript_length - int(length))
+        cds_positions = _parse_positions(row.get(cds_positions_col) if cds_positions_col else None)
+        if cds_positions:
+            row_metadata["cds_start"] = min(cds_positions)
+            row_metadata["cds_end"] = min(transcript_length, max(cds_positions) + 3)
+        else:
+            row_metadata["cds_start"] = None
+            row_metadata["cds_end"] = None
+        metadata.append(row_metadata)
     bundle = DatasetBundle(
         X=X,
         y=y,
@@ -468,6 +482,9 @@ def build_saluki_dataset_from_gtf(
                 if target_col:
                     exclude.add(target_col)
                 row_meta.update(_metadata_for_row(target_row, exclude, metadata_cols))
+            row_meta.update(record.metadata)
+            row_meta["represented_length"] = min(len(record.sequence), int(length))
+            row_meta["encoded_offset"] = max(0, len(record.sequence) - int(length))
             ids.append(tid)
             metadata.append(row_meta)
             reporter.update()

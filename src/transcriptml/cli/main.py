@@ -317,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in [
         ("ism", "Run single-nucleotide ISM"),
         ("window-ism", "Run window-level random-mutagenesis ISM"),
+        ("scan-legnet", "Score endogenous transcript windows with an MPRA-LegNet checkpoint"),
         ("codon-ism", "Run CDS codon-level ISM"),
         ("region-ablation", "Run Saluki transcript-region and junction ablations"),
         ("motif-ablation", "Run motif ablation"),
@@ -353,6 +354,24 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--stride", type=int, help="Window stride; defaults to --window-size")
             p.add_argument("--n-ablations", type=int, default=30)
             p.add_argument("--seed", type=int, default=123)
+        if name == "scan-legnet":
+            p.add_argument("--window-size", type=int, required=True)
+            p.add_argument(
+                "--stride",
+                type=int,
+                help="Window stride; defaults to max(1, --window-size // 4)",
+            )
+            p.add_argument(
+                "--regions",
+                default="3utr",
+                help="Comma-separated 5utr,cds,3utr; or all; or transcript (default: 3utr)",
+            )
+            p.add_argument("--cds-channel", help="CDS annotation channel name or integer index")
+            p.add_argument(
+                "--save-sequences",
+                action="store_true",
+                help="Save aligned four-channel windows to sequences.npy",
+            )
         if name == "codon-ism":
             p.add_argument(
                 "--mutation-policy",
@@ -790,10 +809,28 @@ def main(argv: list[str] | None = None) -> None:
     log_progress(f"{args.command}: loading dataset {dataset}")
     bundle = load_bundle(
         dataset,
-        mmap_mode="r" if args.command in {"codon-ism", "window-ism", "region-ablation"} else None,
+        mmap_mode="r"
+        if args.command in {"codon-ism", "window-ism", "region-ablation", "scan-legnet"}
+        else None,
     )
     log_progress(f"{args.command}: loading checkpoint {checkpoint}")
-    predictor = Predictor.from_checkpoint(checkpoint, device=args.device, batch_size=args.batch_size)
+    if args.command == "scan-legnet":
+        from transcriptml.devices import resolve_device
+        from transcriptml.models.registry import load_checkpoint
+
+        resolved_device = resolve_device(args.device)
+        model, checkpoint_data = load_checkpoint(checkpoint, map_location=resolved_device)
+        model_config = checkpoint_data.get("model_config", {})
+        if str(model_config.get("name", "")) != "legnet":
+            raise ValueError("scan-legnet requires a checkpoint whose model_config.name is 'legnet'")
+        model_params = dict(model_config.get("params") or {})
+        if int(model_params.get("in_ch", 4)) != 4:
+            raise ValueError("scan-legnet requires a LegNet checkpoint with in_ch=4")
+        if int(model_params.get("output_dim", 1)) != 1:
+            raise ValueError("scan-legnet requires a scalar-output LegNet checkpoint")
+        predictor = Predictor(model, device=resolved_device, batch_size=args.batch_size)
+    else:
+        predictor = Predictor.from_checkpoint(checkpoint, device=args.device, batch_size=args.batch_size)
     cds_channel = _maybe_int(getattr(args, "cds_channel", None))
     if args.command == "ism":
         from transcriptml.interpret.ism import compute_ism, save_ism_result
@@ -818,6 +855,29 @@ def main(argv: list[str] | None = None) -> None:
             checkpoint=checkpoint,
             dataset=dataset,
             sequence_ids=bundle.ids,
+        )
+    elif args.command == "scan-legnet":
+        from transcriptml.interpret.legnet_scan import save_legnet_scan_result, scan_legnet_windows
+
+        result = scan_legnet_windows(
+            bundle.X,
+            predictor,
+            window_size=args.window_size,
+            stride=args.stride,
+            regions=args.regions,
+            schema=bundle.schema,
+            sequence_ids=bundle.ids,
+            metadata=bundle.metadata,
+            cds_channel=cds_channel,
+            batch_size=args.batch_size,
+            save_sequences=args.save_sequences,
+            storage_dir=out_dir,
+        )
+        save_legnet_scan_result(
+            result,
+            out_dir,
+            checkpoint=checkpoint,
+            dataset=dataset,
         )
     elif args.command == "codon-ism":
         from transcriptml.interpret.codon_ism import compute_codon_ism, mutation_table_writer, save_codon_ism_result

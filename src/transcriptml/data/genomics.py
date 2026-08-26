@@ -430,6 +430,20 @@ def _map_interval_to_transcript(
     return mapped
 
 
+def _cds_transcript_bounds(
+    feature: TranscriptFeature,
+    exon_map: Sequence[_ExonMap],
+) -> tuple[int, int] | None:
+    """Return exact half-open transcript-coordinate CDS bounds."""
+
+    ranges: list[tuple[int, int]] = []
+    for cds in feature.cds:
+        ranges.extend(_map_interval_to_transcript(cds, exon_map, strand=feature.strand))
+    if not ranges:
+        return None
+    return min(start for start, _ in ranges), max(end for _, end in ranges)
+
+
 def _cds_codon_positions(feature: TranscriptFeature, exon_map: Sequence[_ExonMap]) -> tuple[int, ...]:
     """Return transcript-coordinate codon-start positions for CDS features.
 
@@ -438,13 +452,10 @@ def _cds_codon_positions(feature: TranscriptFeature, exon_map: Sequence[_ExonMap
         exon_map: Ordered exon spans in transcript coordinates.
     """
 
-    ranges: list[tuple[int, int]] = []
-    for cds in feature.cds:
-        ranges.extend(_map_interval_to_transcript(cds, exon_map, strand=feature.strand))
-    if not ranges:
+    bounds = _cds_transcript_bounds(feature, exon_map)
+    if bounds is None:
         return ()
-    cds_start = min(start for start, _ in ranges)
-    cds_end = max(end for _, end in ranges)
+    cds_start, cds_end = bounds
     return tuple(int(x) for x in range(int(cds_start), int(cds_end), 3))
 
 
@@ -460,13 +471,18 @@ def transcript_record_from_feature(feature: TranscriptFeature, fasta: _FastaAcce
     sequence = _sequence_for_feature(feature, fasta)
     splice_positions = tuple(int(exon.tx_start - 1) for exon in exon_map[1:])
     cds_positions = _cds_codon_positions(feature, exon_map)
+    cds_bounds = _cds_transcript_bounds(feature, exon_map)
     attrs = dict(feature.attributes)
+    cds_start = int(cds_bounds[0]) if cds_bounds is not None else None
+    cds_end = int(cds_bounds[1]) if cds_bounds is not None else None
     metadata: dict[str, object] = {
         "chrom": feature.chrom,
         "strand": feature.strand,
         "exon_count": feature.exon_count,
         "transcript_length": len(sequence),
         "cds_length": len(cds_positions) * 3 if cds_positions else 0,
+        "cds_start": cds_start,
+        "cds_end": cds_end,
     }
     for key in ("gene_id", "gene_name", "transcript_name", "gene_type", "transcript_type"):
         if key in attrs:

@@ -807,6 +807,53 @@ Window ISM also works unchanged with four-channel MPRA bundles. Use the same
 `window-ism` and `summarize-window-ism` commands shown in the Saluki workflow,
 pointing them at the MPRA checkpoint and dataset directories.
 
+### Scan Endogenous Transcripts With LegNet
+
+Apply a trained four-channel MPRA-LegNet checkpoint directly to windows from a
+Saluki transcript bundle with `scan-legnet`. The default scan is restricted to
+the annotated 3' UTR. Set the required window width to the variable-insert
+length used to train the MPRA model:
+
+```bash
+transcriptml scan-legnet \
+  --checkpoint runs/mpra_cv10/fold0/model/best.pt \
+  --dataset data/saluki_transcripts \
+  --out-dir interpret/endogenous_3utr_scan/fold0 \
+  --window-size 200 \
+  --device auto \
+  --save-sequences
+```
+
+The stride defaults to one quarter of the window width, rounded down. Override
+it with `--stride`. Select several annotated regions without allowing windows
+to cross their boundaries, or scan continuously across each represented
+transcript:
+
+```bash
+# Separate 5' UTR, CDS, and 3' UTR windows
+transcriptml scan-legnet \
+  --checkpoint model/best.pt \
+  --dataset data/saluki_transcripts \
+  --out-dir interpret/annotated_regions \
+  --window-size 200 \
+  --regions all
+
+# Full represented transcript, including windows that cross region boundaries
+transcriptml scan-legnet \
+  --checkpoint model/best.pt \
+  --dataset data/saluki_transcripts \
+  --out-dir interpret/full_transcripts \
+  --window-size 200 \
+  --regions transcript
+```
+
+`scores.npy` and `instances.csv` are aligned by `instance_index`.
+`transcript_scores.csv` aggregates all selected windows per transcript, while
+`transcript_region_scores.csv` retains separate region summaries. Short regions
+and one final stride-aligned tail are right-padded with all-zero columns. The
+saved values are raw model predictions: whether larger values are stabilizing
+or destabilizing depends on the target used to train the checkpoint.
+
 Interpret MPRA results in the assay's exact reporter context. Single-base
 effects may reflect cryptic splice sites, unintended promoter activity, or
 other construct-specific behavior in addition to the intended RNA regulatory
