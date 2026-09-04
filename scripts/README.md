@@ -64,6 +64,7 @@ TARGETS="/scratch/users/isvock/rna_decay/targets.csv"
 TARGET_ID_COL="transcript_id"
 TARGET_COL="log_kdeg"
 SPLIT_COL=""
+SALUKI_TRUNCATE_FROM="5prime"
 
 # 3. Output directories for this run.
 RUN_NAME="human_kdeg_saluki_exact"
@@ -88,6 +89,7 @@ What each group means:
 | `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Set these to the conda environment and conda install used on Sherlock. The job setup loads `gcc/10.1.0` and `openblas/0.3.10` before activating conda. |
 | `GTF`, `FASTA`, `TARGETS` | Set these to your annotation GTF, genome FASTA, and target table. |
 | `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
+| `SALUKI_LENGTH`, `SALUKI_TRUNCATE_FROM` | Set the encoded width and which end is removed from overlength transcripts. Use `5prime` for the legacy behavior or `3prime` to retain the 5-prime end; short transcripts are always padded on the right. |
 | `RUN_NAME`, `RUN_ROOT` | Pick a run name and scratch/OAK location where outputs should be written. |
 | `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
 | `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/saluki_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |

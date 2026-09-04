@@ -53,6 +53,7 @@ TARGET_COL="${TARGET_COL:-log_kdeg}"
 SPLIT_COL="${SPLIT_COL:-}"
 METADATA_COLS="${METADATA_COLS:-}"
 SALUKI_LENGTH="${SALUKI_LENGTH:-12288}"
+SALUKI_TRUNCATE_FROM="${SALUKI_TRUNCATE_FROM:-5prime}"
 
 # ---------------------------------------------------------------------------
 # User settings: output locations.

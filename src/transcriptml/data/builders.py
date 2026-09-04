@@ -8,7 +8,12 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from transcriptml.data.bundle import DatasetBundle, save_bundle, save_bundle_metadata
-from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH, encode_rna_sequence, encode_saluki_transcript
+from transcriptml.data.encoding import (
+    DEFAULT_SALUKI_LENGTH,
+    encode_rna_sequence,
+    encode_saluki_transcript,
+    normalize_truncate_from,
+)
 from transcriptml.data.genomics import _FastaAccessor, load_transcript_features, transcript_record_from_feature
 from transcriptml.data.schemas import RNA4, SALUKI6
 from transcriptml.progress import ProgressReporter, log_progress
@@ -219,6 +224,7 @@ def build_saluki_dataset(
     cds_positions_col: str | None = None,
     splice_positions_col: str | None = None,
     length: int = DEFAULT_SALUKI_LENGTH,
+    truncate_from: str = "5prime",
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
@@ -242,6 +248,8 @@ def build_saluki_dataset(
         splice_positions_col: Optional column containing splice position lists
             in transcript coordinates.
         length: Fixed Saluki input length to encode for every transcript.
+        truncate_from: Side to truncate for transcripts longer than ``length``.
+            Accepts ``"5prime"``/``"left"`` or ``"3prime"``/``"right"``.
         metadata_cols: Optional columns to copy into bundle metadata. When
             omitted, non-input and non-target columns are kept.
         split_col: Optional column with train/validation/test split labels.
@@ -249,6 +257,7 @@ def build_saluki_dataset(
         progress: Whether to emit progress messages while building the bundle.
     """
 
+    truncate_from = normalize_truncate_from(truncate_from)
     log_progress(f"build-saluki: reading {table_path}", enabled=progress)
     rows = _read_rows(table_path, delimiter=delimiter)
     out = Path(out_dir)
@@ -266,6 +275,7 @@ def build_saluki_dataset(
             length=length,
             cds_positions=_parse_positions(row.get(cds_positions_col) if cds_positions_col else None),
             splice_positions=_parse_positions(row.get(splice_positions_col) if splice_positions_col else None),
+            truncate_from=truncate_from,
         )
         reporter.update()
     X.flush()
@@ -286,7 +296,9 @@ def build_saluki_dataset(
         transcript_length = len(str(row[sequence_col]))
         row_metadata["transcript_length"] = transcript_length
         row_metadata["represented_length"] = min(transcript_length, int(length))
-        row_metadata["encoded_offset"] = max(0, transcript_length - int(length))
+        row_metadata["encoded_offset"] = (
+            max(0, transcript_length - int(length)) if truncate_from == "5prime" else 0
+        )
         cds_positions = _parse_positions(row.get(cds_positions_col) if cds_positions_col else None)
         if cds_positions:
             row_metadata["cds_start"] = min(cds_positions)
@@ -312,6 +324,7 @@ def build_saluki_dataset(
             "cds_positions_col": cds_positions_col,
             "splice_positions_col": splice_positions_col,
             "length": int(length),
+            "truncate_from": truncate_from,
         },
     )
     log_progress(f"build-saluki: saving metadata to {out}", enabled=progress)
@@ -329,6 +342,7 @@ def build_saluki_dataset_from_gtf(
     target_col: str | None = None,
     target_id_col: str = "transcript_id",
     length: int = DEFAULT_SALUKI_LENGTH,
+    truncate_from: str = "5prime",
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
@@ -353,6 +367,8 @@ def build_saluki_dataset_from_gtf(
         target_id_col: Target-table column containing transcript identifiers
             that match GTF ``transcript_id`` attributes.
         length: Fixed Saluki input length to encode for every transcript.
+        truncate_from: Side to truncate for transcripts longer than ``length``.
+            Accepts ``"5prime"``/``"left"`` or ``"3prime"``/``"right"``.
         metadata_cols: Optional target-table columns to copy into bundle
             metadata.
         split_col: Optional target-table column with train/validation/test split
@@ -366,6 +382,7 @@ def build_saluki_dataset_from_gtf(
         targets table.
     """
 
+    truncate_from = normalize_truncate_from(truncate_from)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     target_rows: list[dict[str, str]] | None = None
@@ -470,6 +487,7 @@ def build_saluki_dataset_from_gtf(
                 length=int(length),
                 cds_positions=record.cds_positions,
                 splice_positions=record.splice_positions,
+                truncate_from=truncate_from,
             )
             row_meta = dict(record.metadata)
             if selected_target_rows is not None:
@@ -484,7 +502,9 @@ def build_saluki_dataset_from_gtf(
                 row_meta.update(_metadata_for_row(target_row, exclude, metadata_cols))
             row_meta.update(record.metadata)
             row_meta["represented_length"] = min(len(record.sequence), int(length))
-            row_meta["encoded_offset"] = max(0, len(record.sequence) - int(length))
+            row_meta["encoded_offset"] = (
+                max(0, len(record.sequence) - int(length)) if truncate_from == "5prime" else 0
+            )
             ids.append(tid)
             metadata.append(row_meta)
             reporter.update()
@@ -520,6 +540,7 @@ def build_saluki_dataset_from_gtf(
             "target_id_col": target_id_col,
             "split_col": split_col,
             "length": int(length),
+            "truncate_from": truncate_from,
             "n_requested_targets": len(target_rows) if target_rows is not None else None,
             "n_missing_transcripts": n_missing_gtf_transcripts,
             "n_missing_gtf_transcripts": n_missing_gtf_transcripts,

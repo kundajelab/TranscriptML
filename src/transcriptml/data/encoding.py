@@ -15,6 +15,27 @@ for _base, _idx in BASE_TO_INDEX.items():
     _BASE_LUT[ord(_base.lower())] = _idx
 
 
+def normalize_truncate_from(truncate_from: str) -> str:
+    """Return a canonical fixed-length truncation side.
+
+    Args:
+        truncate_from: Side to remove from an overlength sequence. ``"left"``
+            and ``"right"`` are accepted as aliases for ``"5prime"`` and
+            ``"3prime"``, respectively.
+    """
+
+    aliases = {
+        "5prime": "5prime",
+        "left": "5prime",
+        "3prime": "3prime",
+        "right": "3prime",
+    }
+    try:
+        return aliases[truncate_from]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("truncate_from must be '5prime'/'left' or '3prime'/'right'") from exc
+
+
 def fixed_length_sequence(seq: str, length: int, *, truncate_from: str = "5prime") -> tuple[str, int]:
     """Right-pad short sequences and truncate long sequences.
 
@@ -29,6 +50,7 @@ def fixed_length_sequence(seq: str, length: int, *, truncate_from: str = "5prime
             accepts ``"5prime"``/``"left"`` or ``"3prime"``/``"right"``.
     """
 
+    truncate_from = normalize_truncate_from(truncate_from)
     if length <= 0:
         raise ValueError("length must be positive")
     seq = str(seq)
@@ -36,12 +58,10 @@ def fixed_length_sequence(seq: str, length: int, *, truncate_from: str = "5prime
         return seq + ("N" * (length - len(seq))), 0
     if len(seq) == length:
         return seq, 0
-    if truncate_from in {"5prime", "left"}:
+    if truncate_from == "5prime":
         offset = len(seq) - length
         return seq[-length:], offset
-    if truncate_from in {"3prime", "right"}:
-        return seq[:length], 0
-    raise ValueError("truncate_from must be '5prime'/'left' or '3prime'/'right'")
+    return seq[:length], 0
 
 
 def encode_rna_sequence(
@@ -149,13 +169,15 @@ def encode_saluki_transcript(
     cds_positions: Iterable[int] | None = None,
     splice_positions: Iterable[int] | None = None,
     dtype: np.dtype | type = np.uint8,
+    truncate_from: str = "5prime",
 ) -> np.ndarray:
     """Encode a transcript as Saluki-style ``(6, L)``.
 
-    Short transcripts are right-padded with N/all-zero columns. Long transcripts
-    are truncated from the 5-prime side so the represented window is the
-    3-prime-most ``length`` bases. Annotation positions are expected in original
-    transcript coordinates and are shifted by the same truncation offset.
+    Short transcripts are right-padded with N/all-zero columns. By default, long
+    transcripts are truncated from the 5-prime side so the represented window is
+    the 3-prime-most ``length`` bases. Annotation positions are expected in
+    original transcript coordinates and are shifted by any 5-prime truncation
+    offset.
 
     Args:
         seq: Input transcript sequence.
@@ -165,10 +187,13 @@ def encode_saluki_transcript(
         splice_positions: Optional splice annotation positions in original
             transcript coordinates.
         dtype: NumPy dtype for the returned encoded array.
+        truncate_from: Side to truncate when the transcript is longer than
+            ``length``; accepts ``"5prime"``/``"left"`` or
+            ``"3prime"``/``"right"``.
     """
 
     original_len = len(str(seq))
-    fixed_seq, offset = fixed_length_sequence(seq, length, truncate_from="5prime")
+    fixed_seq, offset = fixed_length_sequence(seq, length, truncate_from=truncate_from)
     out = np.zeros((6, length), dtype=dtype)
     out[:4] = encode_rna_sequence(fixed_seq, dtype=dtype)
     for pos in _adjust_positions(cds_positions, offset=offset, length=length, original_length=original_len):

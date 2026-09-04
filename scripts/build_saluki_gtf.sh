@@ -29,6 +29,7 @@ args=(
   --out-dir "${DATASET_DIR}"
   --target-id-col "${TARGET_ID_COL}"
   --length "${SALUKI_LENGTH}"
+  --truncate-from "${SALUKI_TRUNCATE_FROM}"
 )
 
 if [[ -n "${TARGETS}" ]]; then

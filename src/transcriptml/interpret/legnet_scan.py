@@ -188,13 +188,34 @@ def _represented_coordinates(
     if transcript_length is not None:
         if transcript_length < 0:
             raise ValueError("metadata transcript_length must be non-negative")
-        valid_length = min(transcript_length, encoded_width)
-        return valid_length, max(0, transcript_length - encoded_width), "transcript_metadata"
 
-    base = np.asarray(x[base_channels])
-    positions = np.flatnonzero(np.any(base != 0, axis=0))
-    valid_length = int(positions[-1] + 1) if positions.size else 0
-    return valid_length, 0, "encoded_fallback"
+    represented_length = _optional_int(metadata, "represented_length")
+    if represented_length is not None:
+        if represented_length < 0 or represented_length > encoded_width:
+            raise ValueError("metadata represented_length must be between zero and the encoded width")
+        valid_length = represented_length
+    elif transcript_length is not None:
+        valid_length = min(transcript_length, encoded_width)
+    else:
+        base = np.asarray(x[base_channels])
+        positions = np.flatnonzero(np.any(base != 0, axis=0))
+        valid_length = int(positions[-1] + 1) if positions.size else 0
+
+    encoded_offset = _optional_int(metadata, "encoded_offset")
+    if encoded_offset is None:
+        coordinate_offset = max(0, transcript_length - encoded_width) if transcript_length is not None else 0
+    else:
+        if encoded_offset < 0:
+            raise ValueError("metadata encoded_offset must be non-negative")
+        coordinate_offset = encoded_offset
+    if transcript_length is not None and coordinate_offset + valid_length > transcript_length:
+        raise ValueError("metadata encoded_offset plus represented_length exceeds transcript_length")
+
+    has_coordinate_metadata = any(
+        value is not None for value in (transcript_length, represented_length, encoded_offset)
+    )
+    coordinate_source = "transcript_metadata" if has_coordinate_metadata else "encoded_fallback"
+    return valid_length, coordinate_offset, coordinate_source
 
 
 def _metadata_cds_bounds(

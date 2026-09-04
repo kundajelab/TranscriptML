@@ -8,7 +8,7 @@ from typing import Iterator, Mapping, Sequence
 
 import numpy as np
 
-from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH
+from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH, normalize_truncate_from
 from transcriptml.progress import ProgressReporter, log_progress
 
 
@@ -539,6 +539,7 @@ def write_saluki_memmap(
     *,
     length: int = DEFAULT_SALUKI_LENGTH,
     dtype: np.dtype | type = np.uint8,
+    truncate_from: str = "5prime",
     progress: bool = True,
 ) -> np.memmap:
     """Encode transcript records to a Saluki ``X.npy`` file without a RAM-sized copy.
@@ -548,11 +549,14 @@ def write_saluki_memmap(
         records: Transcript records to encode in order.
         length: Fixed Saluki input length for each encoded transcript.
         dtype: NumPy dtype for the stored encoded array.
+        truncate_from: Side to truncate for transcripts longer than ``length``.
+            Accepts ``"5prime"``/``"left"`` or ``"3prime"``/``"right"``.
         progress: Whether to emit progress messages while encoding.
     """
 
     from transcriptml.data.encoding import encode_saluki_transcript
 
+    truncate_from = normalize_truncate_from(truncate_from)
     X = np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=(len(records), 6, int(length)))
     reporter = ProgressReporter("encode Saluki transcripts", total=len(records), unit="transcripts", enabled=progress)
     for i, record in enumerate(records):
@@ -562,6 +566,7 @@ def write_saluki_memmap(
             cds_positions=record.cds_positions,
             splice_positions=record.splice_positions,
             dtype=dtype,
+            truncate_from=truncate_from,
         )
         reporter.update()
     X.flush()

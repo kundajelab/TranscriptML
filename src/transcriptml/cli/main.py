@@ -259,6 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cds-positions-col")
     p.add_argument("--splice-positions-col")
     p.add_argument("--length", type=int, default=DEFAULT_SALUKI_LENGTH)
+    p.add_argument("--truncate-from", choices=["5prime", "3prime"], default="5prime")
     p.add_argument("--metadata-cols")
     p.add_argument("--split-col")
     p.add_argument("--delimiter")
@@ -271,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target-col")
     p.add_argument("--target-id-col", default="transcript_id")
     p.add_argument("--length", type=int, default=DEFAULT_SALUKI_LENGTH)
+    p.add_argument("--truncate-from", choices=["5prime", "3prime"], default="5prime")
     p.add_argument("--metadata-cols")
     p.add_argument("--split-col")
     p.add_argument("--delimiter")
@@ -732,6 +734,7 @@ def main(argv: list[str] | None = None) -> None:
             cds_positions_col=args.cds_positions_col,
             splice_positions_col=args.splice_positions_col,
             length=args.length,
+            truncate_from=args.truncate_from,
             metadata_cols=_csv_list(args.metadata_cols),
             split_col=args.split_col,
             delimiter=args.delimiter,
@@ -748,6 +751,7 @@ def main(argv: list[str] | None = None) -> None:
             target_col=args.target_col,
             target_id_col=args.target_id_col,
             length=args.length,
+            truncate_from=args.truncate_from,
             metadata_cols=_csv_list(args.metadata_cols),
             split_col=args.split_col,
             delimiter=args.delimiter,

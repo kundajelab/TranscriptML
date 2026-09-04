@@ -62,6 +62,82 @@ def test_init_run_cli_writes_templates(tmp_path):
     assert rbpnet["max_train_jitter"] == 0
 
 
+def test_saluki_build_cli_truncation_defaults_choices_and_forwarding(monkeypatch):
+    from transcriptml.data import builders
+
+    parser = build_parser()
+    default_args = parser.parse_args(
+        [
+            "build-saluki",
+            "--table",
+            "transcripts.tsv",
+            "--out-dir",
+            "bundle",
+            "--sequence-col",
+            "seq",
+            "--id-col",
+            "id",
+        ]
+    )
+    assert default_args.truncate_from == "5prime"
+
+    calls = {}
+    monkeypatch.setattr(builders, "build_saluki_dataset", lambda **kwargs: calls.setdefault("table", kwargs))
+    monkeypatch.setattr(
+        builders,
+        "build_saluki_dataset_from_gtf",
+        lambda **kwargs: calls.setdefault("gtf", kwargs),
+    )
+
+    main(
+        [
+            "build-saluki",
+            "--table",
+            "transcripts.tsv",
+            "--out-dir",
+            "bundle",
+            "--sequence-col",
+            "seq",
+            "--id-col",
+            "id",
+            "--truncate-from",
+            "3prime",
+        ]
+    )
+    main(
+        [
+            "build-saluki-gtf",
+            "--gtf",
+            "annotations.gtf",
+            "--fasta",
+            "genome.fa",
+            "--out-dir",
+            "bundle",
+            "--truncate-from",
+            "3prime",
+        ]
+    )
+
+    assert calls["table"]["truncate_from"] == "3prime"
+    assert calls["gtf"]["truncate_from"] == "3prime"
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "build-saluki",
+                "--table",
+                "transcripts.tsv",
+                "--out-dir",
+                "bundle",
+                "--sequence-col",
+                "seq",
+                "--id-col",
+                "id",
+                "--truncate-from",
+                "right",
+            ]
+        )
+
+
 def test_plot_ism_cli_demo_writes_png(tmp_path):
     out_path = tmp_path / "ism.png"
     main(["plot-ism", "--demo", "--out", str(out_path), "--no-logo"])

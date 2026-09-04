@@ -83,8 +83,20 @@ transcriptml build-saluki-gtf \
 ```
 
 The `--length` value controls the encoded transcript width. The original Saluki
-model used `12288`. Longer transcripts are truncated from the 5-prime end, and
-shorter transcripts are padded at the 3-prime end.
+model used `12288`. By default, longer transcripts are truncated from the
+5-prime end, retaining their 3-prime-most bases. To retain the 5-prime-most
+bases instead, truncate from the 3-prime end:
+
+```bash
+transcriptml build-saluki-gtf \
+  --gtf annotations.gtf \
+  --fasta genome.fa \
+  --out-dir data/saluki_truncate_3prime \
+  --length 12288 \
+  --truncate-from 3prime
+```
+
+Shorter transcripts are padded at the 3-prime end under either truncation mode.
 
 Only transcript IDs present in both the GTF and the target table are kept.
 Transcripts without `CDS` rows receive an all-zero CDS channel, which means they
@@ -630,6 +642,7 @@ FASTA=/oak/stanford/groups/akundaje/refs/GRCh38.primary_assembly.genome.fa
 TARGETS=/scratch/users/isvock/rna_decay/targets.csv
 TARGET_ID_COL=transcript_id
 TARGET_COL=log_kdeg
+SALUKI_TRUNCATE_FROM=5prime
 
 RUN_ROOT=/scratch/users/isvock/transcriptml_runs/human_kdeg/results
 DATASET_DIR=${RUN_ROOT}/data/saluki

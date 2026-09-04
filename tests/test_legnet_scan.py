@@ -148,6 +148,38 @@ def test_scan_legnet_reports_original_coordinates_for_five_prime_truncation():
     assert (instance.transcript_start, instance.transcript_end) == (13, 20)
 
 
+def test_scan_legnet_reports_original_coordinates_for_three_prime_truncation():
+    X = encode_saluki_transcript(
+        "A" * 20,
+        length=12,
+        cds_positions=[4, 7, 10, 13, 16],
+        truncate_from="3prime",
+    )[None]
+    result = scan_legnet_windows(
+        X,
+        Predictor(_sum_called_bases),
+        window_size=8,
+        regions="cds",
+        schema="saluki6",
+        metadata=[
+            {
+                "transcript_length": 20,
+                "represented_length": 12,
+                "encoded_offset": 0,
+                "cds_start": 4,
+                "cds_end": 19,
+            }
+        ],
+        progress=False,
+    )
+
+    instance = result.instances[0]
+    assert instance.coordinate_offset == 0
+    assert instance.coordinate_source == "transcript_metadata"
+    assert (instance.encoded_start, instance.encoded_end) == (4, 12)
+    assert (instance.transcript_start, instance.transcript_end) == (4, 12)
+
+
 def test_scan_legnet_cli_writes_complete_output(tmp_path):
     model_config = {
         "name": "legnet",

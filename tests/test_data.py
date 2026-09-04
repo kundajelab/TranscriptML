@@ -2,14 +2,19 @@ import numpy as np
 import pytest
 
 from transcriptml.data.bundle import DatasetBundle, load_bundle, save_bundle
-from transcriptml.data.builders import build_mpra_dataset, build_saluki_dataset_from_gtf
+from transcriptml.data.builders import build_mpra_dataset, build_saluki_dataset, build_saluki_dataset_from_gtf
 from transcriptml.data.encoding import (
     decode_rna_one_hot,
     encode_rna_sequence,
     encode_saluki_transcript,
     infer_valid_length,
 )
-from transcriptml.data.genomics import extract_transcript_records, parse_gtf_attributes
+from transcriptml.data.genomics import (
+    TranscriptRecord,
+    extract_transcript_records,
+    parse_gtf_attributes,
+    write_saluki_memmap,
+)
 from transcriptml.data.schemas import get_schema
 
 
@@ -44,6 +49,89 @@ def test_saluki_padding_truncation_and_valid_length():
     assert long[1, 3] == 1
     assert long[4].tolist() == [1, 0, 1, 1]
     assert long[5].tolist() == [0, 0, 0, 1]
+
+    three_prime = encode_saluki_transcript(
+        "ACGUAC",
+        length=4,
+        cds_positions=[0, 2, 4, 5],
+        splice_positions=[1, 5],
+        truncate_from="3prime",
+    )
+    assert decode_rna_one_hot(three_prime[:4]) == "ACGU"
+    assert three_prime[4].tolist() == [1, 0, 1, 0]
+    assert three_prime[5].tolist() == [0, 1, 0, 0]
+
+    short_three_prime = encode_saluki_transcript("AC", length=5, truncate_from="right")
+    np.testing.assert_array_equal(short_three_prime, short)
+
+    with pytest.raises(ValueError, match="truncate_from"):
+        encode_saluki_transcript("AC", length=5, truncate_from="middle")
+
+
+def test_table_saluki_builder_three_prime_truncation_and_metadata(tmp_path):
+    table = tmp_path / "transcripts.tsv"
+    table.write_text(
+        "id\tseq\tcds\tsplice\n"
+        "long\tACGUAC\t0;2;4;5\t1;5\n"
+        "short\tAC\t0\t1\n",
+        encoding="utf-8",
+    )
+
+    bundle = build_saluki_dataset(
+        table_path=table,
+        out_dir=tmp_path / "bundle",
+        sequence_col="seq",
+        id_col="id",
+        cds_positions_col="cds",
+        splice_positions_col="splice",
+        length=4,
+        truncate_from="right",
+        progress=False,
+    )
+
+    assert decode_rna_one_hot(bundle.X[0, :4]) == "ACGU"
+    assert bundle.X[0, 4].tolist() == [1, 0, 1, 0]
+    assert bundle.X[0, 5].tolist() == [0, 1, 0, 0]
+    assert decode_rna_one_hot(bundle.X[1, :4]) == "ACNN"
+    assert bundle.metadata[0]["represented_length"] == 4
+    assert bundle.metadata[0]["encoded_offset"] == 0
+    assert bundle.config["truncate_from"] == "3prime"
+    loaded = load_bundle(tmp_path / "bundle", mmap_mode="r")
+    assert loaded.metadata[0]["encoded_offset"] == 0
+    assert loaded.config["truncate_from"] == "3prime"
+
+    empty_table = tmp_path / "empty.tsv"
+    empty_table.write_text("id\tseq\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="truncate_from"):
+        build_saluki_dataset(
+            table_path=empty_table,
+            out_dir=tmp_path / "invalid_bundle",
+            sequence_col="seq",
+            id_col="id",
+            truncate_from="middle",
+            progress=False,
+        )
+
+
+def test_write_saluki_memmap_three_prime_truncation(tmp_path):
+    record = TranscriptRecord(
+        transcript_id="tx",
+        sequence="ACGUAC",
+        cds_positions=(0, 2, 4),
+        splice_positions=(1, 5),
+        metadata={},
+    )
+    X = write_saluki_memmap(
+        tmp_path / "X.npy",
+        [record],
+        length=4,
+        truncate_from="3prime",
+        progress=False,
+    )
+
+    assert decode_rna_one_hot(X[0, :4]) == "ACGU"
+    assert X[0, 4].tolist() == [1, 0, 1, 0]
+    assert X[0, 5].tolist() == [0, 1, 0, 0]
 
 
 def test_schema_definitions():
@@ -176,6 +264,24 @@ def test_gtf_fasta_extraction_and_saluki_builder(tmp_path):
     assert loaded.metadata[0]["represented_length"] == 6
     assert loaded.metadata[0]["encoded_offset"] == 0
     assert loaded.config["builder"] == "saluki_gtf"
+    assert loaded.config["truncate_from"] == "5prime"
     assert loaded.config["n_missing_transcripts"] == 1
     assert loaded.config["n_skipped_missing_fasta_chromosome"] == 1
     assert loaded.config["skipped_missing_fasta_chromosomes"] == {"chrZ": 1}
+
+    three_prime = build_saluki_dataset_from_gtf(
+        gtf_path=gtf,
+        fasta_path=fasta,
+        out_dir=tmp_path / "bundle_3prime",
+        targets_path=targets,
+        target_col="log_kdeg",
+        length=4,
+        truncate_from="3prime",
+        progress=False,
+    )
+    assert decode_rna_one_hot(three_prime.X[0, :4]) == "AAAU"
+    assert three_prime.X[0, 4].tolist() == [1, 0, 0, 1]
+    assert three_prime.X[0, 5].tolist() == [0, 0, 1, 0]
+    assert three_prime.metadata[0]["represented_length"] == 4
+    assert three_prime.metadata[0]["encoded_offset"] == 0
+    assert three_prime.config["truncate_from"] == "3prime"
