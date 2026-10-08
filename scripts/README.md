@@ -7,6 +7,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `sherlock_config.sh`: per-run shell config after you copy `scripts/`; set paths, conda environment, fold count, motifs, and runtime knobs in the copied file.
 - `example_train_config.json`: per-run training config after you copy `scripts/`; edit model and training hyperparameters in the copied file. The training scripts replace `dataset` and `output_dir` in generated configs.
 - `build_saluki_gtf.sh`: builds a Saluki-style dataset bundle with `transcriptml build-saluki-gtf`.
+- `mpra_endogenous_fusion.py`: builds one Saluki-6 bundle containing GTF-derived endogenous transcripts and MPRA inserts embedded in a labeled reporter construct.
 - `train_eval_split.sh` and `submit_train_eval_split.sh`: train and evaluate one predefined train/validation/test split from the dataset bundle.
 - `train_eval_cv_fold.sh` and `submit_train_eval_cv.sh`: 10-fold CV as a SLURM job array, one job per fold.
 - `make_saluki_hparam_grid.py`, `submit_hparam_sweep_cv.sh`, and `hparam_sweep_cv_combo.sh`: generate or consume a hyperparameter table and run one CV sweep combo per SLURM array task.
@@ -235,6 +236,26 @@ Submit `sbatch` commands from the run directory that contains the copied
 matching copied `scripts/sherlock_config.sh`.
 
 This writes the bundle under `${DATASET_DIR}`, including `X.npy`, `y.npy`, `ids.txt`, `schema.json`, and sidecar metadata.
+
+### Fuse Endogenous And MPRA Examples
+
+`mpra_endogenous_fusion.py` accepts the same kinds of endogenous and MPRA tables as the two dedicated builders, plus a tab-delimited reporter construct containing `5utr`, `orf`, `3utr.1`, and `3utr.2` rows. The MPRA insert is placed between the two 3-prime UTR segments and the complete reporter is encoded as Saluki-6 input.
+
+```bash
+python scripts/mpra_endogenous_fusion.py \
+  --endogenous-table endogenous_targets.csv \
+  --gtf annotation.gtf \
+  --fasta genome.fa \
+  --endogenous-target-col log_kdeg \
+  --mpra-table mpra.csv \
+  --mpra-sequence-col utr_insert \
+  --mpra-target-col log_kdeg \
+  --mpra-id-col variant_id \
+  --construct fastUTR_BTV_construct.txt \
+  --out-dir fused_saluki
+```
+
+Use `--endogenous-split-col` and `--mpra-split-col` to merge predefined splits, and the corresponding `--*-metadata-cols` or `--*-delimiter` options when needed. Bundle IDs are prefixed with `endogenous:` or `mpra:`, and `metadata.json` records `data_source` for source-specific evaluation. The two target columns are concatenated unchanged, so they must already use comparable units, direction, and transformation.
 
 If you want to train from a target-table split column, set `SPLIT_COL` in the
 copied `scripts/sherlock_config.sh` before building the dataset. The split
