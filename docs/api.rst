@@ -108,6 +108,10 @@ Models
    :members: SalukiLikeConfig, SalukiLike
    :member-order: bysource
 
+.. automodule:: transcriptml.models.universe
+   :members: ConvolutionUniverseConfig, ConvolutionUniverse
+   :member-order: bysource
+
 .. automodule:: transcriptml.models.legnet
    :members: LegNetConfig, LegNet
    :member-order: bysource

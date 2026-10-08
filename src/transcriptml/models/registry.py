@@ -12,6 +12,7 @@ from transcriptml.models.legnet import LegNet, LegNetConfig
 from transcriptml.models.rbpnet import RBPNet, RBPNetConfig
 from transcriptml.models.reproduce import SalukiExact, SalukiExactConfig
 from transcriptml.models.saluki import SalukiLike, SalukiLikeConfig
+from transcriptml.models.universe import ConvolutionUniverse, ConvolutionUniverseConfig
 
 
 @dataclass
@@ -38,6 +39,7 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
     "legnet": ModelSpec(LegNet, LegNetConfig),
     "rbpnet": ModelSpec(RBPNet, RBPNetConfig),
     "saluki_exact": ModelSpec(SalukiExact, SalukiExactConfig),
+    "convolution_universe": ModelSpec(ConvolutionUniverse, ConvolutionUniverseConfig),
 }
 
 

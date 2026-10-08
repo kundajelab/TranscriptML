@@ -391,6 +391,181 @@ implementation.
 | `head_hidden` | `64` | Width of the hidden layer in the regression head. |
 | `output_dim` | `1` | Number of outputs. Leave this at one for TranscriptML's scalar training workflow. |
 
+## Convolution Universe Model
+
+`convolution_universe` is a configurable convolutional or convolutional/recurrent
+model for controlled architecture experiments. It uses the same flat
+`model.params` interface and checkpoint handling as every other registered
+TranscriptML model.
+
+Inspect the installed defaults with:
+
+```bash
+transcriptml models show convolution_universe --json
+```
+
+The default is a six-channel, fully convolutional residual network. It has a
+kernel-11 stem followed by six kernel-7 blocks with dilations
+`[1, 2, 4, 8, 16, 32]`, no internal pooling, and global average-plus-maximum
+pooling before the MLP head. An empty parameter mapping therefore selects the
+complete default:
+
+```json
+{
+  "model": {
+    "name": "convolution_universe",
+    "params": {}
+  }
+}
+```
+
+### Pooling CNN example
+
+Set dilation to one and pool after every block to build a CNN whose receptive
+field grows through downsampling rather than dilation:
+
+```json
+{
+  "model": {
+    "name": "convolution_universe",
+    "params": {
+      "dilations": 1,
+      "pooling": "max",
+      "pool_size": 2
+    }
+  }
+}
+```
+
+`filters`, `kernel_size`, `dilations`, `pooling`, and `pool_size` may each be a
+single value or a list with exactly `num_layers` entries. This permits staged
+widths and selective downsampling without changing the ordinary flat model
+configuration:
+
+```json
+{
+  "model": {
+    "name": "convolution_universe",
+    "params": {
+      "num_layers": 4,
+      "filters": [64, 64, 128, 128],
+      "kernel_size": [7, 7, 5, 5],
+      "dilations": [1, 2, 1, 2],
+      "pooling": ["none", "max", "none", "max"],
+      "pool_size": [2, 2, 2, 2]
+    }
+  }
+}
+```
+
+### Exact Saluki configuration
+
+`ConvolutionUniverseConfig.saluki()` returns the following complete
+configuration. It matches `saluki_exact`'s layer order, reverse GRU traversal,
+head, shift augmentation, and initialization while leaving `saluki_exact`
+itself and its checkpoints unchanged:
+
+```json
+{
+  "model": {
+    "name": "convolution_universe",
+    "params": {
+      "in_ch": 6,
+      "output_dim": 1,
+      "augment_shift": 3,
+      "weight_init": "saluki",
+      "filters": 64,
+      "num_layers": 6,
+      "stem_kernel_size": 5,
+      "stem_padding": "valid",
+      "stem_bias": false,
+      "block_type": "conv",
+      "kernel_size": 5,
+      "dilations": 1,
+      "padding": "valid",
+      "conv_bias": true,
+      "norm": "layer",
+      "norm_position": "pre",
+      "norm_eps": 0.007,
+      "activation": "relu",
+      "dropout": 0.3,
+      "use_residual": false,
+      "pooling": "max",
+      "pool_size": 2,
+      "mlp_ratio": 4,
+      "layer_scale_init": 0.000001,
+      "drop_path_rate": 0.0,
+      "pre_rnn_norm": "layer",
+      "pre_rnn_activation": "relu",
+      "rnn_type": "gru",
+      "rnn_hidden": 64,
+      "rnn_layers": 1,
+      "rnn_bidirectional": false,
+      "rnn_reverse": true,
+      "rnn_summary": "last",
+      "rnn_dropout": 0.0,
+      "global_pool": "avgmax",
+      "global_pool_size": 1,
+      "head_type": "mlp",
+      "head_hidden": 64,
+      "head_norm": "batch",
+      "head_norm_position": "pre",
+      "head_activation": "relu",
+      "head_dropout": 0.3,
+      "head_norm_eps": 0.001,
+      "head_bn_momentum": 0.1
+    }
+  }
+}
+```
+
+The class method can also be used directly in Python:
+
+```python
+from transcriptml.models import ConvolutionUniverse, ConvolutionUniverseConfig
+
+config = ConvolutionUniverseConfig.saluki()
+model = ConvolutionUniverse(**config.to_kwargs())
+```
+
+Once this configuration is in a training JSON file, Saluki ablations are
+ordinary parameter edits. For example:
+
+- set `rnn_type` to `none` to replace the GRU with `global_pool`;
+- set `pooling` to `average` or to a per-layer list;
+- set `padding` to `same`, enable `use_residual`, and supply a dilation schedule;
+- set `block_type` to `convnext` for ConvNeXt-v1-style blocks;
+- set `head_norm` to `layer` to remove batch-dependent head normalization; or
+- select an LSTM, multiple recurrent layers, or bidirectionality with the
+  corresponding `rnn_*` fields.
+
+When enabling residuals, convolutional `padding` must be `same`. The stochastic
+shift, recurrent reverse traversal, and Saluki initialization are independent
+knobs and should be disabled explicitly when an ablation is intended to remove
+them.
+
+### Parameter groups
+
+| Group | Parameters |
+| --- | --- |
+| Input and stem | `in_ch`, `output_dim`, `augment_shift`, `weight_init`, `filters`, `stem_kernel_size`, `stem_padding`, `stem_bias` |
+| Convolutional tower | `num_layers`, `block_type`, `kernel_size`, `dilations`, `padding`, `conv_bias`, `norm`, `norm_position`, `norm_eps`, `activation`, `dropout`, `use_residual`, `pooling`, `pool_size` |
+| ConvNeXt-specific | `mlp_ratio`, `layer_scale_init`, `drop_path_rate` |
+| Recurrent encoder | `pre_rnn_norm`, `pre_rnn_activation`, `rnn_type`, `rnn_hidden`, `rnn_layers`, `rnn_bidirectional`, `rnn_reverse`, `rnn_summary`, `rnn_dropout` |
+| CNN-only readout | `global_pool`, `global_pool_size` |
+| Prediction head | `head_type`, `head_hidden`, `head_norm`, `head_norm_position`, `head_activation`, `head_dropout`, `head_norm_eps`, `head_bn_momentum` |
+
+`block_type` accepts `conv` or `convnext`. Standard convolution blocks honor the
+tower normalization and activation fields. ConvNeXt blocks use their defining
+depthwise convolution, channel-last LayerNorm, GELU pointwise MLP, optional
+LayerScale, and stochastic depth. `rnn_type` accepts `none`, `gru`, or `lstm`;
+`rnn_summary` accepts `last`, `mean`, or `max`; and `global_pool` accepts `avg`,
+`max`, or `avgmax`.
+
+This first implementation intentionally treats the complete fixed-width tensor
+as valid sequence. It does not infer padding lengths, mask convolutions, or pack
+recurrent inputs.
+
 ## MPRA-LegNet Model Parameters
 
 MPRA bundles have four A/C/G/U channels. The standard MPRA workflow selects the
