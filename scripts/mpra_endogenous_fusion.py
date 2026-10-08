@@ -24,6 +24,7 @@ from transcriptml.data.bundle import DatasetBundle, save_bundle_metadata
 from transcriptml.data.builders import build_saluki_dataset_from_gtf
 from transcriptml.data.encoding import DEFAULT_SALUKI_LENGTH, encode_saluki_transcript
 from transcriptml.data.schemas import SALUKI6
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 CONSTRUCT_SEGMENTS = ("5utr", "orf", "3utr.1", "3utr.2")
@@ -267,6 +268,7 @@ def build_fusion(args: argparse.Namespace) -> Path:
     endogenous_bundle: DatasetBundle | None = None
     fused_x: np.memmap | None = None
     try:
+        log_progress("build-fusion: build endogenous source")
         endogenous_bundle = build_saluki_dataset_from_gtf(
             gtf_path=args.gtf,
             fasta_path=args.fasta,
@@ -286,6 +288,10 @@ def build_fusion(args: argparse.Namespace) -> Path:
         n_endogenous = int(endogenous_bundle.X.shape[0])
         n_mpra = len(mpra_rows)
         total = n_endogenous + n_mpra
+        log_progress(
+            f"build-fusion: allocate fused array for {total} examples "
+            f"({n_endogenous} endogenous, {n_mpra} MPRA)"
+        )
         fused_dir.mkdir()
         fused_x = np.lib.format.open_memmap(
             fused_dir / "X.npy",
@@ -293,9 +299,16 @@ def build_fusion(args: argparse.Namespace) -> Path:
             dtype=np.uint8,
             shape=(total, 6, int(args.length)),
         )
+        copy_reporter = ProgressReporter(
+            "build-fusion: copy endogenous encodings",
+            total=n_endogenous,
+            unit="examples",
+        )
         for start in range(0, n_endogenous, 256):
             end = min(n_endogenous, start + 256)
             fused_x[start:end] = endogenous_bundle.X[start:end]
+            copy_reporter.update(current=end)
+        copy_reporter.close()
 
         five_utr = segments["5utr"]
         orf = segments["orf"]
@@ -324,6 +337,11 @@ def build_fusion(args: argparse.Namespace) -> Path:
         mpra_exclude = {args.mpra_sequence_col, args.mpra_target_col}
         if args.mpra_id_col:
             mpra_exclude.add(args.mpra_id_col)
+        mpra_reporter = ProgressReporter(
+            "build-fusion: encode MPRA reporters",
+            total=n_mpra,
+            unit="reporters",
+        )
         for mpra_index, (row, source_id) in enumerate(zip(mpra_rows, mpra_source_ids)):
             insert = str(row[args.mpra_sequence_col])
             insert_start = three_utr_1_end
@@ -371,8 +389,11 @@ def build_fusion(args: argparse.Namespace) -> Path:
                 }
             )
             metadata.append(item)
+            mpra_reporter.update()
+        mpra_reporter.close()
 
         fused_x.flush()
+        log_progress("build-fusion: write targets and bundle metadata")
         y = np.concatenate(
             (np.asarray(endogenous_bundle.y, dtype=np.float32), mpra_targets)
         ).astype(np.float32, copy=False)
@@ -443,7 +464,11 @@ def build_fusion(args: argparse.Namespace) -> Path:
         _close_memmap(fused_x)
         fused_x = None
         _close_memmap(endogenous_bundle.X)
+        log_progress(f"build-fusion: publish bundle to {out_dir}")
         _publish(fused_dir, out_dir)
+        log_progress(
+            f"build-fusion: done ({n_endogenous} endogenous + {n_mpra} MPRA = {total} examples)"
+        )
         return out_dir
     finally:
         _close_memmap(fused_x)

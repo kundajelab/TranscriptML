@@ -173,6 +173,23 @@ def test_fusion_bundle_contents_encoding_metadata_splits_and_parity(tmp_path):
     assert config["construct"]["orf_includes_terminal_stop"] is True
 
 
+def test_fusion_reports_progress_for_both_sources_and_publication(tmp_path, capsys):
+    paths = _write_inputs(tmp_path)
+    out_dir = tmp_path / "fusion"
+    fusion.build_fusion(_args(paths, out_dir))
+
+    stderr = capsys.readouterr().err
+    assert "build-fusion: build endogenous source" in stderr
+    assert "build-fusion: allocate fused array for 3 examples (1 endogenous, 2 MPRA)" in stderr
+    assert "build-fusion: copy endogenous encodings: started (0/1 examples)" in stderr
+    assert "build-fusion: copy endogenous encodings: finished (1/1 examples)" in stderr
+    assert "build-fusion: encode MPRA reporters: started (0/2 reporters)" in stderr
+    assert "build-fusion: encode MPRA reporters: finished (2/2 reporters)" in stderr
+    assert "build-fusion: write targets and bundle metadata" in stderr
+    assert f"build-fusion: publish bundle to {out_dir}" in stderr
+    assert "build-fusion: done (1 endogenous + 2 MPRA = 3 examples)" in stderr
+
+
 @pytest.mark.parametrize(
     ("truncate_from", "expected_offset"),
     [("5prime", 10), ("3prime", 0)],
