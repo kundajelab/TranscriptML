@@ -566,6 +566,125 @@ This first implementation intentionally treats the complete fixed-width tensor
 as valid sequence. It does not infer padding lengths, mask convolutions, or pack
 recurrent inputs.
 
+## Saluki–Simple-CNN Hybrid Model
+
+`saluki_cnn_hybrid` trains an exact Saluki feature encoder and an exact
+SmallCNN feature encoder in parallel. Both branches receive the same
+six-channel tensor and the same stochastic right shift. The Saluki branch
+contributes its final reversed-GRU state; the CNN branch contributes the
+global-max-plus-global-mean vector that normally enters `SmallCNN.head`.
+
+The default embeddings have widths 64 and 128, respectively. They are
+concatenated in Saluki-then-CNN order into a 192-wide vector and passed through
+a Saluki-style pre-normalized head. The complete default is selected with:
+
+```json
+{
+  "model": {
+    "name": "saluki_cnn_hybrid",
+    "params": {}
+  }
+}
+```
+
+Inspect every resolved nested default with:
+
+```bash
+transcriptml models show saluki_cnn_hybrid --json
+```
+
+The model accepts independent partial dictionaries for the two encoders and
+for fusion. Missing values inside each section retain their defaults:
+
+```json
+{
+  "model": {
+    "name": "saluki_cnn_hybrid",
+    "params": {
+      "saluki": {
+        "filters": 32,
+        "dropout": 0.2
+      },
+      "cnn": {
+        "n_filters": 96,
+        "n_layers": 3
+      },
+      "fusion": {
+        "head_hidden": 128
+      }
+    }
+  }
+}
+```
+
+`saluki.seq_depth` and `cnn.in_ch` must match because both branches consume the
+same input; both default to six. `saluki.augment_shift` is sampled once per
+training forward pass and applied before branching, so the two embeddings
+always describe the same augmented sequence. Evaluation does not shift either
+branch.
+
+### Projected concatenation
+
+Raw concatenation preserves both native embeddings. To learn independent
+branch projections before concatenation, select `project_concat`:
+
+```json
+{
+  "model": {
+    "name": "saluki_cnn_hybrid",
+    "params": {
+      "fusion": {
+        "mode": "project_concat",
+        "saluki_projection_dim": 64,
+        "cnn_projection_dim": 96,
+        "projection_norm": "layer",
+        "projection_activation": "gelu",
+        "projection_dropout": 0.1
+      }
+    }
+  }
+}
+```
+
+Each projection applies `Linear → normalization → activation → dropout` and
+the projected vectors are concatenated in the same Saluki-then-CNN order.
+Projection normalization accepts `none`, `batch`, or `layer`; activation
+accepts `none`, `relu`, `gelu`, or `silu`.
+
+### Hybrid head normalization
+
+The default final head matches Saluki's
+`Normalization → ReLU → Linear → Dropout → Normalization → ReLU → Linear`
+order and uses BatchNorm. Select LayerNorm in the nested fusion section for a
+head that can train on singleton batches:
+
+```json
+{
+  "model": {
+    "name": "saluki_cnn_hybrid",
+    "params": {
+      "fusion": {
+        "head_norm": "layer"
+      }
+    }
+  }
+}
+```
+
+The top-level training option `head_layernorm` remains specific to
+`saluki_exact`; it does not alter the hybrid model.
+
+| Section | Parameters |
+| --- | --- |
+| `saluki` | `seq_depth`, `filters`, `kernel_size`, `num_layers`, `pooling`, `dropout`, `augment_shift`, `ln_epsilon` |
+| `cnn` | `in_ch`, `n_filters`, `kernel_size`, `n_layers`, `dropout` |
+| `fusion` | `mode`, `saluki_projection_dim`, `cnn_projection_dim`, `projection_norm`, `projection_activation`, `projection_dropout`, `head_hidden`, `head_norm`, `head_activation`, `head_dropout`, `head_norm_eps`, `head_bn_momentum`, `output_dim`, `weight_init` |
+
+The prediction head and optional projections use Saluki truncated-He
+initialization by default. Set `fusion.weight_init` to `pytorch` to retain the
+standard PyTorch initialization for those new layers. Each feature branch
+always retains the initialization of its standalone architecture.
+
 ## MPRA-LegNet Model Parameters
 
 MPRA bundles have four A/C/G/U channels. The standard MPRA workflow selects the

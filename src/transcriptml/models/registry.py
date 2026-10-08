@@ -12,6 +12,7 @@ from transcriptml.models.legnet import LegNet, LegNetConfig
 from transcriptml.models.rbpnet import RBPNet, RBPNetConfig
 from transcriptml.models.reproduce import SalukiExact, SalukiExactConfig
 from transcriptml.models.saluki import SalukiLike, SalukiLikeConfig
+from transcriptml.models.saluki_cnn import SalukiCNNHybrid, SalukiCNNHybridConfig
 from transcriptml.models.universe import ConvolutionUniverse, ConvolutionUniverseConfig
 
 
@@ -39,6 +40,7 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
     "legnet": ModelSpec(LegNet, LegNetConfig),
     "rbpnet": ModelSpec(RBPNet, RBPNetConfig),
     "saluki_exact": ModelSpec(SalukiExact, SalukiExactConfig),
+    "saluki_cnn_hybrid": ModelSpec(SalukiCNNHybrid, SalukiCNNHybridConfig),
     "convolution_universe": ModelSpec(ConvolutionUniverse, ConvolutionUniverseConfig),
 }
 

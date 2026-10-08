@@ -73,6 +73,16 @@ class SmallCNN(nn.Module):
             nn.Linear(int(head_hidden), int(output_dim)),
         )
 
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode inputs into the max-plus-mean pooled head embedding.
+
+        Args:
+            x: Encoded sequence batch with shape ``(batch, channels, length)``.
+        """
+
+        z = self.encoder(x.float())
+        return torch.cat([z.amax(dim=-1), z.mean(dim=-1)], dim=1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run a forward pass on ``(B, C, L)`` encoded sequences.
 
@@ -80,7 +90,5 @@ class SmallCNN(nn.Module):
             x: Encoded sequence batch with shape ``(batch, channels, length)``.
         """
 
-        z = self.encoder(x.float())
-        pooled = torch.cat([z.amax(dim=-1), z.mean(dim=-1)], dim=1)
-        y = self.head(pooled)
+        y = self.head(self.forward_features(x))
         return y.squeeze(-1)

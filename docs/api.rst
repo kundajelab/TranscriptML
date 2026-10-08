@@ -108,6 +108,10 @@ Models
    :members: SalukiLikeConfig, SalukiLike
    :member-order: bysource
 
+.. automodule:: transcriptml.models.saluki_cnn
+   :members: SalukiCNNHybridConfig, SalukiCNNHybrid
+   :member-order: bysource
+
 .. automodule:: transcriptml.models.universe
    :members: ConvolutionUniverseConfig, ConvolutionUniverse
    :member-order: bysource

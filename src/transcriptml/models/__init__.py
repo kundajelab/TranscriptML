@@ -6,6 +6,7 @@ from transcriptml.models.registry import ModelConfig, build_model, load_checkpoi
 from transcriptml.models.rbpnet import RBPNet, RBPNetConfig, RBPNetOutput
 from transcriptml.models.reproduce import SalukiExact, SalukiExactConfig
 from transcriptml.models.saluki import SalukiLike, SalukiLikeConfig
+from transcriptml.models.saluki_cnn import SalukiCNNHybrid, SalukiCNNHybridConfig
 from transcriptml.models.universe import ConvolutionUniverse, ConvolutionUniverseConfig
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "RBPNetOutput",
     "SalukiExact",
     "SalukiExactConfig",
+    "SalukiCNNHybrid",
+    "SalukiCNNHybridConfig",
     "SalukiLike",
     "SalukiLikeConfig",
     "SmallCNN",
