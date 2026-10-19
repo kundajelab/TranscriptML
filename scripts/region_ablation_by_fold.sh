@@ -23,27 +23,6 @@ source "${SCRIPT_DIR}/sherlock_config.sh"
 setup_transcriptml_env
 
 FOLD="${SLURM_ARRAY_TASK_ID}"
-CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
-OUT_DIR="${INTERPRET_ROOT}/region_ablation/fold${FOLD}"
-
-REGION_ARGS=(
-  --checkpoint "${CHECKPOINT}"
-  --dataset "${INTERPRET_DATASET_DIR}"
-  --out-dir "${OUT_DIR}"
-  --n-ablations "${REGION_ABLATION_N}"
-  --junction-counts "${REGION_JUNCTION_COUNTS}"
-  --junction-min-spacing "${REGION_JUNCTION_MIN_SPACING}"
-  --seed "${REGION_ABLATION_SEED}"
-  --device "${DEVICE}"
-  --batch-size "${PRED_BATCH_SIZE}"
-  --mutation-batch-size "${MUTATION_BATCH_SIZE}"
-)
-
-for spec in "${REGION_ABLATION_N_FOR[@]}"; do
-  REGION_ARGS+=(--n-ablations-for "${spec}")
-done
-for family in "${REGION_ABLATION_DISABLED[@]}"; do
-  REGION_ARGS+=("--disable-${family//_/-}")
-done
-
+source "${SCRIPT_DIR}/region_ablation_args.sh"
+build_region_ablation_args all
 transcriptml region-ablation "${REGION_ARGS[@]}"

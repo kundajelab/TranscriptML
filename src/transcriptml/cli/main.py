@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 DEFAULT_SALUKI_LENGTH = 12288
@@ -15,6 +16,7 @@ _REGION_ABLATION_FAMILIES = (
     "3utr_shuffle",
     "3utr_random",
     "junction_scatter",
+    "junction_density",
 )
 
 
@@ -52,6 +54,32 @@ def _positive_int_csv(value: str) -> tuple[int, ...]:
         raise argparse.ArgumentTypeError("all values must be positive")
     if len(set(values)) != len(values):
         raise argparse.ArgumentTypeError("values must be unique")
+    return values
+
+
+def _region_families(value: str) -> tuple[str, ...] | None:
+    if value == "all":
+        return None
+    values = tuple(v.strip() for v in value.split(","))
+    if not values or len(set(values)) != len(values) or any(v not in _REGION_ABLATION_FAMILIES for v in values):
+        raise argparse.ArgumentTypeError("expected all or unique comma-separated region-ablation families")
+    return values
+
+
+def _density_values(value: str) -> tuple[float, ...]:
+    try:
+        values = tuple(float(v) for v in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected comma-separated numeric targets") from exc
+    if not values or any(not math.isfinite(v) or v < 0 for v in values):
+        raise argparse.ArgumentTypeError("targets must be finite and non-negative")
+    return values
+
+
+def _density_quantiles(value: str) -> tuple[float, ...]:
+    values = _density_values(value)
+    if any(v > 1 for v in values):
+        raise argparse.ArgumentTypeError("quantiles must be between zero and one")
     return values
 
 
@@ -97,6 +125,12 @@ def _resolve_region_ablation_overrides(
                 f"--n-ablations-for {family}=COUNT"
             )
         overrides[family] = 0
+    families = _REGION_ABLATION_FAMILIES if args.families is None else args.families
+    for family, count in overrides.items():
+        if count > 0 and family not in families:
+            parser.error(f"Positive replicate override for excluded family {family!r}")
+    if not any(overrides.get(family, args.n_ablations) > 0 for family in families):
+        parser.error("At least one ablation family must be enabled")
     return overrides
 
 
@@ -411,6 +445,12 @@ def build_parser() -> argparse.ArgumentParser:
             )
             p.add_argument("--rows-per-shard", type=int, default=100_000)
         if name == "region-ablation":
+            p.add_argument("--families", type=_region_families, default=None,
+                           help="all (default) or comma-separated family names")
+            p.add_argument("--junction-densities", type=_density_values, default=(),
+                           help="Target CDS junctions/kb; comma-separated values including zero")
+            p.add_argument("--junction-density-quantiles", type=_density_quantiles, default=(),
+                           help="Dataset density quantiles in [0,1]; default 0.1 when neither target list is supplied")
             p.add_argument("--n-ablations", type=int, default=100)
             p.add_argument(
                 "--n-ablations-for",
@@ -931,6 +971,9 @@ def main(argv: list[str] | None = None) -> None:
             config=RegionAblationConfig(
                 n_ablations=args.n_ablations,
                 n_ablations_for=overrides,
+                families=args.families,
+                junction_densities=args.junction_densities,
+                junction_density_quantiles=args.junction_density_quantiles,
                 junction_counts=tuple(args.junction_counts),
                 junction_min_spacing=args.junction_min_spacing,
                 seed=args.seed,

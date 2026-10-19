@@ -565,9 +565,46 @@ cannot be combined with a positive replicate override for the same family.
 
 The accepted family names are `5utr_shuffle`, `5utr_random`,
 `cds_nt_shuffle`, `cds_codon_shuffle`, `cds_synonymous`, `cds_random`,
-`3utr_shuffle`, `3utr_random`, and `junction_scatter`. The sequence slicing and
+`3utr_shuffle`, `3utr_random`, `junction_scatter`, and `junction_density`. The sequence slicing and
 sharding flags match codon ISM: use `--sequence-start/--sequence-end` or
 `--sequence-shard-index/--sequence-shards` for large runs.
+
+Select any subset directly with `--families`; omission or `--families all`
+enables all ten families. Positive replicate overrides for excluded families,
+unknown families, and selections with no enabled families are errors.
+
+```bash
+transcriptml region-ablation \
+  --checkpoint runs/saluki_cv10/fold0/model/best.pt \
+  --dataset data/saluki --out-dir interpret/density_sweep/fold0 \
+  --families 3utr_shuffle,junction_density \
+  --junction-densities 0,2,5 \
+  --junction-density-quantiles 0.1,0.5,0.9
+```
+
+`junction_density` targets a common number of junctions per CDS kb, unlike
+`junction_scatter`, which targets fixed counts (and includes noncoding transcripts).
+Density targets can be explicit nonnegative values, quantiles in [0,1], or both.
+Only when neither list is supplied does the target default to quantile 0.1.
+Each supplied target remains a separate condition even if densities coincide.
+Quantiles use all input transcripts with a represented CDS, including zero
+junction densities, before sequence selection/sharding. Training splits are unused.
+
+Counts round to the nearest integer with ties upward, then clip to CDS length
+minus one. Zero clears CDS splice marks. Random layouts use the existing soft
+minimum-spacing sampler; UTR junctions, bases, codon annotations, and padding
+remain unchanged. Transcripts lacking a represented CDS are skipped for this
+family. An empty coding population is recorded without blocking other families.
+The random seed includes the achieved count, so targets yielding the same count
+share layouts, independent of target order, family selection, batching, and sharding.
+Existing families retain their previous random streams.
+
+The Python API exposes the same controls through `RegionAblationConfig(families=
+("3utr_shuffle", "junction_density"), junction_densities=(0, 2, 5),
+junction_density_quantiles=(0.1, 0.5))`. Density instance rows include target ID,
+source and input value, resolved junctions/kb, requested count, achieved count
+(`junction_count`), achieved density, and clipping status. `summary.json` records
+the target grid, population size, enabled families, and rounding/placement rules.
 
 `instances.csv` has one row per transcript-condition. Raw replicate predictions
 and signed `ablation - reference` effects occupy corresponding rows of
@@ -577,7 +614,7 @@ per-condition mean, mean-absolute, and standard-deviation arrays, an audited
 `skipped.csv`, and complete reproducibility metadata in `summary.json`.
 
 For the standard 11-point junction grid, a coding transcript with non-empty
-UTRs receives 19 condition rows and approximately `19 * n_ablations` mutant
+UTRs receives 20 condition rows (including the default density target) and approximately `20 * n_ablations` mutant
 predictions. The Sherlock launcher is:
 
 ```bash

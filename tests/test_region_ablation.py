@@ -52,7 +52,7 @@ def test_region_sequence_families_preserve_annotations_and_target_bounds():
     predictor = RecordingPredictor()
     config = RegionAblationConfig(
         n_ablations=1,
-        n_ablations_for=_only(*(family for family in REGION_ABLATION_FAMILIES if family != "junction_scatter")),
+        n_ablations_for=_only(*(family for family in REGION_ABLATION_FAMILIES if family not in {"junction_scatter", "junction_density"})),
         junction_counts=(1,),
         seed=7,
     )
@@ -66,7 +66,7 @@ def test_region_sequence_families_preserve_annotations_and_target_bounds():
         progress=False,
     )
 
-    assert [row.operation for row in result.instances] == list(REGION_ABLATION_FAMILIES[:-1])
+    assert [row.operation for row in result.instances] == [f for f in REGION_ABLATION_FAMILIES if f not in {"junction_scatter", "junction_density"}]
     mutants = predictor.calls[1]
     assert mutants.shape[0] == 8
     for mutant in mutants:
@@ -193,7 +193,7 @@ def test_junction_scatter_coding_and_noncoding_scope_and_soft_spacing():
     assert next(row for row in result.instances if row.seq_index == 0 and row.junction_count == 50).effective_min_spacing == 1
 
 
-def test_default_grid_has_19_coding_and_11_noncoding_conditions():
+def test_default_grid_has_20_coding_and_11_noncoding_conditions():
     coding = encode_saluki_transcript(
         "A" * 70,
         length=70,
@@ -211,8 +211,8 @@ def test_default_grid_has_19_coding_and_11_noncoding_conditions():
     counts = {seq_index: 0 for seq_index in (0, 1)}
     for row in result.instances:
         counts[row.seq_index] += 1
-    assert counts == {0: 19, 1: 11}
-    assert int(result.replicate_mask.sum()) == 30
+    assert counts == {0: 20, 1: 11}
+    assert int(result.replicate_mask.sum()) == 31
 
 
 def test_junction_sampling_is_exact_unique_and_rejection_free():
@@ -359,3 +359,94 @@ def test_region_ablation_config_validation():
         RegionAblationConfig(n_ablations_for={"bad": 1}).normalized()
     with pytest.raises(ValueError, match="non-negative"):
         RegionAblationConfig(n_ablations_for={"cds_random": -1}).normalized()
+
+
+def test_density_sweep_rounding_clipping_and_preservation(tmp_path):
+    X = _coding_example()[None]
+    predictor = RecordingPredictor()
+    result = region_ablation(
+        X, predictor, config=RegionAblationConfig(
+            families=("junction_density",), n_ablations=2,
+            junction_densities=(0, 125, 1000, 125),
+        ), progress=False, mutation_batch_size=100,
+    )
+    assert [r.junction_count for r in result.instances] == [0, 2, 11, 2]
+    assert [r.requested_junction_count for r in result.instances] == [0, 2, 12, 2]
+    assert [r.junction_count_clipped for r in result.instances] == [False, False, True, False]
+    assert len({r.density_target_id for r in result.instances}) == 4
+    mutants = predictor.calls[1]
+    for row in result.instances:
+        for mutant in mutants[row.instance_index * 2:row.instance_index * 2 + 2]:
+            np.testing.assert_array_equal(mutant[:5], X[0, :5])
+            np.testing.assert_array_equal(mutant[5, :4], X[0, 5, :4])
+            np.testing.assert_array_equal(mutant[5, 16:], X[0, 5, 16:])
+            assert np.count_nonzero(mutant[5, 4:16]) == row.junction_count
+    np.testing.assert_array_equal(mutants[2:4], mutants[6:8])
+    save_region_ablation_result(result, tmp_path, progress=False)
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["density_population_size"] == 1
+    assert len(summary["density_targets"]) == 4
+    assert summary["selected_families"] == ["junction_density"]
+    with (tmp_path / "instances.csv").open() as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[2]["junction_count_clipped"] == "True"
+
+
+def test_density_quantiles_use_full_population_and_reproducible_layouts():
+    X = np.stack([_coding_example() for _ in range(3)])
+    X[0, 5, 4:16] = 0
+    X[2, 5, 4:16] = 1
+    config = RegionAblationConfig(
+        families=("junction_density",), n_ablations=4,
+        junction_densities=(0,), junction_density_quantiles=(0, 0.5, 1),
+    )
+    full_predictor, shard_predictor = RecordingPredictor(), RecordingPredictor()
+    full = region_ablation(X, full_predictor, config=config, progress=False, mutation_batch_size=100)
+    shard = region_ablation(X, shard_predictor, config=config, progress=False,
+                            sequence_shard_index=1, sequence_shards=3, mutation_batch_size=3)
+    assert full.density_targets == shard.density_targets
+    assert shard.density_population_size == 3
+    assert [t["junctions_per_kb"] for t in full.density_targets] == [0, 0, 1000 / 12, 1000]
+    full_mutants = np.concatenate(full_predictor.calls[1:])
+    shard_mutants = np.concatenate(shard_predictor.calls[1:])
+    np.testing.assert_array_equal(full_mutants[16:32], shard_mutants)
+    mixed_predictor = RecordingPredictor()
+    mixed = region_ablation(X, mixed_predictor, config=RegionAblationConfig(
+        families=("3utr_shuffle", "junction_density"), n_ablations=4,
+        junction_densities=(0,), junction_density_quantiles=(0, 0.5, 1),
+    ), progress=False, mutation_batch_size=100)
+    mixed_mutants = np.concatenate(mixed_predictor.calls[1:])
+    selected = np.concatenate([mixed_mutants[r.instance_index * 4:r.instance_index * 4 + 4]
+                               for r in mixed.instances if r.operation == "junction_density"])
+    np.testing.assert_array_equal(full_mutants, selected)
+
+
+def test_density_without_coding_does_not_block_other_families():
+    X = _coding_example()[None]
+    X[:, 4] = 0
+    result = region_ablation(X, RecordingPredictor(), config=RegionAblationConfig(
+        families=("junction_density", "junction_scatter"), n_ablations=1, junction_counts=(1,),
+    ), progress=False)
+    assert [r.operation for r in result.instances] == ["junction_scatter"]
+    assert result.skipped[0].reason == "no_represented_cds"
+    assert result.skipped[0].density_target_id == "quantile_0"
+    assert result.density_targets[0]["status"] == "no_coding_population"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"families": ()}, {"families": ("bad",)},
+    {"families": ("3utr_shuffle",), "n_ablations_for": {"junction_density": 2}},
+    {"families": ("3utr_shuffle",), "n_ablations_for": {"3utr_shuffle": 0}},
+    {"junction_densities": (-1,)}, {"junction_densities": (float("inf"),)},
+    {"junction_density_quantiles": (1.1,)}, {"junction_density_quantiles": (float("nan"),)},
+])
+def test_density_and_family_validation(kwargs):
+    with pytest.raises(ValueError):
+        RegionAblationConfig(**kwargs).normalized()
+
+
+def test_density_defaults_and_family_selection():
+    assert RegionAblationConfig().normalized().junction_density_quantiles == (0.1,)
+    cfg = RegionAblationConfig(families=("3utr_shuffle",), junction_densities=(2,)).normalized()
+    assert cfg.junction_density_quantiles == ()
+    assert cfg.replicates_for("junction_density") == 0

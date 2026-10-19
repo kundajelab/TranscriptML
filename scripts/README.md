@@ -97,9 +97,11 @@ What each group means:
 | `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `CV_MODEL`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior or model name. |
 | `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
-| `REGION_ABLATION_N`, `REGION_JUNCTION_COUNTS`, `REGION_JUNCTION_MIN_SPACING`, `REGION_ABLATION_SEED` | Universal region-ablation replicate count, junction-density grid, soft spacing target, and deterministic seed. |
+| `REGION_ABLATION_N`, `REGION_JUNCTION_COUNTS`, `REGION_JUNCTION_MIN_SPACING`, `REGION_ABLATION_SEED` | Universal region-ablation replicate count, fixed-count junction grid, soft spacing target, and deterministic seed. |
 | `REGION_ABLATION_N_FOR` | Optional Bash array of `FAMILY=COUNT` overrides; a zero count disables that family. |
-| `REGION_ABLATION_DISABLED` | Optional Bash array of region-ablation family names to disable. |
+| `REGION_ABLATION_DISABLED` | Custom workflow only: optional Bash array of family names to disable. |
+| `REGION_ABLATION_FAMILIES`, `REGION_ABLATION_CUSTOM_RUN_NAME` | Custom workflow subset (default `3utr_shuffle,junction_density`) and output run name (default `custom`). |
+| `REGION_JUNCTION_DENSITIES`, `REGION_JUNCTION_DENSITY_QUANTILES` | Comma-separated CDS junctions/kb and/or quantiles in [0,1]. Empty lists default to quantile 0.1. |
 | `MOTIF_REGION` | Region for motif ablation and epistasis jobs. Defaults to `3utr`; use `5utr`, `cds`, `3utr`, or leave empty for whole-transcript analyses. |
 | `MOTIF_ABLATION_SPECS`, `MOTIF_EPISTASIS_SPECS` | Edit only when running motif ablation or motif epistasis with a custom motif list. |
 
@@ -371,23 +373,42 @@ ${INTERPRET_ROOT}/ism/fold1/
 bash scripts/submit_region_ablation_by_fold.sh
 ```
 
-The defaults run 100 replicates for each of eight coding-transcript sequence
-controls and each junction count in `1,5,10,...,50`. Junction placement uses a
-soft 25-nt spacing target. Customize the copied `sherlock_config.sh`, for
-example:
+The all-family workflow runs all ten families: eight sequence controls, the
+fixed-count `junction_scatter` grid, and the CDS-only `junction_density` sweep.
+It defaults to 100 replicates, fixed counts `1,5,10,...,50`, and one density
+target at the input dataset's 10th percentile. Outputs go to
+`${INTERPRET_ROOT}/region_ablation/fold*/`.
+
+Configure a sweep in the copied `sherlock_config.sh` or `TRANSCRIPTML_RUN_CONFIG`:
 
 ```bash
-REGION_ABLATION_N=100
-REGION_JUNCTION_COUNTS="1,5,10,15,20,25,30,35,40,45,50"
+REGION_JUNCTION_DENSITIES="0,2,5"
+REGION_JUNCTION_DENSITY_QUANTILES="0.1,0.5,0.9"
 REGION_JUNCTION_MIN_SPACING=25
-REGION_ABLATION_N_FOR=(
-  "cds_codon_shuffle=250"
-  "cds_synonymous=250"
-)
-REGION_ABLATION_DISABLED=("5utr_shuffle" "3utr_random")
+REGION_ABLATION_N_FOR=("cds_synonymous=250")
 ```
 
-Outputs go to `${INTERPRET_ROOT}/region_ablation/fold*/`.
+Both lists are additive; explicit densities alone do not add the default quantile.
+The all-family wrapper rejects disabled families and zero replicate overrides.
+For a custom subset, use:
+
+```bash
+REGION_ABLATION_FAMILIES=3utr_shuffle,junction_density \
+REGION_ABLATION_CUSTOM_RUN_NAME=utr_and_density \
+bash scripts/submit_region_ablation_custom_by_fold.sh
+```
+
+Custom outputs go to
+`${INTERPRET_ROOT}/region_ablation_custom/${REGION_ABLATION_CUSTOM_RUN_NAME}/fold*/`.
+The custom workflow also accepts `REGION_ABLATION_DISABLED` and zero replicate
+counts. Positive overrides must refer to selected, enabled families. Set Bash
+array overrides in the sourced configuration file, rather than environment variables.
+Use a distinct run name when changing the custom experiment.
+
+Density targets use nearest-integer counts (ties up), capped at CDS length minus
+one, and random layouts with a soft minimum spacing. Zero clears CDS junctions;
+UTR junctions remain intact. Quantiles include zero densities and use the entire
+input coding population, independently of selected shards or training splits.
 
 ## Run Synonymous Codon ISM
 

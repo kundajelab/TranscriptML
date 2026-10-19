@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,7 @@ REGION_ABLATION_FAMILIES: tuple[str, ...] = (
     "3utr_shuffle",
     "3utr_random",
     "junction_scatter",
+    "junction_density",
 )
 
 _SEQUENCE_FAMILIES: tuple[tuple[str, str, str], ...] = (
@@ -66,6 +68,7 @@ _FAMILY_CODES = {
     "3utr_random": 7,
     "junction_scatter": 8,
     "cds_synonymous": 9,
+    "junction_density": 10,
 }
 _SYNONYMOUS_ALTERNATES: dict[str, tuple[str, ...]] = {
     codon: tuple(alternate for alternate in codons if alternate != codon)
@@ -84,6 +87,9 @@ class RegionAblationConfig:
     junction_counts: tuple[int, ...] = DEFAULT_JUNCTION_COUNTS
     junction_min_spacing: int = 25
     seed: int = 123
+    families: tuple[str, ...] | None = None
+    junction_densities: tuple[float, ...] = ()
+    junction_density_quantiles: tuple[float, ...] = ()
 
     def normalized(self) -> "RegionAblationConfig":
         """Validate values and return an immutable normalized configuration."""
@@ -104,6 +110,19 @@ class RegionAblationConfig:
         if len(set(counts)) != len(counts):
             raise ValueError("junction_counts must be unique")
 
+        families = REGION_ABLATION_FAMILIES if self.families is None else tuple(self.families)
+        if not families or len(set(families)) != len(families):
+            raise ValueError("families must be nonempty and unique")
+        if any(family not in REGION_ABLATION_FAMILIES for family in families):
+            raise ValueError("Unknown region-ablation family in families")
+        densities = tuple(float(v) for v in self.junction_densities)
+        quantiles = tuple(float(v) for v in self.junction_density_quantiles)
+        if any(not math.isfinite(v) or v < 0 for v in densities):
+            raise ValueError("junction_densities must be finite and non-negative")
+        if any(not math.isfinite(v) or not 0 <= v <= 1 for v in quantiles):
+            raise ValueError("junction_density_quantiles must be finite and between 0 and 1")
+        if not densities and not quantiles:
+            quantiles = (0.1,)
         overrides: dict[str, int] = {}
         for raw_family, raw_count in dict(self.n_ablations_for).items():
             family = str(raw_family)
@@ -115,18 +134,27 @@ class RegionAblationConfig:
             count = int(raw_count)
             if count < 0:
                 raise ValueError("per-family ablation counts must be non-negative")
+            if count > 0 and family not in families:
+                raise ValueError(f"Positive replicate override for excluded family {family!r}")
             overrides[family] = count
+        if not any(overrides.get(family, default_n) > 0 for family in families):
+            raise ValueError("At least one ablation family must be enabled")
         return RegionAblationConfig(
             n_ablations=default_n,
             n_ablations_for=overrides,
             junction_counts=counts,
             junction_min_spacing=int(self.junction_min_spacing),
             seed=int(self.seed),
+            families=families,
+            junction_densities=densities,
+            junction_density_quantiles=quantiles,
         )
 
     def replicates_for(self, family: str) -> int:
         """Return the requested replicate count for one perturbation family."""
 
+        if self.families is not None and family not in self.families:
+            return 0
         return int(self.n_ablations_for.get(family, self.n_ablations))
 
     def to_dict(self) -> dict[str, object]:
@@ -138,6 +166,9 @@ class RegionAblationConfig:
             "junction_counts": [int(value) for value in self.junction_counts],
             "junction_min_spacing": int(self.junction_min_spacing),
             "seed": int(self.seed),
+            "families": list(REGION_ABLATION_FAMILIES if self.families is None else self.families),
+            "junction_densities": list(self.junction_densities),
+            "junction_density_quantiles": list(self.junction_density_quantiles),
         }
 
 
@@ -160,6 +191,13 @@ class RegionAblationInstance:
     reference_junction_count: int | None = None
     requested_min_spacing: int | None = None
     effective_min_spacing: int | None = None
+    density_target_id: str | None = None
+    density_target_source: str | None = None
+    density_target_value: float | None = None
+    target_junctions_per_kb: float | None = None
+    requested_junction_count: int | None = None
+    achieved_junctions_per_kb: float | None = None
+    junction_count_clipped: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +211,7 @@ class SkippedRegionAblation:
     region: str
     junction_count: int | None
     reason: str
+    density_target_id: str | None = None
 
 
 @dataclass
@@ -197,6 +236,8 @@ class RegionAblationResult:
     splice_channel_index: int
     sequence_ids: tuple[str, ...]
     storage_dir: Path | None = None
+    density_targets: list[dict[str, object]] = field(default_factory=list)
+    density_population_size: int = 0
 
 
 def _resolve_splice_channel(schema: SequenceSchema, splice_channel: str | int | None) -> int:
@@ -315,6 +356,8 @@ def scatter_junctions_inplace(
 
     channel = int(splice_channel)
     x[channel, int(start) : int(end)] = 0
+    if junction_count == 0:
+        return np.empty(0, dtype=np.int64)
     positions = sample_junction_positions(
         start=start,
         end=end,
@@ -462,6 +505,26 @@ def region_ablation(
         if np.any(full_lengths < 0) or np.any(full_lengths > arr.shape[-1]):
             raise ValueError("valid_lengths entries are outside the encoded sequence length")
 
+    # Quantile population is the entire input, independent of analysis selectors.
+    density_population = []
+    density_targets = []
+    if cfg.replicates_for("junction_density"):
+        for i, x in enumerate(arr):
+            length = int(full_lengths[i]) if full_lengths is not None else valid_length_from_bases(x, base_channels)
+            cds = find_cds_codon_starts(x, resolved_schema, valid_length=length, cds_channel=cds_channel_index)
+            if cds.starts.size and cds.cds_length >= 3:
+                count = np.count_nonzero(x[splice_channel_index, cds.cds_start:cds.cds_end + 1] > 0)
+                density_population.append(1000 * count / cds.cds_length)
+        for source, values in (("density", cfg.junction_densities), ("quantile", cfg.junction_density_quantiles)):
+            for index, value in enumerate(values):
+                resolved = (value if source == "density" else
+                            float(np.quantile(density_population, value)) if density_population else None)
+                density_targets.append(dict(
+                    target_id=f"{source}_{index}", source=source, value=value,
+                    junctions_per_kb=resolved,
+                    status="resolved" if resolved is not None else "no_coding_population",
+                ))
+
     instances: list[RegionAblationInstance] = []
     skipped: list[SkippedRegionAblation] = []
     transcript_classes: list[str] = []
@@ -475,6 +538,7 @@ def region_ablation(
         region: str,
         reason: str,
         junction_count: int | None = None,
+        density_target_id: str | None = None,
     ) -> None:
         skipped.append(
             SkippedRegionAblation(
@@ -485,6 +549,7 @@ def region_ablation(
                 region=region,
                 junction_count=junction_count,
                 reason=reason,
+                density_target_id=density_target_id,
             )
         )
 
@@ -520,6 +585,30 @@ def region_ablation(
         else:
             transcript_class = "noncoding"
         transcript_classes.append(transcript_class)
+
+        for target in density_targets:
+            if not has_cds:
+                add_skip(seq_index, transcript_class, "junction_density", "cds",
+                         "no_represented_cds", density_target_id=target["target_id"])
+                continue
+            start, end = cds.cds_start, cds.cds_end + 1
+            length = end - start
+            density = target["junctions_per_kb"]
+            requested = math.floor(density / 1000 * length + 0.5)
+            count = min(requested, length - 1)
+            spacing = effective_junction_spacing(length, count, cfg.junction_min_spacing) if count else 0
+            instances.append(RegionAblationInstance(
+                instance_index=len(instances), seq_index=seq_index, sequence_id=ids[seq_index],
+                transcript_class=transcript_class, operation="junction_density", region="cds",
+                valid_length=valid_length, region_start=start, region_end=end, region_length=length,
+                n_replicates=cfg.replicates_for("junction_density"), junction_count=count,
+                reference_junction_count=int(np.count_nonzero(x[splice_channel_index, start:end] > 0)),
+                requested_min_spacing=cfg.junction_min_spacing, effective_min_spacing=spacing,
+                density_target_id=target["target_id"], density_target_source=target["source"],
+                density_target_value=target["value"], target_junctions_per_kb=density,
+                requested_junction_count=requested, achieved_junctions_per_kb=1000 * count / length,
+                junction_count_clipped=count != requested,
+            ))
 
         if transcript_class == "coding_unresolved":
             for family, region, _ in _SEQUENCE_FAMILIES:
@@ -695,7 +784,7 @@ def region_ablation(
                 instance.junction_count,
                 replicate_index,
             )
-            if instance.operation == "junction_scatter":
+            if instance.operation in {"junction_scatter", "junction_density"}:
                 assert instance.junction_count is not None
                 assert instance.effective_min_spacing is not None
                 scatter_junctions_inplace(
@@ -798,6 +887,8 @@ def region_ablation(
         splice_channel_index=splice_channel_index,
         sequence_ids=tuple(ids[int(index)] for index in analysis_indices),
         storage_dir=storage_path,
+        density_targets=density_targets,
+        density_population_size=len(density_population),
     )
 
 
@@ -856,6 +947,12 @@ def save_region_ablation_result(
         ),
         "seed_policy": "SeedSequence(seed, seq_index, family_code, junction_count_or_0, replicate_index)",
         "config": result.config.to_dict(),
+        "selected_families": [f for f in REGION_ABLATION_FAMILIES if result.config.replicates_for(f) > 0],
+        "density_targets": result.density_targets,
+        "density_population_size": result.density_population_size,
+        "density_population": "all input transcripts with represented CDS, including zero densities",
+        "density_rounding": "nearest integer, ties up; clipped to CDS length minus one",
+        "density_placement": "CDS only; uniform random layouts with soft minimum spacing; zero clears CDS marks",
         "checkpoint": str(checkpoint) if checkpoint is not None else None,
         "dataset": str(dataset) if dataset is not None else None,
         "input_shape": list(result.input_shape),

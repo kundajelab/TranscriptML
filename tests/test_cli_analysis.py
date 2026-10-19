@@ -419,10 +419,10 @@ def test_region_ablation_cli_tiny_bundle_and_checkpoint(tmp_path):
 
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["analysis"] == "region_ablation"
-    assert summary["n_instances"] == 9
-    assert summary["n_mutants"] == 9
+    assert summary["n_instances"] == 10
+    assert summary["n_mutants"] == 10
     assert summary["config"]["n_ablations_for"]["3utr_random"] == 0
-    assert np.load(out / "effects.npy").shape == (9, 1)
+    assert np.load(out / "effects.npy").shape == (10, 1)
 
 
 def test_interpret_cli_rejects_conflicting_named_and_positional_args():
@@ -462,3 +462,31 @@ def test_codon_usage_cli_tiny_bundle(tmp_path):
     table_text = (out_dir / "tables" / "global_codon_usage.tsv").read_text(encoding="utf-8")
     assert "AUG" in table_text
     assert "GCU" in table_text
+
+
+def test_region_cli_subset_and_density_grid():
+    parser = build_parser()
+    args = parser.parse_args([
+        "region-ablation", "--checkpoint", "m.pt", "--dataset", "data", "--out-dir", "out",
+        "--families", "3utr_shuffle,junction_density", "--junction-densities", "0,2,5",
+        "--junction-density-quantiles", "0.1,0.5", "--n-ablations-for", "junction_density=7",
+    ])
+    assert args.families == ("3utr_shuffle", "junction_density")
+    assert args.junction_densities == (0, 2, 5)
+    assert args.junction_density_quantiles == (0.1, 0.5)
+    assert _resolve_region_ablation_overrides(args, parser) == {"junction_density": 7}
+
+
+@pytest.mark.parametrize("options", [
+    ["--families", "bad"], ["--families", ""], ["--families", "3utr_shuffle,3utr_shuffle"],
+    ["--junction-densities", "nan"], ["--junction-densities", "-1"],
+    ["--junction-density-quantiles", "1.1"],
+    ["--families", "3utr_shuffle", "--n-ablations-for", "junction_density=2"],
+    ["--families", "junction_density", "--disable-junction-density"],
+])
+def test_region_cli_rejects_invalid_subset_and_targets(options):
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        args = parser.parse_args(["region-ablation", "--checkpoint", "m.pt", "--dataset", "data",
+                                 "--out-dir", "out", *options])
+        _resolve_region_ablation_overrides(args, parser)
