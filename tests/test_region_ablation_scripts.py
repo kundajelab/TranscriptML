@@ -79,3 +79,27 @@ def test_custom_submit_uses_matching_array_job(shell_jobs):
     args = result.stdout.splitlines()
     assert args[0] == "--array=0-9"
     assert args[1].endswith("/region_ablation_custom_by_fold.sh")
+
+
+@pytest.mark.parametrize("script", ["region_ablation_by_fold.sh", "region_ablation_custom_by_fold.sh"])
+@pytest.mark.parametrize("arrays", ["empty", "unset", "populated"])
+def test_optional_arrays_under_nounset(shell_jobs, script, arrays):
+    path, _ = shell_jobs
+    config = path / "sherlock_config.sh"
+    if arrays == "unset":
+        extra = "unset REGION_ABLATION_N_FOR REGION_ABLATION_DISABLED"
+    elif arrays == "empty":
+        extra = "REGION_ABLATION_N_FOR=(); REGION_ABLATION_DISABLED=()"
+    else:
+        extra = 'REGION_ABLATION_N_FOR=("3utr_shuffle= 7 " "junction_density=9"); REGION_ABLATION_DISABLED=()'
+    with config.open("a") as handle:
+        handle.write(extra + "\n")
+    result = invoke(shell_jobs, script)
+    assert result.returncode == 0, result.stderr
+    args = result.stdout.splitlines()
+    if arrays == "populated":
+        assert args.count("--n-ablations-for") == 2
+        assert args[args.index("--n-ablations-for") + 1] == "3utr_shuffle= 7 "
+    else:
+        assert "--n-ablations-for" not in args
+    assert not any(arg.startswith("--disable-") for arg in args)

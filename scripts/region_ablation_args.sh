@@ -1,13 +1,15 @@
 #!/bin/bash
 # Sourced by the all-family and custom fold jobs after sherlock_config.sh.
 build_region_ablation_args() {
+  # Bash before 4.4 treats empty arrays as unset under set -u. Guard optional
+  # array expansions while preserving each populated element as one argument.
   local mode="$1" spec family count
   if [[ "${mode}" == all ]]; then
-    if (( ${#REGION_ABLATION_DISABLED[@]} )); then
+    for family in ${REGION_ABLATION_DISABLED[@]+"${REGION_ABLATION_DISABLED[@]}"}; do
       echo 'Use region_ablation_custom_by_fold.sh to disable families.' >&2
       return 1
-    fi
-    for spec in "${REGION_ABLATION_N_FOR[@]}"; do
+    done
+    for spec in ${REGION_ABLATION_N_FOR[@]+"${REGION_ABLATION_N_FOR[@]}"}; do
       count="${spec#*=}"
       count="${count//[[:space:]]/}"
       if [[ "${count}" =~ ^[+-]?0+$ ]]; then
@@ -44,10 +46,10 @@ build_region_ablation_args() {
   if [[ -n "${REGION_JUNCTION_DENSITY_QUANTILES}" ]]; then
     REGION_ARGS+=(--junction-density-quantiles "${REGION_JUNCTION_DENSITY_QUANTILES}")
   fi
-  for spec in "${REGION_ABLATION_N_FOR[@]}"; do
+  for spec in ${REGION_ABLATION_N_FOR[@]+"${REGION_ABLATION_N_FOR[@]}"}; do
     REGION_ARGS+=(--n-ablations-for "${spec}")
   done
-  for family in "${REGION_ABLATION_DISABLED[@]}"; do
+  for family in ${REGION_ABLATION_DISABLED[@]+"${REGION_ABLATION_DISABLED[@]}"}; do
     REGION_ARGS+=("--disable-${family//_/-}")
   done
 }

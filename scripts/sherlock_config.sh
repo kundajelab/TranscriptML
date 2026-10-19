@@ -95,7 +95,18 @@ DEVICE="${DEVICE:-cuda}"
 # Empty target lists default to the 10th percentile in TranscriptML.
 REGION_JUNCTION_DENSITIES="${REGION_JUNCTION_DENSITIES:-}"
 REGION_JUNCTION_DENSITY_QUANTILES="${REGION_JUNCTION_DENSITY_QUANTILES:-}"
-REGION_ABLATION_FAMILIES="${REGION_ABLATION_FAMILIES:-3utr_shuffle,junction_density}"
+REGION_ABLATION_FAMILIES="${REGION_ABLATION_FAMILIES:-3utr_shuffle,junction_density,cds_synonymous,3utr_random,junction_scatter}"
+  # Possible values:
+    # 5utr_shuffle
+    # 5utr_random
+    # cds_nt_shuffle
+    # cds_codon_shuffle
+    # cds_synonymous
+    # cds_random
+    # 3utr_shuffle
+    # 3utr_random
+    # junction_scatter
+    # junction_density
 REGION_ABLATION_CUSTOM_RUN_NAME="${REGION_ABLATION_CUSTOM_RUN_NAME:-custom}"
 REGION_ABLATION_N="${REGION_ABLATION_N:-100}"
 REGION_JUNCTION_COUNTS="${REGION_JUNCTION_COUNTS:-1,5,10,15,20,25,30,35,40,45,50}"
