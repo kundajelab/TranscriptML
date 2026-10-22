@@ -324,6 +324,17 @@ interpret/saluki_ism/fold0/
   summary.json
 ```
 
+Tangermeme is the default ISM backend. TranscriptML passes only the four
+nucleotide channels to Tangermeme for mutation and holds Saluki CDS and splice
+channels fixed as auxiliary model inputs. Use `--backend transcriptml` to
+reproduce the historical enumerator (or to interpret soft, non-binary sequence
+encodings). Tangermeme's verified fastISM path is available with `--fast`, but
+is deliberately off by default: Saluki and LegNet contain globally coupled
+normalization or pooling operations, so capture and verification usually add
+work without accelerating these models. If requested, Tangermeme checks the
+fast path and falls back to ordinary ISM when it is unsupported, slower, or
+numerically inconsistent.
+
 The gold-standard downstream workflow is to average the fold-level ISM arrays
 and mean-center them across nucleotide channels. The averaged deltas preserve
 the model-effect scale, while the mean-centered version behaves more like a
@@ -390,9 +401,14 @@ needed for a particular figure.
 
 Window ISM provides a coarser complement to single-nucleotide ISM. Each window
 is independently mutated several times by replacing every nucleotide with a
-uniformly sampled alternative base. For replicate `r`, the effect is
+uniformly sampled base. For replicate `r`, the effect is
 `mutant_prediction - reference_prediction`; the command records its signed
 mean, mean absolute value, and population standard deviation.
+
+The default Tangermeme backend samples uniformly from A/C/G/U, so a sampled
+base may equal the reference. `--backend transcriptml` restores the historical
+policy of sampling uniformly from only the other three bases. Because those
+are different null models, the selected backend is recorded in `summary.json`.
 
 Run the same scan once per fold checkpoint:
 

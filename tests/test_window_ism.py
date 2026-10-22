@@ -84,6 +84,7 @@ def test_window_ism_exact_additive_effects_and_terminal_coordinates():
         stride=2,
         n_ablations=3,
         mutation_batch_size=2,
+        backend="transcriptml",
         progress=False,
     )
 
@@ -138,6 +139,7 @@ def test_window_ism_preserves_annotation_channels():
         stride=3,
         n_ablations=2,
         mutation_batch_size=3,
+        backend="transcriptml",
         progress=False,
     )
 
@@ -191,6 +193,7 @@ def test_window_ism_mean_absolute_effect_ranks_high_weight_window():
         window_size=2,
         stride=2,
         n_ablations=3,
+        backend="transcriptml",
         progress=False,
     )
     assert int(np.argmax(result.mean_abs_deltas[0])) == 1

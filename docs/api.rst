@@ -159,6 +159,12 @@ Training and evaluation
 Interpretation
 --------------
 
+Tangermeme is the default backend for generic model prediction,
+single-nucleotide ISM, and compatible randomization/shuffle kernels. Public
+analyses that have different historical perturbation semantics accept
+``backend="transcriptml"``. Transcript-specific codon, region, motif-context,
+and junction orchestration remains in TranscriptML.
+
 .. automodule:: transcriptml.interpret.predictor
    :members: Predictor, EnsemblePredictor
    :member-order: bysource

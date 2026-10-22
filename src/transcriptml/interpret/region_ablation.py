@@ -4,9 +4,9 @@ import hashlib
 import json
 import math
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -21,12 +21,14 @@ from transcriptml.data.region_edits import (
     valid_length_from_bases,
 )
 from transcriptml.data.schemas import SequenceSchema, get_schema
+from transcriptml.interpret.backends import normalize_backend
 from transcriptml.interpret.codon_ism import (
     AA_TO_CODONS,
     CDSCodonStarts,
     find_cds_codon_starts,
     resolve_analysis_indices,
 )
+from transcriptml.interpret.edits import tangermeme_region_edit_inplace
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_table
 from transcriptml.progress import ProgressReporter, log_progress
@@ -238,6 +240,7 @@ class RegionAblationResult:
     storage_dir: Path | None = None
     density_targets: list[dict[str, object]] = field(default_factory=list)
     density_population_size: int = 0
+    backend: str = "tangermeme"
 
 
 def _resolve_splice_channel(schema: SequenceSchema, splice_channel: str | int | None) -> int:
@@ -455,6 +458,7 @@ def region_ablation(
     sequence_shard_index: int | None = None,
     sequence_shards: int | None = None,
     storage_dir: str | Path | None = None,
+    backend: str = "tangermeme",
     progress: bool = True,
 ) -> RegionAblationResult:
     """Run repeated region sequence edits and exon-junction density scans."""
@@ -469,6 +473,7 @@ def region_ablation(
             f"expects {resolved_schema.n_channels}"
         )
     cfg = (config or RegionAblationConfig()).normalized()
+    selected_backend = normalize_backend(backend)
     if int(mutation_batch_size) <= 0:
         raise ValueError("mutation_batch_size must be positive")
 
@@ -813,21 +818,41 @@ def region_ablation(
                     rng=rng,
                 )
             elif instance.operation.endswith("_shuffle"):
-                shuffle_nucleotides_inplace(
-                    mutant,
-                    start=instance.region_start,
-                    end=instance.region_end,
-                    base_channels=base_channels,
-                    rng=rng,
-                )
+                if selected_backend == "tangermeme":
+                    tangermeme_region_edit_inplace(
+                        mutant,
+                        start=instance.region_start,
+                        end=instance.region_end,
+                        base_channels=base_channels,
+                        strategy="shuffle",
+                        rng=rng,
+                    )
+                else:
+                    shuffle_nucleotides_inplace(
+                        mutant,
+                        start=instance.region_start,
+                        end=instance.region_end,
+                        base_channels=base_channels,
+                        rng=rng,
+                    )
             elif instance.operation.endswith("_random"):
-                randomize_nucleotides_inplace(
-                    mutant,
-                    start=instance.region_start,
-                    end=instance.region_end,
-                    base_channels=base_channels,
-                    rng=rng,
-                )
+                if selected_backend == "tangermeme":
+                    tangermeme_region_edit_inplace(
+                        mutant,
+                        start=instance.region_start,
+                        end=instance.region_end,
+                        base_channels=base_channels,
+                        strategy="random",
+                        rng=rng,
+                    )
+                else:
+                    randomize_nucleotides_inplace(
+                        mutant,
+                        start=instance.region_start,
+                        end=instance.region_end,
+                        base_channels=base_channels,
+                        rng=rng,
+                    )
             else:  # pragma: no cover - guarded by the fixed family table.
                 raise RuntimeError(f"Unsupported region-ablation operation {instance.operation!r}")
             mutant_batch.append(mutant)
@@ -889,6 +914,7 @@ def region_ablation(
         storage_dir=storage_path,
         density_targets=density_targets,
         density_population_size=len(density_population),
+        backend=selected_backend,
     )
 
 
@@ -933,6 +959,11 @@ def save_region_ablation_result(
     class_counts = Counter(result.transcript_classes)
     summary = {
         "analysis": "region_ablation",
+        "backend": result.backend,
+        "operation_backends": {
+            "nucleotide_randomization_and_shuffle": result.backend,
+            "codon_synonymous_and_junction_operations": "transcriptml",
+        },
         "effect_definition": "ablation_prediction - reference_prediction",
         "raw_replicates_saved": True,
         "inactive_replicate_fill_value": "NaN",

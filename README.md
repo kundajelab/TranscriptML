@@ -9,6 +9,11 @@ predictions, and investigating learned sequence features with analyses such as
 in silico mutagenesis, transcript-region and exon-junction ablation, motif
 ablation, context scans, etc.
 
+Interpretation uses [Tangermeme](https://github.com/jmschrei/tangermeme) as its
+default prediction and sequence-perturbation backend. TranscriptML retains the
+RNA- and transcript-specific orchestration, metadata, codon, and splice-site
+analyses that Tangermeme does not provide.
+
 TranscriptML currently supports three main workflows:
 
 - **Saluki** predicts transcriptome-wide RNA stability from transcript sequence,

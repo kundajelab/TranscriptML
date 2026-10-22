@@ -40,6 +40,36 @@ def test_ism_known_signed_effects():
     assert result.deltas[0, 3, 1] == 6.0
 
 
+def test_tangermeme_ism_matches_legacy_and_preserves_saluki_annotations():
+    X = encode_saluki_transcript(
+        "ACGU",
+        length=4,
+        cds_positions=[0, 2],
+        splice_positions=[1, 3],
+    )[None].astype(np.float32)
+
+    class AnnotatedModel(torch.nn.Module):
+        def forward(self, x):
+            bases = (x[:, :4] * torch.tensor([1, 2, 4, 8]).view(1, 4, 1)).sum((1, 2))
+            return bases + 10 * x[:, 4].sum(1) + 100 * x[:, 5].sum(1)
+
+    predictor = Predictor(AnnotatedModel())
+    tangermeme = compute_ism(X, predictor, backend="tangermeme", fast=False, progress=False)
+    legacy = compute_ism(X, predictor, backend="transcriptml", progress=False)
+
+    np.testing.assert_allclose(tangermeme.reference_predictions, legacy.reference_predictions)
+    np.testing.assert_allclose(tangermeme.deltas, legacy.deltas)
+    assert tangermeme.backend == "tangermeme"
+    assert tangermeme.fast is False
+
+
+def test_tangermeme_ism_rejects_soft_sequence_channels():
+    X = encode_rna_sequence("AC")[None].astype(np.float32)
+    X[0, :2, 0] = 0.5
+    with pytest.raises(ValueError, match="hard binary"):
+        compute_ism(X, Predictor(BaseWeightModel([1, 2, 4, 8])), progress=False)
+
+
 def test_motif_ablation_known_additive_effect():
     X = encode_rna_sequence("AAUU")[None, :, :].astype(np.float32)
     predictor = Predictor(BaseWeightModel([1, 0, 0, 0]))

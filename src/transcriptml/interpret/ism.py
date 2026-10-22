@@ -5,9 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import torch
+from tangermeme.saturation_mutagenesis import saturation_mutagenesis
 
 from transcriptml.data.encoding import infer_valid_lengths
+from transcriptml.interpret.backends import normalize_backend, prepare_tangermeme_input
 from transcriptml.interpret.predictor import Predictor
+from transcriptml.models.common import squeeze_prediction
 from transcriptml.progress import ProgressReporter, log_progress
 
 
@@ -16,38 +20,32 @@ class ISMResult:
     deltas: np.ndarray
     reference_predictions: np.ndarray
     valid_lengths: np.ndarray
+    backend: str = "tangermeme"
+    fast: bool = False
 
 
-def compute_ism(
-    X: np.ndarray,
+def _normalize_lengths(arr: np.ndarray, valid_lengths: np.ndarray | None) -> np.ndarray:
+    """Infer and validate sequence lengths for an ISM batch."""
+
+    lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
+    if lengths.shape != (arr.shape[0],):
+        raise ValueError(f"valid_lengths must have shape ({arr.shape[0]},), got {lengths.shape}")
+    if np.any(lengths < 0) or np.any(lengths > arr.shape[-1]):
+        raise ValueError(f"valid_lengths entries must be between 0 and encoded length {arr.shape[-1]}")
+    return lengths.astype(np.int64, copy=False)
+
+
+def _compute_transcriptml_ism(
+    arr: np.ndarray,
     predictor: Predictor,
     *,
-    valid_lengths: np.ndarray | None = None,
-    mutation_batch_size: int = 512,
-    progress: bool = True,
+    lengths: np.ndarray,
+    mutation_batch_size: int,
+    progress: bool,
 ) -> ISMResult:
-    """Single-nucleotide ISM with signed mutant-minus-reference effects.
+    """Historical TranscriptML single-substitution implementation."""
 
-    The returned ``deltas`` array has shape ``(N, 4, L)``. At each valid base
-    position, the three alternative base channels store mutant-reference
-    deltas; the original-base channel remains zero.
-
-    Args:
-        X: Encoded ``(N, C, L)`` sequence batch with at least four base
-            channels.
-        predictor: Predictor used to score reference and mutant sequences.
-        valid_lengths: Optional valid lengths for each sequence. When omitted,
-            lengths are inferred from ``X``.
-        mutation_batch_size: Maximum number of mutant sequences to score in one
-            prediction batch.
-        progress: Whether to emit progress messages while scanning.
-    """
-
-    arr = np.asarray(X)
-    if arr.ndim != 3 or arr.shape[1] < 4:
-        raise ValueError(f"Expected X with shape (N, C>=4, L), got {arr.shape}")
     N, _, L = arr.shape
-    lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
     log_progress(f"ism: predicting {N} reference sequences", enabled=progress)
     ref = predictor.predict(arr)
     deltas = np.zeros((N, 4, L), dtype=np.float32)
@@ -56,8 +54,6 @@ def compute_ism(
     n_mutants = 0
 
     def flush() -> None:
-        """Predict and store any queued mutant sequences."""
-
         if not batch:
             return
         preds = predictor.predict(np.stack(batch, axis=0))
@@ -88,7 +84,124 @@ def compute_ism(
         reporter.update()
     flush()
     reporter.close(extra=f"{n_mutants} mutants predicted")
-    return ISMResult(deltas=deltas, reference_predictions=ref.astype(np.float32), valid_lengths=lengths)
+    return ISMResult(
+        deltas=deltas,
+        reference_predictions=ref.astype(np.float32),
+        valid_lengths=lengths,
+        backend="transcriptml",
+        fast=False,
+    )
+
+
+def compute_ism(
+    X: np.ndarray,
+    predictor: Predictor,
+    *,
+    valid_lengths: np.ndarray | None = None,
+    mutation_batch_size: int = 512,
+    backend: str = "tangermeme",
+    fast: bool = False,
+    progress: bool = True,
+) -> ISMResult:
+    """Single-nucleotide ISM with signed mutant-minus-reference effects.
+
+    The returned ``deltas`` array has shape ``(N, 4, L)``. At each valid base
+    position, the three alternative base channels store mutant-reference
+    deltas; the original-base channel remains zero.
+
+    Args:
+        X: Encoded ``(N, C, L)`` sequence batch with at least four base
+            channels.
+        predictor: Predictor used to score reference and mutant sequences.
+        valid_lengths: Optional valid lengths for each sequence. When omitted,
+            lengths are inferred from ``X``.
+        mutation_batch_size: Maximum number of mutant sequences to score in one
+            prediction batch.
+        backend: Interpretation backend. ``tangermeme`` is the default;
+            ``transcriptml`` selects the historical enumerator.
+        fast: Opt in to Tangermeme fastISM. Tangermeme verifies the fast path
+            and falls back when unsupported. Disabled by default because
+            capture provides little benefit for globally coupled models such
+            as Saluki and LegNet.
+        progress: Whether to emit progress messages while scanning.
+    """
+
+    arr = np.asarray(X)
+    if arr.ndim != 3 or arr.shape[1] < 4:
+        raise ValueError(f"Expected X with shape (N, C>=4, L), got {arr.shape}")
+    if int(mutation_batch_size) <= 0:
+        raise ValueError("mutation_batch_size must be positive")
+    N, _, L = arr.shape
+    lengths = _normalize_lengths(arr, valid_lengths)
+    selected_backend = normalize_backend(backend)
+    if selected_backend == "transcriptml":
+        if fast:
+            raise ValueError("fast=True is available only with backend='tangermeme'")
+        return _compute_transcriptml_ism(
+            arr,
+            predictor,
+            lengths=lengths,
+            mutation_batch_size=int(mutation_batch_size),
+            progress=progress,
+        )
+
+    bases = arr[:, :4]
+    if not np.all((bases == 0) | (bases == 1)):
+        raise ValueError(
+            "Tangermeme ISM requires hard binary nucleotide channels; "
+            "use backend='transcriptml' for soft encodings"
+        )
+    deltas = np.zeros((N, 4, L), dtype=np.float32)
+    if N == 0:
+        return ISMResult(
+            deltas=deltas,
+            reference_predictions=np.empty((0,), dtype=np.float32),
+            valid_lengths=lengths,
+            backend=selected_backend,
+            fast=bool(fast),
+        )
+
+    max_length = int(lengths.max(initial=0))
+    if max_length == 0:
+        reference = predictor.predict(arr).astype(np.float32, copy=False)
+    else:
+        prepared = prepare_tangermeme_input(
+            predictor,
+            arr,
+            batch_size=int(mutation_batch_size),
+            separate_annotations=True,
+        )
+        raw = saturation_mutagenesis(
+            prepared.model,
+            prepared.sequences,
+            args=prepared.args,
+            start=0,
+            end=max_length,
+            batch_size=prepared.batch_size,
+            raw_outputs=True,
+            dtype=torch.float32,
+            device=prepared.device,
+            verbose=progress,
+            func=squeeze_prediction,
+            fast=bool(fast),
+        )
+        if not isinstance(raw.y0, torch.Tensor) or not isinstance(raw.y_hat, torch.Tensor):
+            raise ValueError("predictor model must return one tensor")
+        reference = raw.y0.numpy().astype(np.float32, copy=False).reshape(-1)
+        values = raw.y_hat.numpy().astype(np.float32, copy=False)
+        deltas[:, :, :max_length] = values - reference[:, None, None]
+
+    positions = np.arange(L, dtype=np.int64)[None, :]
+    valid = positions < lengths[:, None]
+    unambiguous = np.count_nonzero(bases, axis=1) == 1
+    deltas *= (valid & unambiguous)[:, None, :]
+    return ISMResult(
+        deltas=deltas,
+        reference_predictions=reference,
+        valid_lengths=lengths,
+        backend=selected_backend,
+        fast=bool(fast),
+    )
 
 
 def max_abs_effect_per_position(deltas: np.ndarray) -> np.ndarray:
@@ -119,6 +232,8 @@ def save_ism_result(result: ISMResult, out_dir: str | Path, *, progress: bool = 
     np.save(out / "max_abs_effect.npy", max_abs_effect_per_position(result.deltas))
     summary = {
         "analysis": "single_nucleotide_ism",
+        "backend": result.backend,
+        "fast_ism_requested": bool(result.fast),
         "delta_definition": "mutant_prediction - reference_prediction",
         "deltas_shape": list(result.deltas.shape),
     }

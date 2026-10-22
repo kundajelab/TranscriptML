@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
 from transcriptml.data.encoding import infer_valid_lengths
 from transcriptml.data.schemas import SequenceSchema
-from transcriptml.interpret.edits import scramble_motif_ablating_inplace
+from transcriptml.interpret.backends import normalize_backend
+from transcriptml.interpret.codon_ism import find_cds_codon_starts
+from transcriptml.interpret.edits import (
+    effective_perturbation_backend,
+    scramble_motif_ablating_inplace,
+)
 from transcriptml.interpret.motifs import find_motif_starts, parse_motif
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
-from transcriptml.interpret.codon_ism import find_cds_codon_starts
 from transcriptml.progress import ProgressReporter, log_progress
 
 
@@ -34,6 +38,8 @@ class MotifAblationResult:
     ablation_predictions: np.ndarray
     effects: np.ndarray
     region: str | None = None
+    backend: str = "tangermeme"
+    strategy: str = "random_different"
 
 
 def normalize_motif_region(region: str | None) -> str | None:
@@ -191,6 +197,7 @@ def mean_ablation_prediction(
     n_scrambles: int,
     strategy: str,
     rng: np.random.Generator,
+    backend: str = "tangermeme",
 ) -> float:
     """Predict the mean response after repeated motif-scrambling ablations.
 
@@ -202,6 +209,7 @@ def mean_ablation_prediction(
         n_scrambles: Number of independently scrambled ablations to average.
         strategy: Scrambling strategy name supported by the edits module.
         rng: NumPy random generator used for reproducible scrambling.
+        backend: Perturbation backend.
     """
 
     if n_scrambles <= 0:
@@ -214,6 +222,7 @@ def mean_ablation_prediction(
             motif_sets=motif_sets,
             strategy=strategy,
             rng=rng,
+            backend=backend,
         )
     return float(predictor.predict(batch).mean(dtype=np.float64))
 
@@ -230,6 +239,7 @@ def motif_ablation(
     region: str | None = None,
     schema: str | SequenceSchema = "saluki6",
     cds_channel: str | int | None = None,
+    backend: str = "tangermeme",
     progress: bool = True,
 ) -> MotifAblationResult:
     """Compute motif ablation effect ``A - R`` for each motif instance.
@@ -249,11 +259,15 @@ def motif_ablation(
         schema: Sequence schema name or object used for region-aware scans.
         cds_channel: Optional CDS channel name or integer index for region
             filtering.
+        backend: Perturbation backend. ``random_different`` is a
+            TranscriptML-specific policy under either backend; shuffle-based
+            strategies use Tangermeme by default.
         progress: Whether to emit progress messages while running the scan.
     """
 
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
+    selected_backend = normalize_backend(backend)
     normalized_region = normalize_motif_region(region)
     instances = enumerate_motif_instances(
         arr,
@@ -286,6 +300,7 @@ def motif_ablation(
             n_scrambles=n_scrambles,
             strategy=strategy,
             rng=rng,
+            backend=selected_backend,
         )
         reporter.update()
     reporter.close()
@@ -295,6 +310,8 @@ def motif_ablation(
         ablation_predictions=A,
         effects=A - R,
         region=normalized_region,
+        backend=selected_backend,
+        strategy=strategy,
     )
 
 
@@ -321,6 +338,9 @@ def save_motif_ablation_result(result: MotifAblationResult, out_dir: str | Path,
             "effect_definition": "A - R",
             "n_instances": len(result.instances),
             "region": result.region,
+            "backend": result.backend,
+            "perturbation_backend": effective_perturbation_backend(result.strategy, result.backend),
+            "strategy": result.strategy,
         },
     )
     log_progress("motif-ablation: done", enabled=progress)

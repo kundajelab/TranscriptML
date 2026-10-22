@@ -277,6 +277,32 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
         assert _resolve_interpret_args(mixed, parser)["out_dir"] == f"interpret/{command}"
 
 
+def test_interpret_backend_defaults_and_fast_ism_opt_in():
+    parser = build_parser()
+    ism = parser.parse_args(
+        ["ism", "--checkpoint", "m.pt", "--dataset", "data", "--out-dir", "out"]
+    )
+    assert ism.backend == "tangermeme"
+    assert ism.fast is False
+
+    fast = parser.parse_args(
+        [
+            "ism",
+            "--checkpoint",
+            "m.pt",
+            "--dataset",
+            "data",
+            "--out-dir",
+            "out",
+            "--fast",
+            "--backend",
+            "transcriptml",
+        ]
+    )
+    assert fast.fast is True
+    assert fast.backend == "transcriptml"
+
+
 def test_region_ablation_cli_defaults_and_overrides():
     parser = build_parser()
     args = parser.parse_args(

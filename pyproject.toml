@@ -16,6 +16,7 @@ dependencies = [
   "matplotlib>=3.7",
   "numpy>=1.23",
   "pyfaidx>=0.8",
+  "tangermeme>=1.6.0",
   "torch>=2.0",
   "tomli>=2; python_version<'3.11'"
 ]

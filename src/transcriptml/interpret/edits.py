@@ -1,10 +1,24 @@
 from __future__ import annotations
 
-from typing import Sequence, Set
+from collections.abc import Sequence
 
 import numpy as np
+import torch
+from tangermeme.ersatz import dinucleotide_shuffle, randomize, shuffle
 
-from transcriptml.interpret.motifs import ALL_BASES, base_indices_from_ohe, region_matches_motif
+from transcriptml.interpret.backends import normalize_backend
+from transcriptml.interpret.motifs import (
+    ALL_BASES,
+    base_indices_from_ohe,
+    region_matches_motif,
+)
+
+
+def effective_perturbation_backend(strategy: str, backend: str) -> str:
+    """Return the implementation actually used for a scramble strategy."""
+
+    selected_backend = normalize_backend(backend)
+    return "transcriptml" if strategy == "random_different" else selected_backend
 
 
 def extract_base_indices(x: np.ndarray, start: int, end: int) -> np.ndarray:
@@ -112,18 +126,104 @@ def dinuc_shuffle_bases(orig: np.ndarray, rng: np.random.Generator) -> np.ndarra
     return np.array(path, dtype=np.int64)
 
 
-def scramble_region_bases(orig: np.ndarray, strategy: str, rng: np.random.Generator) -> np.ndarray:
+def _tangermeme_seed(rng: np.random.Generator) -> int:
+    """Draw a deterministic legacy-RandomState-compatible seed."""
+
+    return int(rng.integers(0, np.iinfo(np.uint32).max, dtype=np.uint32))
+
+
+def _tangermeme_scramble(
+    orig: np.ndarray,
+    strategy: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Apply one Tangermeme ersatz edit to a base-index vector."""
+
+    bases = np.asarray(orig, dtype=np.int64)
+    if bases.size == 0:
+        return bases.copy()
+    encoded = torch.nn.functional.one_hot(
+        torch.as_tensor(bases), num_classes=4
+    ).T.unsqueeze(0).to(torch.int8)
+    seed = _tangermeme_seed(rng)
+    if strategy == "random":
+        edited = randomize(encoded, 0, bases.size, n=1, random_state=seed)
+    elif strategy == "shuffle":
+        edited = shuffle(encoded, 0, bases.size, n=1, random_state=seed)
+    elif strategy == "dinuc_shuffle":
+        if bases.size < 2:
+            return bases.copy()
+        edited = dinucleotide_shuffle(
+            encoded,
+            0,
+            bases.size,
+            n=1,
+            random_state=seed,
+        )
+    else:  # pragma: no cover - caller validates the fixed strategy set.
+        raise ValueError(f"Unknown Tangermeme scramble strategy '{strategy}'")
+    return edited[0, 0].argmax(dim=0).cpu().numpy().astype(np.int64, copy=False)
+
+
+def tangermeme_region_edit_inplace(
+    x: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    base_channels: Sequence[int],
+    strategy: str,
+    rng: np.random.Generator,
+) -> None:
+    """Apply a Tangermeme ersatz edit while preserving non-base channels.
+
+    ``base_channels`` may select nucleotide channels anywhere in the encoded
+    tensor; their ordering is preserved because ersatz operations treat the
+    alphabet symbols generically.
+    """
+
+    channels = np.asarray(base_channels, dtype=np.int64)
+    if channels.shape != (4,):
+        raise ValueError("Tangermeme nucleotide edits require exactly four base channels")
+    encoded_array = np.asarray(x)[channels, :]
+    if not np.all((encoded_array == 0) | (encoded_array == 1)):
+        raise ValueError("Tangermeme nucleotide edits require hard binary base channels")
+    encoded = torch.as_tensor(encoded_array).unsqueeze(0)
+    seed = _tangermeme_seed(rng)
+    if strategy == "random":
+        edited = randomize(encoded, int(start), int(end), n=1, random_state=seed)
+    elif strategy == "shuffle":
+        edited = shuffle(encoded, int(start), int(end), n=1, random_state=seed)
+    else:
+        raise ValueError("strategy must be 'random' or 'shuffle'")
+    x[channels, :] = edited[0, 0].cpu().numpy()
+
+
+def scramble_region_bases(
+    orig: np.ndarray,
+    strategy: str,
+    rng: np.random.Generator,
+    *,
+    backend: str = "tangermeme",
+) -> np.ndarray:
     """Scramble a base-index vector using the requested strategy.
 
     Args:
         orig: Original base-index vector to scramble.
-        strategy: Scrambling strategy, one of ``random_different``, ``shuffle``,
-            or ``dinuc_shuffle``.
+        strategy: Scrambling strategy, one of ``random``,
+            ``random_different``, ``shuffle``, or ``dinuc_shuffle``.
         rng: NumPy random generator used by the selected strategy.
+        backend: Perturbation backend. Tangermeme implements ``random``,
+            ``shuffle``, and ``dinuc_shuffle``. The TranscriptML-only
+            ``random_different`` policy is identical for both backend values.
     """
 
+    selected_backend = normalize_backend(backend)
     if strategy == "random_different":
         return random_different_bases(orig, rng)
+    if selected_backend == "tangermeme" and strategy in {"random", "shuffle", "dinuc_shuffle"}:
+        return _tangermeme_scramble(orig, strategy, rng)
+    if strategy == "random":
+        return rng.integers(0, 4, size=np.asarray(orig).shape[0], dtype=np.int64)
     if strategy == "shuffle":
         return shuffle_bases(orig, rng)
     if strategy == "dinuc_shuffle":
@@ -138,6 +238,7 @@ def scramble_window_inplace(
     window_size: int,
     strategy: str,
     rng: np.random.Generator,
+    backend: str = "tangermeme",
 ) -> None:
     """Scramble one fixed-width base window in place.
 
@@ -148,20 +249,26 @@ def scramble_window_inplace(
         strategy: Scrambling strategy name supported by
             ``scramble_region_bases``.
         rng: NumPy random generator used for scrambling.
+        backend: Perturbation backend.
     """
 
     orig = extract_base_indices(x, start, start + window_size)
-    write_bases_inplace(x, start, scramble_region_bases(orig, strategy, rng))
+    write_bases_inplace(
+        x,
+        start,
+        scramble_region_bases(orig, strategy, rng, backend=backend),
+    )
 
 
 def scramble_motif_ablating_inplace(
     x: np.ndarray,
     *,
     motif_start: int,
-    motif_sets: Sequence[Set[int]],
+    motif_sets: Sequence[set[int]],
     strategy: str,
     rng: np.random.Generator,
     max_tries: int = 25,
+    backend: str = "tangermeme",
 ) -> None:
     """Scramble a motif instance until it no longer matches the motif.
 
@@ -175,13 +282,14 @@ def scramble_motif_ablating_inplace(
         rng: NumPy random generator used for scrambling.
         max_tries: Maximum attempts before falling back to guaranteed
             motif-disrupting substitutions.
+        backend: Perturbation backend.
     """
 
     start = int(motif_start)
     end = start + len(motif_sets)
     orig = extract_base_indices(x, start, end)
     for _ in range(max_tries):
-        cand = scramble_region_bases(orig, strategy, rng)
+        cand = scramble_region_bases(orig, strategy, rng, backend=backend)
         if not np.array_equal(cand, orig) and not region_matches_motif(cand, motif_sets):
             write_bases_inplace(x, start, cand)
             return

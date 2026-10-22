@@ -369,6 +369,22 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--out-dir", dest="out_dir_flag", help="Output directory")
         p.add_argument("--device", default="cpu")
         p.add_argument("--batch-size", type=int, default=128)
+        if name in {"ism", "window-ism", "region-ablation", "motif-ablation", "motif-context", "epistasis"}:
+            p.add_argument(
+                "--backend",
+                choices=["tangermeme", "transcriptml"],
+                default="tangermeme",
+                help="Interpretation backend (default: tangermeme)",
+            )
+        if name == "ism":
+            p.add_argument(
+                "--fast",
+                action="store_true",
+                help=(
+                    "Opt in to verified fastISM; disabled by default because "
+                    "globally coupled Saluki/LegNet layers rarely benefit"
+                ),
+            )
         if name in {"motif-ablation", "motif-context", "epistasis"}:
             p.add_argument("--motif", required=True)
             p.add_argument(
@@ -879,7 +895,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "ism":
         from transcriptml.interpret.ism import compute_ism, save_ism_result
 
-        result = compute_ism(bundle.X, predictor, mutation_batch_size=args.mutation_batch_size)
+        result = compute_ism(
+            bundle.X,
+            predictor,
+            mutation_batch_size=args.mutation_batch_size,
+            backend=args.backend,
+            fast=args.fast,
+        )
         save_ism_result(result, out_dir)
     elif args.command == "window-ism":
         from transcriptml.interpret.window_ism import compute_window_ism, save_window_ism_result
@@ -892,6 +914,7 @@ def main(argv: list[str] | None = None) -> None:
             n_ablations=args.n_ablations,
             seed=args.seed,
             mutation_batch_size=args.mutation_batch_size,
+            backend=args.backend,
         )
         save_window_ism_result(
             result,
@@ -979,6 +1002,7 @@ def main(argv: list[str] | None = None) -> None:
                 seed=args.seed,
             ),
             cds_channel=cds_channel,
+            backend=args.backend,
             splice_channel=_maybe_int(args.splice_channel),
             reference_batch_size=args.batch_size,
             mutation_batch_size=args.mutation_batch_size,
@@ -1007,6 +1031,7 @@ def main(argv: list[str] | None = None) -> None:
             region=args.region,
             schema=bundle.schema,
             cds_channel=cds_channel,
+            backend=args.backend,
         )
         save_motif_ablation_result(result, out_dir)
     elif args.command == "motif-context":
@@ -1025,6 +1050,7 @@ def main(argv: list[str] | None = None) -> None:
             region=args.region,
             schema=bundle.schema,
             cds_channel=cds_channel,
+            backend=args.backend,
         )
         save_motif_context_result(result, out_dir)
     elif args.command == "epistasis":
@@ -1043,6 +1069,7 @@ def main(argv: list[str] | None = None) -> None:
             region=args.region,
             schema=bundle.schema,
             cds_channel=cds_channel,
+            backend=args.backend,
         )
         save_epistasis_result(result, out_dir)
 

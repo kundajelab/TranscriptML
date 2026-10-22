@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence
 
 import numpy as np
 import torch
+from tangermeme.predict import predict as tangermeme_predict
 
 from transcriptml.devices import resolve_device
 from transcriptml.models.common import squeeze_prediction
@@ -44,7 +45,7 @@ class Predictor:
         *,
         device: str | torch.device = "cpu",
         batch_size: int = 128,
-    ) -> "Predictor":
+    ) -> Predictor:
         """Load a checkpoint and wrap the reconstructed model for prediction.
 
         Args:
@@ -69,21 +70,28 @@ class Predictor:
 
         if not isinstance(self.model, torch.nn.Module):
             return np.asarray(self.model(np.asarray(X)), dtype=np.float32).reshape(-1)
+        if int(X.shape[0]) == 0:
+            return np.empty((0,), dtype=np.float32)
         bs = int(batch_size or self.batch_size)
-        outs: list[np.ndarray] = []
-        n = int(X.shape[0])
-        for start in range(0, n, bs):
-            batch = X[start : start + bs]
-            if isinstance(batch, torch.Tensor):
-                xb = batch.to(self.device, dtype=torch.float32)
-            else:
-                batch_array = np.asarray(batch)
-                if not batch_array.flags.writeable:
-                    batch_array = np.array(batch_array, copy=True)
-                xb = torch.as_tensor(batch_array, dtype=torch.float32).to(self.device)
-            y = squeeze_prediction(self.model(xb))
-            outs.append(y.detach().cpu().numpy().astype(np.float32, copy=False).reshape(-1))
-        return np.concatenate(outs) if outs else np.empty((0,), dtype=np.float32)
+        if isinstance(X, torch.Tensor):
+            inputs = X.detach()
+        else:
+            array = np.asarray(X)
+            if not array.flags.writeable:
+                array = np.array(array, copy=True)
+            inputs = torch.as_tensor(array)
+        outputs = tangermeme_predict(
+            self.model,
+            inputs,
+            func=squeeze_prediction,
+            batch_size=bs,
+            dtype=torch.float32,
+            device=self.device,
+            verbose=False,
+        )
+        if not isinstance(outputs, torch.Tensor):  # pragma: no cover - scalar contract guards this.
+            raise TypeError("predictor model must return one tensor")
+        return outputs.numpy().astype(np.float32, copy=False).reshape(-1)
 
 
 class EnsemblePredictor:

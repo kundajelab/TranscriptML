@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -13,7 +13,13 @@ from transcriptml.interpret.ablation import (
     mean_ablation_prediction,
     normalize_motif_region,
 )
-from transcriptml.interpret.edits import scramble_motif_ablating_inplace, scramble_window_inplace, valid_base_window
+from transcriptml.interpret.backends import normalize_backend
+from transcriptml.interpret.edits import (
+    effective_perturbation_backend,
+    scramble_motif_ablating_inplace,
+    scramble_window_inplace,
+    valid_base_window,
+)
 from transcriptml.interpret.motifs import intervals_overlap, parse_motif
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
@@ -29,6 +35,8 @@ class MotifContextResult:
     reference_predictions: np.ndarray
     ablation_predictions: np.ndarray
     region: str | None = None
+    backend: str = "tangermeme"
+    strategy: str = "random_different"
 
 
 def motif_context_scan(
@@ -46,6 +54,7 @@ def motif_context_scan(
     region: str | None = None,
     schema: str | SequenceSchema = "saluki6",
     cds_channel: str | int | None = None,
+    backend: str = "tangermeme",
     progress: bool = True,
 ) -> MotifContextResult:
     """Scan context windows with effect ``(MA - M) - (A - R)``.
@@ -70,10 +79,12 @@ def motif_context_scan(
         schema: Sequence schema name or object used for region-aware scans.
         cds_channel: Optional CDS channel name or integer index for region
             filtering.
+        backend: Perturbation backend.
         progress: Whether to emit progress messages while scanning.
     """
 
     arr = np.asarray(X)
+    selected_backend = normalize_backend(backend)
     motif_sets = parse_motif(motif)
     instances = enumerate_motif_instances(
         arr,
@@ -114,6 +125,7 @@ def motif_context_scan(
             n_scrambles=n_motif_scrambles,
             strategy=strategy,
             rng=rng,
+            backend=selected_backend,
         )
         ablation_ref = float(A[inst.instance_index] - R[inst.instance_index])
         if window_size <= 0 or n_window_scrambles <= 0:
@@ -141,6 +153,7 @@ def motif_context_scan(
                     window_size=int(window_size),
                     strategy=strategy,
                     rng=rng,
+                    backend=selected_backend,
                 )
                 M = float(predictor.predict(x_ctx[None, :, :])[0])
                 if n_motif_scrambles <= 0:
@@ -154,6 +167,7 @@ def motif_context_scan(
                             motif_sets=motif_sets,
                             strategy=strategy,
                             rng=rng,
+                            backend=selected_backend,
                         )
                     MA = float(predictor.predict(batch).mean(dtype=np.float64))
                 deltas.append((MA - M) - ablation_ref)
@@ -171,6 +185,8 @@ def motif_context_scan(
         reference_predictions=R,
         ablation_predictions=A,
         region=normalize_motif_region(region),
+        backend=selected_backend,
+        strategy=strategy,
     )
 
 
@@ -199,6 +215,9 @@ def save_motif_context_result(result: MotifContextResult, out_dir: str | Path, *
             "context_effect_definition": "(MA - M) - (A - R)",
             "n_instances": len(result.instances),
             "region": result.region,
+            "backend": result.backend,
+            "perturbation_backend": effective_perturbation_backend(result.strategy, result.backend),
+            "strategy": result.strategy,
         },
     )
     log_progress("motif-context: done", enabled=progress)

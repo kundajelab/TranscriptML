@@ -33,6 +33,11 @@ cd TranscriptML
 python -m pip install -e .
 ```
 
+Tangermeme 1.6 or newer is a core dependency and is installed automatically.
+Version 1.6 is required for its current packed-sequence, fastISM validation,
+and attribution infrastructure; installing a separate interpretation extra is
+not necessary.
+
 If you will not use GPUs, pre-installing PyTorch this way is less important.
 However, model training and most interpretation analyses are much faster on a
 GPU, so a GPU-enabled PyTorch install is strongly recommended for most

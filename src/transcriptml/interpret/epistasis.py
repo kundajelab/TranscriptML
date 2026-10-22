@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -14,8 +14,16 @@ from transcriptml.interpret.ablation import (
     motif_site_in_region,
     normalize_motif_region,
 )
-from transcriptml.interpret.edits import scramble_motif_ablating_inplace
-from transcriptml.interpret.motifs import find_motif_starts, intervals_overlap, parse_motif
+from transcriptml.interpret.backends import normalize_backend
+from transcriptml.interpret.edits import (
+    effective_perturbation_backend,
+    scramble_motif_ablating_inplace,
+)
+from transcriptml.interpret.motifs import (
+    find_motif_starts,
+    intervals_overlap,
+    parse_motif,
+)
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_result_dir
 from transcriptml.progress import ProgressReporter, log_progress
@@ -53,6 +61,8 @@ class EpistasisResult:
     paired_ablation_effects: np.ndarray
     epistasis: np.ndarray
     region: str | None = None
+    backend: str = "tangermeme"
+    strategy: str = "random_different"
 
 
 def _enumerate_pairs_for_sequence(
@@ -128,6 +138,7 @@ def _mean_multi_ablation_prediction(
     n_scrambles: int,
     strategy: str,
     rng: np.random.Generator,
+    backend: str = "tangermeme",
 ) -> float:
     """Predict the mean response after applying multiple motif ablations.
 
@@ -140,6 +151,7 @@ def _mean_multi_ablation_prediction(
             average.
         strategy: Scrambling strategy name supported by the edits module.
         rng: NumPy random generator used for reproducible scrambling.
+        backend: Perturbation backend.
     """
 
     if n_scrambles <= 0:
@@ -153,6 +165,7 @@ def _mean_multi_ablation_prediction(
                 motif_sets=motif_sets,
                 strategy=strategy,
                 rng=rng,
+                backend=backend,
             )
     return float(predictor.predict(batch).mean(dtype=np.float64))
 
@@ -172,6 +185,7 @@ def motif_epistasis(
     region: str | None = None,
     schema: str | SequenceSchema = "saluki6",
     cds_channel: str | int | None = None,
+    backend: str = "tangermeme",
     progress: bool = True,
 ) -> EpistasisResult:
     """Compute pairwise epistasis ``A12 - A1 - A2 + R``.
@@ -195,10 +209,12 @@ def motif_epistasis(
         schema: Sequence schema name or object used for region-aware scans.
         cds_channel: Optional CDS channel name or integer index for region
             filtering.
+        backend: Perturbation backend.
         progress: Whether to emit progress messages while running the analysis.
     """
 
     arr = np.asarray(X)
+    selected_backend = normalize_backend(backend)
     motif_sets = parse_motif(motif)
     motif2_sets = parse_motif(motif2) if motif2 is not None else None
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
@@ -291,6 +307,7 @@ def motif_epistasis(
                     n_scrambles=n_scrambles,
                     strategy=strategy,
                     rng=rng,
+                    backend=selected_backend,
                 )
             singles[pair_i, col] = single_cache[key]
         edits = [
@@ -304,6 +321,7 @@ def motif_epistasis(
             n_scrambles=n_scrambles,
             strategy=strategy,
             rng=rng,
+            backend=selected_backend,
         )
         pair_reporter.update()
     pair_reporter.close(extra=f"{len(single_cache)} unique single sites")
@@ -319,6 +337,8 @@ def motif_epistasis(
         paired_ablation_effects=paired_effects,
         epistasis=epi.astype(np.float32),
         region=normalized_region,
+        backend=selected_backend,
+        strategy=strategy,
     )
 
 
@@ -348,6 +368,9 @@ def save_epistasis_result(result: EpistasisResult, out_dir: str | Path, *, progr
             "epistasis_definition": "A12 - A1 - A2 + R",
             "n_pairs": len(result.pairs),
             "region": result.region,
+            "backend": result.backend,
+            "perturbation_backend": effective_perturbation_backend(result.strategy, result.backend),
+            "strategy": result.strategy,
         },
     )
     log_progress("epistasis: done", enabled=progress)

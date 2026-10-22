@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
 from transcriptml.data.encoding import infer_valid_lengths
+from transcriptml.interpret.backends import normalize_backend
 from transcriptml.interpret.edits import scramble_window_inplace, valid_base_window
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.progress import ProgressReporter, log_progress
@@ -30,6 +31,7 @@ class WindowISMResult:
     stride: int
     n_ablations: int
     seed: int
+    backend: str = "tangermeme"
 
 
 def generate_window_starts(valid_length: int, window_size: int, stride: int) -> np.ndarray:
@@ -83,6 +85,7 @@ def compute_window_ism(
     seed: int = 123,
     valid_lengths: Sequence[int] | None = None,
     mutation_batch_size: int = 512,
+    backend: str = "tangermeme",
     progress: bool = True,
 ) -> WindowISMResult:
     """Compute repeated random-mutagenesis effects for fixed-width windows.
@@ -104,6 +107,9 @@ def compute_window_ism(
         valid_lengths: Optional represented length for each sequence.
         mutation_batch_size: Maximum number of mutants queued per prediction
             call.
+        backend: Perturbation backend. Tangermeme uses uniform random
+            replacement; ``transcriptml`` preserves the historical policy
+            that every replacement must differ from the reference base.
         progress: Whether to emit progress messages.
     """
 
@@ -122,6 +128,7 @@ def compute_window_ism(
         raise ValueError("mutation_batch_size must be positive")
     if int(seed) < 0:
         raise ValueError("seed must be non-negative")
+    selected_backend = normalize_backend(backend)
 
     n_sequences = int(arr.shape[0])
     lengths = _normalize_valid_lengths(arr, valid_lengths)
@@ -180,8 +187,9 @@ def compute_window_ism(
                     mutant,
                     start=start,
                     window_size=width,
-                    strategy="random_different",
+                    strategy="random" if selected_backend == "tangermeme" else "random_different",
                     rng=rng,
+                    backend=selected_backend,
                 )
                 mutant_batch.append(mutant)
                 mutant_meta.append((seq_i, window_i))
@@ -218,6 +226,7 @@ def compute_window_ism(
         stride=step,
         n_ablations=int(n_ablations),
         seed=int(seed),
+        backend=selected_backend,
     )
 
 
@@ -281,9 +290,18 @@ def save_window_ism_result(
         ids_digest = sequence_ids_sha256(sequence_ids)
     summary = {
         "analysis": "window_ism",
+        "backend": result.backend,
         "effect_definition": "mutant_prediction - reference_prediction",
-        "mutation_policy": "random_different_every_base",
-        "alternative_base_sampling": "uniform_over_other_three_bases",
+        "mutation_policy": (
+            "uniform_random_replacement"
+            if result.backend == "tangermeme"
+            else "random_different_every_base"
+        ),
+        "alternative_base_sampling": (
+            "uniform_over_four_bases"
+            if result.backend == "tangermeme"
+            else "uniform_over_other_three_bases"
+        ),
         "window_size": int(result.window_size),
         "stride": int(result.stride),
         "n_ablations": int(result.n_ablations),
