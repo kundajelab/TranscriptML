@@ -13,6 +13,7 @@ These scripts are intentionally Sherlock-specific and deliberately small. For a 
 - `make_saluki_hparam_grid.py`, `submit_hparam_sweep_cv.sh`, and `hparam_sweep_cv_combo.sh`: generate or consume a hyperparameter table and run one CV sweep combo per SLURM array task.
 - `summarize_hparam_sweep.py`: aggregate completed sweep combo/fold summaries into `${SWEEP_ROOT}/sweep_summary.tsv`.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
+- `run_deep_shap.sh` and `submit_deep_shap.sh`: reference-aware DeepLIFT/SHAP, optionally sharded within each trained fold.
 - `codon_ism_by_fold.sh` and `submit_codon_ism_by_fold.sh`: synonymous codon ISM, one job per trained fold.
 - `all_codon_ism_shard_by_fold.sh` and `submit_all_codon_ism_shard_by_fold.sh`: all-codon ISM, one 10-task job array per fold by default.
 - `region_ablation_by_fold.sh` and `submit_region_ablation_by_fold.sh`: Saluki region and exon-junction density ablations, one job per fold.
@@ -97,6 +98,13 @@ What each group means:
 | `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `CV_MODEL`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior or model name. |
 | `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for GPU/CPU and prediction/ISM batch sizes. |
+| `DEEP_SHAP_REFERENCE_STRATEGY`, `DEEP_SHAP_N_REFERENCES`, `DEEP_SHAP_SEED`, `DEEP_SHAP_TARGET` | DeepSHAP reference distribution, sampling, reproducibility, and model-output target. |
+| `DEEP_SHAP_CONFIDENCE_THRESHOLD`, `DEEP_SHAP_MINIMUM_EFFECT_SIZE`, `DEEP_SHAP_ZERO_ATOL` | Directional-consistency classification and near-zero/effect-size controls. |
+| `DEEP_SHAP_IG_POINTS`, `DEEP_SHAP_MAX_IG_POINTS`, `DEEP_SHAP_CONVERGENCE_ATOL`, `DEEP_SHAP_CONVERGENCE_RTOL` | Local integrated-gradients quadrature and summation-to-delta convergence controls. |
+| `DEEP_SHAP_RUN_NAME`, `DEEP_SHAP_OUT_ROOT`, `DEEP_SHAP_CHECKPOINT_NAME` | DeepSHAP output label/root and fold checkpoint filename. Use a distinct run name for each configuration. |
+| `DEEP_SHAP_SEQUENCE_SHARDS`, `DEEP_SHAP_MAX_CONCURRENT`, `DEEP_SHAP_ATTRIBUTION_BATCH_SIZE` | Number of sequence shards per fold, optional SLURM array concurrency cap, and attribution pair batch size. |
+| `DEEP_SHAP_REFERENCE_PREDICTIONS_FORMAT`, `DEEP_SHAP_CDS_CHANNEL` | Optional per-reference table (`none`, `csv`, or `parquet`) and CDS-channel override. |
+| `DEEP_SHAP_INCLUDE_STOP_CODONS`, `DEEP_SHAP_RECODE_INITIATION_CODON`, `DEEP_SHAP_RECODE_TERMINAL_STOP` | Saluki codon-reference opt-ins; each accepts `0/1`, `false/true`, or `no/yes`. |
 | `REGION_ABLATION_N`, `REGION_JUNCTION_COUNTS`, `REGION_JUNCTION_MIN_SPACING`, `REGION_ABLATION_SEED` | Universal region-ablation replicate count, fixed-count junction grid, soft spacing target, and deterministic seed. |
 | `REGION_ABLATION_N_FOR` | Optional Bash array of `FAMILY=COUNT` overrides; a zero count disables that family. |
 | `REGION_ABLATION_DISABLED` | Custom workflow only: optional Bash array of family names to disable. |
@@ -365,6 +373,50 @@ Outputs go to:
 ${INTERPRET_ROOT}/ism/fold0/
 ${INTERPRET_ROOT}/ism/fold1/
 ...
+```
+
+## Run DeepLIFT/SHAP
+
+After CV finishes, submit reference-aware Tangermeme DeepLIFT/SHAP for every
+fold:
+
+```bash
+bash scripts/submit_deep_shap.sh
+```
+
+The default uses 20 full-transcript mononucleotide shuffles and writes:
+
+```text
+${INTERPRET_ROOT}/deep_shap/full-mono/fold0/
+${INTERPRET_ROOT}/deep_shap/full-mono/fold1/
+...
+```
+
+Set `DEEP_SHAP_REFERENCE_STRATEGY` to `full-dinuc`, a 5-prime/3-prime UTR
+strategy, or a CDS codon strategy. Set `DEEP_SHAP_RUN_NAME` when comparing
+multiple settings for the same strategy so runs cannot overwrite one another.
+
+For large transcript datasets, split each fold into independent sequence
+shards and optionally cap concurrent jobs:
+
+```bash
+DEEP_SHAP_SEQUENCE_SHARDS=10 \
+DEEP_SHAP_MAX_CONCURRENT=20 \
+bash scripts/submit_deep_shap.sh
+```
+
+This submits `N_FOLDS * DEEP_SHAP_SEQUENCE_SHARDS` tasks. Task indices are
+mapped deterministically to folds and shards, with outputs under
+`${DEEP_SHAP_OUT_ROOT}/foldN/shardM/`. With one shard, outputs are written
+directly under `${DEEP_SHAP_OUT_ROOT}/foldN/`. Each shard retains global
+sequence indices, so its attribution rows remain unambiguously aligned to the
+source bundle.
+
+To run one fold or fold/shard interactively through the same worker:
+
+```bash
+bash scripts/run_deep_shap.sh 3       # fold 3, unsharded
+bash scripts/run_deep_shap.sh 3 7     # fold 3, shard 7 when shards > 1
 ```
 
 ## Run Region Ablation

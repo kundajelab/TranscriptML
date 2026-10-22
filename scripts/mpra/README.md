@@ -15,6 +15,7 @@ from the copied scripts.
 - `make_legnet_hparam_grid.py`, `submit_hparam_sweep_cv.sh`, and `hparam_sweep_cv_combo.sh`: generate or consume a hyperparameter table and run one CV sweep combo per SLURM array task.
 - `summarize_hparam_sweep.py`: aggregate completed sweep combo/fold summaries into `${SWEEP_ROOT}/sweep_summary.tsv`.
 - `ism_by_fold.sh` and `submit_ism_by_fold.sh`: single-nucleotide ISM, one job per trained fold.
+- `run_deep_shap.sh` and `submit_deep_shap.sh`: reference-aware DeepLIFT/SHAP, optionally sharded within each trained fold.
 - `train_legnet.sh` and `submit_train_legnet.sh`: optional helper to train one LegNet model from the MPRA bundle.
 - `run_legnet_ism.sh` and `submit_legnet_ism.sh`: optional helper to run ISM on one trained checkpoint.
 - `write_legnet_train_config.py`: internal helper used by the optional single-model training script.
@@ -76,6 +77,12 @@ Important config values:
 | `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/mpra/legnet_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |
 | `RUN_SPLIT_EVALUATION` | `auto` runs the extra `transcriptml evaluate --split` step only when the built dataset has `splits.json`. Set `1` to require it or `0` to skip it. |
 | `PRED_BATCH_SIZE`, `MUTATION_BATCH_SIZE`, `DEVICE` | Runtime controls for prediction and ISM. |
+| `DEEP_SHAP_REFERENCE_STRATEGY`, `DEEP_SHAP_N_REFERENCES`, `DEEP_SHAP_SEED`, `DEEP_SHAP_TARGET` | DeepSHAP reference distribution (`full-mono` or `full-dinuc`), sampling, reproducibility, and target. |
+| `DEEP_SHAP_CONFIDENCE_THRESHOLD`, `DEEP_SHAP_MINIMUM_EFFECT_SIZE`, `DEEP_SHAP_ZERO_ATOL` | Directional-consistency classification and near-zero/effect-size controls. |
+| `DEEP_SHAP_IG_POINTS`, `DEEP_SHAP_MAX_IG_POINTS`, `DEEP_SHAP_CONVERGENCE_ATOL`, `DEEP_SHAP_CONVERGENCE_RTOL` | Local integrated-gradients quadrature and convergence controls. |
+| `DEEP_SHAP_RUN_NAME`, `DEEP_SHAP_OUT_ROOT`, `DEEP_SHAP_CHECKPOINT_NAME` | DeepSHAP output label/root and fold checkpoint filename. |
+| `DEEP_SHAP_SEQUENCE_SHARDS`, `DEEP_SHAP_MAX_CONCURRENT`, `DEEP_SHAP_ATTRIBUTION_BATCH_SIZE` | Sequence shards per fold, optional array concurrency cap, and attribution pair batch size. |
+| `DEEP_SHAP_REFERENCE_PREDICTIONS_FORMAT` | Optional per-reference prediction table: `none`, `csv`, or `parquet`. |
 
 Then edit `scripts/mpra/example_legnet_train_config.json` for model and
 training hyperparameters. For first passes, the main values to tune are usually
@@ -255,6 +262,45 @@ summary.json
 alternative base channels store `mutant_prediction - reference_prediction`; the
 reference base channel remains zero. `max_abs_effect.npy` summarizes each
 position by the maximum absolute single-base substitution effect.
+
+## Run DeepLIFT/SHAP By Fold
+
+After CV finishes, submit Tangermeme DeepLIFT/SHAP for every LegNet fold:
+
+```bash
+bash scripts/mpra/submit_deep_shap.sh
+```
+
+MPRA/LegNet supports `full-mono` (the default) and `full-dinuc` reference
+strategies. Outputs default to:
+
+```text
+${INTERPRET_ROOT}/deep_shap/full-mono/fold0/
+${INTERPRET_ROOT}/deep_shap/full-mono/fold1/
+...
+```
+
+Use `DEEP_SHAP_RUN_NAME` to distinguish experiments that use the same strategy
+with different reference counts or thresholds. Large MPRA datasets can be
+split into independent tasks:
+
+```bash
+DEEP_SHAP_SEQUENCE_SHARDS=10 \
+DEEP_SHAP_MAX_CONCURRENT=20 \
+bash scripts/mpra/submit_deep_shap.sh
+```
+
+The launcher submits `N_FOLDS * DEEP_SHAP_SEQUENCE_SHARDS` array tasks and
+writes sharded results beneath `${DEEP_SHAP_OUT_ROOT}/foldN/shardM/`. Each
+output preserves global construct indices and IDs. With one shard, the
+`shardM` directory level is omitted.
+
+Run one fold or fold/shard directly with:
+
+```bash
+bash scripts/mpra/run_deep_shap.sh 3
+bash scripts/mpra/run_deep_shap.sh 3 7
+```
 
 ## Optional Single-Split Helpers
 
