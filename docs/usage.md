@@ -397,6 +397,77 @@ windows or whole transcripts, the letters become dense and distracting; use
 `--no-logo` in those cases. Use `--no-isoform` if the annotation track is not
 needed for a particular figure.
 
+### Reference-aware DeepLIFT/SHAP
+
+`deep-shap` computes Tangermeme DeepLIFT/SHAP nucleotide attributions and
+separates transcripts by how consistently the selected reference distribution
+changes the model prediction. This label is a diagnostic for comparing
+attribution maps, not a statistically calibrated confidence estimate.
+
+For Saluki, only A/C/G/U vary. The CDS-frame and splice-junction channels remain
+fixed for every reference. The default makes 20 reproducible mononucleotide
+shuffles of the complete valid transcript; padding is never shuffled:
+
+```bash
+transcriptml deep-shap \
+  --checkpoint runs/saluki_cv10/fold0/model/best.pt \
+  --dataset runs/saluki_cv10/fold0/dataset \
+  --out-dir interpret/deep_shap/fold0 \
+  --reference-strategy full-mono \
+  --n-references 20 \
+  --seed 123
+```
+
+Other Saluki strategies are `full-dinuc`, `5utr-mono`, `5utr-dinuc`,
+`3utr-mono`, `3utr-dinuc`, `cds-codon-shuffle`, `cds-synonymous`, and
+`cds-unrestricted`. CDS strategies preserve the initiation and terminal stop
+codons by default. See `transcriptml deep-shap --help` for opt-ins that relax
+those protections, convergence tolerances, target selection, sequence ranges,
+sharding, and optional per-reference CSV or Parquet output. MPRA-LegNet accepts
+the two full-sequence mono/dinucleotide strategies.
+
+The output directory contains high- and low-confidence actual and hypothetical
+attribution tensors, matching global indices and IDs, an ineligible partition,
+`reference_diagnostics.csv`, and complete provenance in `summary.json`. Every
+eligible generated reference contributes to both diagnostics and attribution;
+the prediction diagnostic never filters references.
+
+To create an RNA-MoDISco input tensor aligned to a partition without duplicating
+input sequences in every attribution run:
+
+```bash
+transcriptml slice-attribution-inputs \
+  --dataset runs/saluki_cv10/fold0/dataset \
+  --attribution-dir interpret/deep_shap/fold0 \
+  --confidence high \
+  --out-dir interpret/deep_shap/fold0/modisco_high
+```
+
+The three stages are also available independently in Python:
+
+```python
+from transcriptml.interpret import (
+    ReferenceConfig,
+    ReferenceGenerator,
+    compute_deep_shap_attributions,
+    evaluate_references,
+)
+
+config = ReferenceConfig(strategy="3utr-dinuc", n_references=20, seed=123)
+generator = ReferenceGenerator(config, schema=bundle.schema)
+evaluation = evaluate_references(
+    bundle.X, predictor, generator, sequence_ids=bundle.ids
+)
+result = compute_deep_shap_attributions(
+    bundle.X, predictor, generator, evaluation, target=0
+)
+```
+
+The staged example assumes a scalar-output model. For multi-output models,
+`run_deep_shap(..., target=...)` applies target selection consistently to both
+reference evaluation and attribution. Most users should prefer that exported
+convenience function.
+
 ### 4. Run Window ISM
 
 Window ISM provides a coarser complement to single-nucleotide ISM. Each window

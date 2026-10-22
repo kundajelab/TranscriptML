@@ -6,8 +6,8 @@ TranscriptML is a toolkit for training, evaluating, and interpreting RNA
 sequence-to-function models. It provides command-line tools and reusable Python
 APIs for preparing sequence datasets, training models, evaluating held-out
 predictions, and investigating learned sequence features with analyses such as
-in silico mutagenesis, transcript-region and exon-junction ablation, motif
-ablation, context scans, etc.
+in silico mutagenesis, reference-aware DeepLIFT/SHAP attribution,
+transcript-region and exon-junction ablation, motif ablation, and context scans.
 
 Interpretation uses [Tangermeme](https://github.com/jmschrei/tangermeme) as its
 default prediction and sequence-perturbation backend. TranscriptML retains the

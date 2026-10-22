@@ -352,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, help_text in [
         ("ism", "Run single-nucleotide ISM"),
+        ("deep-shap", "Run reference-aware DeepLIFT/SHAP attribution"),
         ("window-ism", "Run window-level random-mutagenesis ISM"),
         ("scan-legnet", "Score endogenous transcript windows with an MPRA-LegNet checkpoint"),
         ("codon-ism", "Run CDS codon-level ISM"),
@@ -385,6 +386,38 @@ def build_parser() -> argparse.ArgumentParser:
                     "globally coupled Saluki/LegNet layers rarely benefit"
                 ),
             )
+        if name == "deep-shap":
+            from transcriptml.interpret.deep_shap import REFERENCE_STRATEGIES
+
+            p.add_argument(
+                "--reference-strategy",
+                choices=REFERENCE_STRATEGIES,
+                default="full-mono",
+            )
+            p.add_argument("--n-references", type=int, default=20)
+            p.add_argument("--seed", type=int, default=123)
+            p.add_argument("--target", type=int, default=0)
+            p.add_argument("--attribution-batch-size", type=int, default=1)
+            p.add_argument("--confidence-threshold", type=float, default=0.95)
+            p.add_argument("--minimum-effect-size", type=float)
+            p.add_argument("--zero-atol", type=float, default=1e-6)
+            p.add_argument("--ig-points", type=int, default=8)
+            p.add_argument("--max-ig-points", type=int, default=32)
+            p.add_argument("--convergence-atol", type=float, default=1e-3)
+            p.add_argument("--convergence-rtol", type=float, default=0.01)
+            p.add_argument("--include-stop-codons", action="store_true")
+            p.add_argument("--recode-initiation-codon", action="store_true")
+            p.add_argument("--recode-terminal-stop", action="store_true")
+            p.add_argument("--cds-channel", help="CDS annotation channel name or integer index")
+            p.add_argument(
+                "--reference-predictions-format",
+                choices=["none", "csv", "parquet"],
+                default="none",
+            )
+            p.add_argument("--sequence-start", type=int, help="Inclusive transcript index")
+            p.add_argument("--sequence-end", type=int, help="Exclusive transcript index")
+            p.add_argument("--sequence-shard-index", type=int, help="Zero-based transcript shard")
+            p.add_argument("--sequence-shards", type=int, help="Total transcript shards")
         if name in {"motif-ablation", "motif-context", "epistasis"}:
             p.add_argument("--motif", required=True)
             p.add_argument(
@@ -542,6 +575,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-cbar", action="store_true")
     p.add_argument("--no-robust", action="store_true")
     p.add_argument("--no-symmetric", action="store_true")
+
+    p = sub.add_parser(
+        "slice-attribution-inputs",
+        help="Write dataset sequences aligned to a DeepSHAP confidence partition",
+    )
+    p.add_argument("--dataset", required=True, help="Dataset bundle directory")
+    p.add_argument("--attribution-dir", required=True, help="DeepSHAP output directory")
+    p.add_argument("--out-dir", required=True, help="Output directory for aligned sequences")
+    p.add_argument("--confidence", choices=["high", "low"], default="high")
+    p.add_argument(
+        "--all-channels",
+        action="store_true",
+        help="Keep annotation channels instead of writing only A/C/G/U",
+    )
 
     p = sub.add_parser("codon-usage", help="Compute and plot CDS-position codon usage")
     p.add_argument("--data-dir", type=Path, required=True, help="Directory containing X.npy, metadata.json, schema.json")
@@ -717,6 +764,18 @@ def main(argv: list[str] | None = None) -> None:
 
         plot_ism_from_args(args)
         return
+    if args.command == "slice-attribution-inputs":
+        from transcriptml.interpret.deep_shap import slice_attribution_inputs
+
+        output = slice_attribution_inputs(
+            args.dataset,
+            args.attribution_dir,
+            args.out_dir,
+            confidence=args.confidence,
+            all_channels=args.all_channels,
+        )
+        print(output)
+        return
     if args.command == "codon-usage":
         from transcriptml.analysis.codon_usage import run_codon_usage_from_args
 
@@ -870,7 +929,7 @@ def main(argv: list[str] | None = None) -> None:
     bundle = load_bundle(
         dataset,
         mmap_mode="r"
-        if args.command in {"codon-ism", "window-ism", "region-ablation", "scan-legnet"}
+        if args.command in {"codon-ism", "deep-shap", "window-ism", "region-ablation", "scan-legnet"}
         else None,
     )
     log_progress(f"{args.command}: loading checkpoint {checkpoint}")
@@ -903,6 +962,42 @@ def main(argv: list[str] | None = None) -> None:
             fast=args.fast,
         )
         save_ism_result(result, out_dir)
+    elif args.command == "deep-shap":
+        from transcriptml.interpret.deep_shap import ReferenceConfig, run_deep_shap
+
+        run_deep_shap(
+            bundle.X,
+            predictor,
+            out_dir,
+            schema=bundle.schema,
+            sequence_ids=bundle.ids,
+            reference_config=ReferenceConfig(
+                strategy=args.reference_strategy,
+                n_references=args.n_references,
+                seed=args.seed,
+                preserve_initiation_codon=not args.recode_initiation_codon,
+                preserve_terminal_stop_codon=not args.recode_terminal_stop,
+                include_stop_codons=args.include_stop_codons,
+                cds_channel=cds_channel,
+            ),
+            target=args.target,
+            prediction_batch_size=args.batch_size,
+            attribution_batch_size=args.attribution_batch_size,
+            confidence_threshold=args.confidence_threshold,
+            minimum_effect_size=args.minimum_effect_size,
+            zero_atol=args.zero_atol,
+            ig_points=args.ig_points,
+            max_ig_points=args.max_ig_points,
+            convergence_atol=args.convergence_atol,
+            convergence_rtol=args.convergence_rtol,
+            sequence_start=args.sequence_start,
+            sequence_end=args.sequence_end,
+            sequence_shard_index=args.sequence_shard_index,
+            sequence_shards=args.sequence_shards,
+            reference_predictions_format=args.reference_predictions_format,
+            checkpoint=checkpoint,
+            dataset=dataset,
+        )
     elif args.command == "window-ism":
         from transcriptml.interpret.window_ism import compute_window_ism, save_window_ism_result
 

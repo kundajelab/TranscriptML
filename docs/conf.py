@@ -47,7 +47,15 @@ highlight_language = "python"
 
 # Useful autodoc behavior
 autosummary_generate = True
-autodoc_mock_imports = ["torch", "typing_extensions", "h5py", "pyarrow", "pysam", "scipy"]
+autodoc_mock_imports = [
+    "torch",
+    "tangermeme",
+    "typing_extensions",
+    "h5py",
+    "pyarrow",
+    "pysam",
+    "scipy",
+]
 autodoc_typehints = "description"
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True

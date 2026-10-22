@@ -11,9 +11,10 @@ two common starting points:
   with LegNet.
 
 Interpretation tools include single-nucleotide in silico mutagenesis (ISM),
-region/junction ablations, motif ablations, motif context scans, motif epistasis analyses, and
-Saluki-specific codon ISM. These analyses can expose learned regulatory
-sequence features as well as technical artifacts in the model or assay.
+reference-aware DeepLIFT/SHAP attribution, region/junction ablations, motif
+ablations, motif context scans, motif epistasis analyses, and Saluki-specific
+codon ISM. These analyses can expose learned regulatory sequence features as
+well as technical artifacts in the model or assay.
 
 RBPNet/eCLIP preprocessing, descriptive scanning, region selection,
 materialized dataset construction, and structured profile/enrichment training

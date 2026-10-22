@@ -169,6 +169,10 @@ and junction orchestration remains in TranscriptML.
    :members: Predictor, EnsemblePredictor
    :member-order: bysource
 
+.. automodule:: transcriptml.interpret.deep_shap
+   :members: ReferenceConfig, ReferenceGenerator, GeneratedReferences, ReferenceDiagnostic, ReferenceEvaluation, DeepSHAPAttributionResult, evaluate_references, compute_deep_shap_attributions, run_deep_shap, save_deep_shap_result, slice_attribution_inputs
+   :member-order: bysource
+
 .. automodule:: transcriptml.interpret.ism
    :members: ISMResult, compute_ism, max_abs_effect_per_position, save_ism_result
    :member-order: bysource
