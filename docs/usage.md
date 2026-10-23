@@ -455,17 +455,43 @@ transcriptml average-attributions interpret/deep_shap/full-mono \
   --out-dir interpret/deep_shap/full-mono/average_high
 ```
 
-The DeepSHAP mode requires `--confidence high` or `low` and `--dataset`. It
+The DeepSHAP mode requires `--confidence high`, `low`, or `all` and `--dataset`. It
 averages both the hypothetical and actual attribution tensors, then writes
 their aligned base-only `sequences.npy`, `sequence_indices.npy`, `ids.txt`, and
 available metadata into the same output directory. Use `--all-channels` to
 retain Saluki annotation channels instead.
 
+`--confidence all` combines the high- and low-confidence partitions within
+each fold before averaging, while continuing to exclude explicitly ineligible
+sequences. It writes `average_all_hypothetical_attributions.npy`,
+`average_all_actual_attributions.npy`, and matching `all_indices.npy` and
+`all_ids.txt` sidecars.
+
 Because confidence membership can differ between models, tensors are aligned
-by saved global sequence index. The default `--alignment intersection`
-averages only sequences belonging to the requested partition in every fold.
-Use `--alignment exact` to require identical partition membership and row
-order across folds.
+by saved global sequence index. Choose how fold memberships define the output:
+
+- `--alignment intersection` (default) requires membership in every fold.
+- `--alignment union` retains membership in any fold and averages the
+  available matching-fold attributions.
+- `--alignment mode` requires membership in strictly more than half of the
+  folds. Change the fraction with `--mode-threshold`; for example, `0.7`
+  requires membership in more than 70% of folds.
+- `--alignment exact` requires identical requested membership and row order.
+
+The command writes a matching `*_fold_support.npy` array containing the number
+of folds contributing to every averaged row. For `--confidence all`, high and
+low are combined within each fold before applying the selected alignment.
+
+For example, retain high-confidence sequences in more than 70% of folds:
+
+```bash
+transcriptml average-attributions interpret/deep_shap/full-mono \
+  --confidence high \
+  --alignment mode \
+  --mode-threshold 0.7 \
+  --dataset runs/saluki_cv10/dataset \
+  --out-dir interpret/deep_shap/full-mono/average_high_mode
+```
 
 For single-nucleotide ISM, add `--ism`. The input filename then defaults to
 `deltas.npy`, and the command writes both `combined_deltas.npy` and

@@ -867,6 +867,12 @@ class _SalukiExactAttributionModel(torch.nn.Module):
         super().__init__()
         self.source = source
         self.recurrent = _RecurrentSummary(source.gru, summary="output-last")
+        # SalukiExact uses functional torch.relu calls in its prediction head.
+        # Expose equivalent modules so Tangermeme can attach its DeepLIFT
+        # rescale rule instead of silently treating those nonlinearities as
+        # linear operations.
+        self.head_act1 = torch.nn.ReLU()
+        self.head_act2 = torch.nn.ReLU()
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         source = self.source
@@ -880,9 +886,9 @@ class _SalukiExactAttributionModel(torch.nn.Module):
             z = block["pool"](z)
         z = source.pre_rnn_act(source.pre_rnn_ln(z)).transpose(1, 2)
         z = self.recurrent(torch.flip(z, dims=[1]))
-        z = source.fc1(torch.relu(source.bn1(z)))
+        z = source.fc1(self.head_act1(source.bn1(z)))
         z = source.drop1(z)
-        return source.fc2(torch.relu(source.bn2(z))).squeeze(-1)
+        return source.fc2(self.head_act2(source.bn2(z))).squeeze(-1)
 
 
 class _SalukiFeatureAttributionModel(torch.nn.Module):

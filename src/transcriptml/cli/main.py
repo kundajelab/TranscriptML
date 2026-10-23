@@ -617,8 +617,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--confidence",
-        choices=["high", "low"],
-        help="Required DeepSHAP confidence subset; not used with --ism",
+        choices=["high", "low", "all"],
+        help=(
+            "Required DeepSHAP confidence subset; 'all' combines eligible high- "
+            "and low-confidence rows; not used with --ism"
+        ),
     )
     p.add_argument(
         "--dataset",
@@ -641,11 +644,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--alignment",
-        choices=["intersection", "exact"],
+        choices=["intersection", "union", "mode", "exact"],
         default="intersection",
         help=(
-            "How to align partitioned DeepSHAP rows by saved global indices "
-            "(default: intersection)"
+            "How fold-level DeepSHAP confidence memberships are combined: "
+            "intersection (all folds), union (any fold), mode (more than the "
+            "configured fold fraction), or exact (identical rows and order)"
+        ),
+    )
+    p.add_argument(
+        "--mode-threshold",
+        type=float,
+        default=0.5,
+        help=(
+            "For --alignment mode, require membership in strictly more than "
+            "this fraction of folds (default: 0.5)"
         ),
     )
     p.add_argument("--batch-size", type=int, default=256)

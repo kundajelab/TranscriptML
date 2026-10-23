@@ -390,6 +390,28 @@ def test_other_recurrent_attribution_adapters_preserve_predictions():
             torch.testing.assert_close(_adapt_attribution_model(model)(X), model(X))
 
 
+def test_saluki_exact_adapter_exposes_functional_head_relu_modules():
+    model = SalukiExact(
+        filters=3,
+        kernel_size=3,
+        num_layers=1,
+        dropout=0,
+        augment_shift=0,
+    ).eval()
+    adapted = _adapt_attribution_model(model)
+
+    assert isinstance(adapted.head_act1, torch.nn.ReLU)
+    assert isinstance(adapted.head_act2, torch.nn.ReLU)
+    X = torch.tensor(
+        np.concatenate(
+            (_random_ohe(2, 20, seed=41), np.zeros((2, 2, 20), dtype=np.float32)),
+            axis=1,
+        )
+    )
+    with torch.no_grad():
+        torch.testing.assert_close(adapted(X), model(X))
+
+
 def test_tiny_saluki_deep_shap_converges_and_preserves_actual_relation():
     torch.manual_seed(8)
     model = SalukiLike(
