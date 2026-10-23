@@ -443,6 +443,10 @@ transcriptml slice-attribution-inputs \
   --out-dir interpret/deep_shap/fold0/modisco_high
 ```
 
+This command preserves all dataset channels by default, including Saluki's
+codon-frame and splice-junction annotations. Use `--base-channels-only` for an
+explicit four-channel export.
+
 ### Average attributions across folds
 
 Use `average-attributions` to average an aligned DeepSHAP tensor across
@@ -457,9 +461,12 @@ transcriptml average-attributions interpret/deep_shap/full-mono \
 
 The DeepSHAP mode requires `--confidence high`, `low`, or `all` and `--dataset`. It
 averages both the hypothetical and actual attribution tensors, then writes
-their aligned base-only `sequences.npy`, `sequence_indices.npy`, `ids.txt`, and
-available metadata into the same output directory. Use `--all-channels` to
-retain Saluki annotation channels instead.
+their aligned `sequences.npy`, `sequence_indices.npy`, `ids.txt`, and available
+metadata into the same output directory. `sequences.npy` preserves every input
+channel automatically: Saluki datasets therefore retain their nucleotide,
+codon-frame, and splice-junction channels for region-aware RNA-MoDISco, while
+four-channel datasets remain four-channel. Use `--base-channels-only` only when
+an explicitly nucleotide-only sequence tensor is needed.
 
 `--confidence all` combines the high- and low-confidence partitions within
 each fold before averaging, while continuing to exclude explicitly ineligible

@@ -586,8 +586,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--confidence", choices=["high", "low"], default="high")
     p.add_argument(
         "--all-channels",
+        dest="all_channels",
         action="store_true",
-        help="Keep annotation channels instead of writing only A/C/G/U",
+        default=True,
+        help="Keep every dataset channel (default; retained for compatibility)",
+    )
+    p.add_argument(
+        "--base-channels-only",
+        dest="all_channels",
+        action="store_false",
+        help="Write only A/C/G/U channels instead of all dataset channels",
     )
 
     p = sub.add_parser(
@@ -630,8 +638,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--all-channels",
+        dest="all_channels",
         action="store_true",
-        help="Keep all dataset channels instead of writing only A/C/G/U sequences",
+        default=True,
+        help="Keep every dataset channel (default; retained for compatibility)",
+    )
+    p.add_argument(
+        "--base-channels-only",
+        dest="all_channels",
+        action="store_false",
+        help="Write only A/C/G/U channels in the aligned sequence tensor",
     )
     p.add_argument(
         "--method",

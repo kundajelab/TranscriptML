@@ -460,7 +460,7 @@ def average_attributions(
     confidence: ConfidenceSubset | None = None,
     use_all_folds: bool = False,
     dataset: str | Path | None = None,
-    all_channels: bool = False,
+    all_channels: bool = True,
     batch_size: int = 256,
     dtype: str | np.dtype = "float32",
     progress: bool = True,

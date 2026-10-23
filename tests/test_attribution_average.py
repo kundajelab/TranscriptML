@@ -64,7 +64,7 @@ def test_average_deep_shap_attributions_and_preserve_alignment(tmp_path: Path):
             np.load(out / f"average_high_confidence_{attribution_kind}_attributions.npy"),
             np.full((2, 4, 3), 2.0, dtype=np.float32),
         )
-    np.testing.assert_array_equal(np.load(out / "sequences.npy"), X[indices, :4])
+    np.testing.assert_array_equal(np.load(out / "sequences.npy"), X[indices])
     np.testing.assert_array_equal(np.load(out / "sequence_indices.npy"), indices)
     assert (out / "ids.txt").read_text(encoding="utf-8") == ids
     assert json.loads((out / "metadata.json").read_text(encoding="utf-8")) == [
@@ -76,7 +76,7 @@ def test_average_deep_shap_attributions_and_preserve_alignment(tmp_path: Path):
     assert summary["attribution_type"] == "deep_shap"
     assert summary["confidence"] == "high"
     assert summary["fold_count"] == 2
-    assert summary["sequence_shape"] == [2, 4, 3]
+    assert summary["sequence_shape"] == [2, 6, 3]
 
 
 def test_deep_shap_partition_rows_are_aligned_by_index_intersection(tmp_path: Path):
@@ -572,6 +572,19 @@ def test_average_attributions_cli_deep_shap_options():
     assert args.all_channels is True
     assert args.alignment == "intersection"
 
+    base_only_args = build_parser().parse_args(
+        [
+            "average-attributions",
+            "deep-shap-root",
+            "--confidence",
+            "low",
+            "--dataset",
+            "dataset",
+            "--base-channels-only",
+        ]
+    )
+    assert base_only_args.all_channels is False
+
     all_args = build_parser().parse_args(
         [
             "average-attributions",
@@ -583,6 +596,7 @@ def test_average_attributions_cli_deep_shap_options():
         ]
     )
     assert all_args.confidence == "all"
+    assert all_args.all_channels is True
 
     mode_args = build_parser().parse_args(
         [

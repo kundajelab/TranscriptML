@@ -744,3 +744,16 @@ def test_deep_shap_cli_defaults():
     assert args.n_references == 20
     assert args.seed == 123
     assert args.target == 0
+
+    slice_args = build_parser().parse_args(
+        [
+            "slice-attribution-inputs",
+            "--dataset",
+            "data",
+            "--attribution-dir",
+            "attrs",
+            "--out-dir",
+            "sliced",
+        ]
+    )
+    assert slice_args.all_channels is True

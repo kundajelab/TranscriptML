@@ -1676,7 +1676,7 @@ def slice_attribution_inputs(
     out_dir: str | Path,
     *,
     confidence: Literal["high", "low"] = "high",
-    all_channels: bool = False,
+    all_channels: bool = True,
 ) -> Path:
     """Write input sequences aligned to one saved confidence partition."""
 
