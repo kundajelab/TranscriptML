@@ -786,8 +786,45 @@ class _RecurrentSummary(torch.nn.Module):
         self.bidirectional = bool(bidirectional)
         self.recurrent_type = recurrent_type
 
+    def _forward_recurrent(
+        self, X: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor | tuple[torch.Tensor, torch.Tensor]]:
+        """Run an eval-mode recurrent layer with a CUDA-backward-safe forward.
+
+        cuDNN only creates the reserve space needed by RNN backward when its
+        forward receives ``training=True``. Tangermeme intentionally puts the
+        complete attribution model in evaluation mode, so an otherwise valid
+        Saluki GRU backward fails on CUDA. A training-mode forward is
+        numerically equivalent when recurrent dropout is inactive. For a
+        multi-layer recurrent module with non-zero dropout, use PyTorch's
+        deterministic non-cuDNN implementation instead of activating dropout.
+        """
+
+        needs_cudnn_reserve = (
+            X.is_cuda
+            and torch.is_grad_enabled()
+            and X.requires_grad
+            and torch.backends.cudnn.enabled
+            and not self.recurrent.training
+        )
+        if not needs_cudnn_reserve:
+            return self.recurrent(X)
+
+        recurrent_dropout = float(getattr(self.recurrent, "dropout", 0.0))
+        recurrent_layers = int(getattr(self.recurrent, "num_layers", 1))
+        if recurrent_layers > 1 and recurrent_dropout > 0.0:
+            with torch.backends.cudnn.flags(enabled=False):
+                return self.recurrent(X)
+
+        was_training = self.recurrent.training
+        self.recurrent.train(True)
+        try:
+            return self.recurrent(X)
+        finally:
+            self.recurrent.training = was_training
+
     def forward(self, X: torch.Tensor) -> torch.Tensor:
-        output, state = self.recurrent(X)
+        output, state = self._forward_recurrent(X)
         if self.summary == "output-last":
             return output[:, -1, :]
         if self.summary == "mean":
@@ -1208,23 +1245,33 @@ def compute_deep_shap_attributions(
             sequence_attempts += 1
             operations = _local_ig_operations(prepared.model, points)
             contains_padding = bool(torch.any(prepared.sequences.sum(dim=1) == 0))
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                attributed = deep_lift_shap(
-                    prepared.model,
-                    prepared.sequences,
-                    args=prepared.args,
-                    target=int(target),
-                    batch_size=int(attribution_batch_size),
-                    references=references,
-                    hypothetical=True,
-                    warning_threshold=float(convergence_atol),
-                    additional_nonlinear_ops=operations or None,
-                    only_warn=contains_padding,
-                    dtype=torch.float32,
-                    device=prepared.device,
-                    verbose=False,
-                )
+            training_modes = [
+                (module, module.training) for module in prepared.model.modules()
+            ]
+            try:
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    attributed = deep_lift_shap(
+                        prepared.model,
+                        prepared.sequences,
+                        args=prepared.args,
+                        target=int(target),
+                        batch_size=int(attribution_batch_size),
+                        references=references,
+                        hypothetical=True,
+                        warning_threshold=float(convergence_atol),
+                        additional_nonlinear_ops=operations or None,
+                        only_warn=contains_padding,
+                        dtype=torch.float32,
+                        device=prepared.device,
+                        verbose=False,
+                    )
+            finally:
+                # Tangermeme restores the root module's mode. The recurrent
+                # adapter temporarily changes only the shared GRU/LSTM, so
+                # restore each submodule explicitly as well.
+                for module, training in training_modes:
+                    module.training = training
             pairwise_messages = [
                 str(item.message) for item in caught if _is_convergence_warning(item.message)
             ]

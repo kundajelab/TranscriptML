@@ -17,6 +17,7 @@ from transcriptml.interpret.deep_shap import (
     ReferenceDiagnostic,
     ReferenceEvaluation,
     ReferenceGenerator,
+    _RecurrentSummary,
     _TargetPredictor,
     _adapt_attribution_model,
     compute_deep_shap_attributions,
@@ -431,6 +432,88 @@ def test_tiny_saluki_deep_shap_converges_and_preserves_actual_relation():
     assert evaluation.diagnostics[0].convergence_absolute_error is not None
     assert evaluation.diagnostics[0].convergence_pass is True
     assert evaluation.diagnostics[0].ig_points_used in {8, 16}
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for cuDNN RNN")
+def test_tiny_saluki_deep_shap_supports_cudnn_gru_backward():
+    """Tangermeme's eval mode must not prevent cuDNN GRU backward."""
+
+    torch.manual_seed(18)
+    model = SalukiLike(
+        in_ch=6,
+        base_ch=2,
+        n_convs=1,
+        pool_size=2,
+        dropout=0,
+        gru_hidden=2,
+        head_hidden=2,
+    ).eval()
+    bases = _random_ohe(1, 10, seed=19).astype(np.int8)
+    X = np.concatenate((bases, np.zeros((1, 2, 10), dtype=np.int8)), axis=1)
+    predictor = Predictor(model, device="cuda", batch_size=2)
+    generator = ReferenceGenerator(
+        ReferenceConfig(strategy="full-mono", n_references=1, seed=7),
+        schema="saluki6",
+    )
+    evaluation = evaluate_references(
+        X,
+        _TargetPredictor(predictor, target=0, batch_size=2),
+        generator,
+        confidence_threshold=0.0,
+        progress=False,
+    )
+    assert model.gru.training is False
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = compute_deep_shap_attributions(
+            X,
+            predictor,
+            generator,
+            evaluation,
+            attribution_batch_size=1,
+            ig_points=2,
+            max_ig_points=2,
+            convergence_atol=1.0,
+            convergence_rtol=1.0,
+            progress=False,
+        )
+
+    assert result.high_confidence_actual_attributions.shape == (1, 4, 10)
+    assert model.training is False
+    assert model.gru.training is False
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for cuDNN RNN")
+def test_cuda_recurrent_attribution_keeps_stacked_dropout_disabled():
+    """The cuDNN workaround must preserve eval semantics for stacked RNNs."""
+
+    torch.manual_seed(20)
+    recurrent = torch.nn.GRU(
+        input_size=3,
+        hidden_size=4,
+        num_layers=2,
+        batch_first=True,
+        dropout=0.5,
+    ).cuda().eval()
+    summary = _RecurrentSummary(
+        recurrent,
+        summary="state-last",
+        layers=2,
+    ).cuda().eval()
+    X = torch.randn(2, 5, 3, device="cuda")
+    with torch.no_grad():
+        expected = summary(X)
+
+    grad_input = X.detach().clone().requires_grad_()
+    observed = summary(grad_input)
+    observed.sum().backward()
+
+    # Native and cuDNN recurrent kernels differ slightly in floating-point
+    # accumulation order, while remaining numerically equivalent.
+    torch.testing.assert_close(observed, expected, atol=1e-4, rtol=5e-4)
+    assert grad_input.grad is not None
+    assert recurrent.training is False
 
 
 def _controlled_attribution_case():
