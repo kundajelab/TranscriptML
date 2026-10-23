@@ -443,6 +443,47 @@ transcriptml slice-attribution-inputs \
   --out-dir interpret/deep_shap/fold0/modisco_high
 ```
 
+### Average attributions across folds
+
+Use `average-attributions` to average an aligned DeepSHAP tensor across
+`fold0`, `fold1`, ... directories. Specify the filename relative to each fold:
+
+```bash
+transcriptml average-attributions interpret/deep_shap/full-mono \
+  --confidence high \
+  --dataset runs/saluki_cv10/dataset \
+  --out-dir interpret/deep_shap/full-mono/average_high
+```
+
+The DeepSHAP mode requires `--confidence high` or `low` and `--dataset`. It
+averages both the hypothetical and actual attribution tensors, then writes
+their aligned base-only `sequences.npy`, `sequence_indices.npy`, `ids.txt`, and
+available metadata into the same output directory. Use `--all-channels` to
+retain Saluki annotation channels instead.
+
+Because confidence membership can differ between models, tensors are aligned
+by saved global sequence index. The default `--alignment intersection`
+averages only sequences belonging to the requested partition in every fold.
+Use `--alignment exact` to require identical partition membership and row
+order across folds.
+
+For single-nucleotide ISM, add `--ism`. The input filename then defaults to
+`deltas.npy`, and the command writes both `combined_deltas.npy` and
+`combined_centered_deltas.npy`:
+
+```bash
+transcriptml average-attributions interpret/ism \
+  --ism \
+  --method conservative \
+  --out-dir interpret/ism/combined
+```
+
+ISM supports `--method mean`, `median`, or `conservative`; conservative keeps
+the fold value closest to zero independently at every tensor element. DeepSHAP
+always uses the arithmetic mean and is never channel-centered. All modes are
+processed in configurable `--batch-size` chunks and record their inputs,
+method, dtype, shape, and outputs in a JSON summary.
+
 The three stages are also available independently in Python:
 
 ```python

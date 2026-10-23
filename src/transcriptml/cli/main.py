@@ -590,6 +590,67 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep annotation channels instead of writing only A/C/G/U",
     )
 
+    p = sub.add_parser(
+        "average-attributions",
+        help="Combine aligned fold-level DeepSHAP or ISM attribution tensors",
+    )
+    p.add_argument(
+        "input_dir",
+        type=Path,
+        help="Directory containing fold0, fold1, ... subdirectories",
+    )
+    p.add_argument(
+        "--input-file",
+        help=(
+            "Relative ISM attribution path inside each fold (default: deltas.npy)"
+        ),
+    )
+    p.add_argument(
+        "--out-dir",
+        type=Path,
+        help="Output directory (default: INPUT_DIR)",
+    )
+    p.add_argument(
+        "--ism",
+        action="store_true",
+        help="Treat inputs as ISM and also write a nucleotide-channel-centered tensor",
+    )
+    p.add_argument(
+        "--confidence",
+        choices=["high", "low"],
+        help="Required DeepSHAP confidence subset; not used with --ism",
+    )
+    p.add_argument(
+        "--dataset",
+        type=Path,
+        help="Required DeepSHAP dataset used to write aligned input sequences",
+    )
+    p.add_argument(
+        "--all-channels",
+        action="store_true",
+        help="Keep all dataset channels instead of writing only A/C/G/U sequences",
+    )
+    p.add_argument(
+        "--method",
+        choices=["mean", "median", "conservative"],
+        default="mean",
+        help=(
+            "ISM fold combination (default: mean); conservative selects the "
+            "value closest to zero. DeepSHAP always uses mean"
+        ),
+    )
+    p.add_argument(
+        "--alignment",
+        choices=["intersection", "exact"],
+        default="intersection",
+        help=(
+            "How to align partitioned DeepSHAP rows by saved global indices "
+            "(default: intersection)"
+        ),
+    )
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--dtype", default="float32")
+
     p = sub.add_parser("codon-usage", help="Compute and plot CDS-position codon usage")
     p.add_argument("--data-dir", type=Path, required=True, help="Directory containing X.npy, metadata.json, schema.json")
     p.add_argument("--out-dir", type=Path, required=True, help="Directory for tables, plots, and README")
@@ -775,6 +836,19 @@ def main(argv: list[str] | None = None) -> None:
             all_channels=args.all_channels,
         )
         print(output)
+        return
+    if args.command == "average-attributions":
+        from transcriptml.analysis.attribution_average import (
+            run_average_attributions_from_args,
+        )
+
+        if args.ism and args.confidence is not None:
+            parser.error("average-attributions: --confidence cannot be used with --ism")
+        if not args.ism and args.input_file is not None:
+            parser.error("average-attributions: --input-file is only available with --ism")
+        summary = run_average_attributions_from_args(args)
+        for output in summary["outputs"].values():
+            print(output)
         return
     if args.command == "codon-usage":
         from transcriptml.analysis.codon_usage import run_codon_usage_from_args
