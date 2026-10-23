@@ -253,6 +253,35 @@ def test_reference_predictions_parquet(tmp_path: Path):
     ]
 
 
+def test_reference_evaluation_progress_reports_confidence_counts(capsys):
+    X = np.full((2, 1, 1), 10.0)
+    references = np.asarray([[[11.0]], [[12.0]]])
+    evaluate_references(
+        X,
+        lambda batch: np.asarray(batch)[:, 0, 0],
+        _FixedGenerator(references),
+        confidence_threshold=1.0,
+    )
+
+    stderr = capsys.readouterr().err
+    assert "deep-shap: predicting original outputs for 2 sequences" in stderr
+    assert "deep-shap: reference evaluation: started (0/2 sequences)" in stderr
+    assert "finished (2/2 sequences); high=2, low=0, ineligible=0" in stderr
+
+
+def test_reference_evaluation_progress_can_be_disabled(capsys):
+    X = np.full((1, 1, 1), 10.0)
+    references = np.asarray([[[11.0]]])
+    evaluate_references(
+        X,
+        lambda batch: np.asarray(batch)[:, 0, 0],
+        _FixedGenerator(references),
+        progress=False,
+    )
+
+    assert capsys.readouterr().err == ""
+
+
 def _random_ohe(n: int, length: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     indices = rng.integers(0, 4, size=(n, length))
@@ -446,7 +475,7 @@ def _controlled_attribution_case():
     return X, Predictor(model, device="cpu"), generator, evaluation
 
 
-def test_local_ig_retry_escalation(monkeypatch):
+def test_local_ig_retry_escalation(monkeypatch, capsys):
     import transcriptml.interpret.deep_shap as deep_shap_module
 
     X, predictor, generator, evaluation = _controlled_attribution_case()
@@ -473,6 +502,10 @@ def test_local_ig_retry_escalation(monkeypatch):
     assert evaluation.diagnostics[0].ig_points_used == 32
     assert evaluation.diagnostics[0].convergence_pass is True
     assert result.unresolved_convergence_indices.size == 0
+    stderr = capsys.readouterr().err
+    assert "deep-shap: attribution: started (0/1 sequences)" in stderr
+    assert "retries=2, convergence_failures=0, last_K=32" in stderr
+    assert "finished (1/1 sequences); high=1, low=0, retries=2" in stderr
 
 
 def test_unresolved_convergence_warning_is_persisted(monkeypatch):
@@ -508,7 +541,7 @@ def test_unresolved_convergence_warning_is_persisted(monkeypatch):
     np.testing.assert_array_equal(result.high_confidence_actual_attributions, 0)
 
 
-def test_run_outputs_and_slice_alignment(tmp_path: Path):
+def test_run_outputs_and_slice_alignment(tmp_path: Path, capsys):
     torch.manual_seed(11)
     X = _random_ohe(2, 12, seed=13)
     bundle_dir = tmp_path / "bundle"
@@ -576,6 +609,9 @@ def test_run_outputs_and_slice_alignment(tmp_path: Path):
     assert json.loads((out / "summary.json").read_text())["convergence"][
         "unresolved_sequence_indices"
     ] == []
+    stderr = capsys.readouterr().err
+    assert f"deep-shap: saving outputs to {out}" in stderr
+    assert "deep-shap: completed; high=2, low=0, ineligible=0" in stderr
 
     sliced = tmp_path / "sliced"
     main(

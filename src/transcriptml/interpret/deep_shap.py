@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tempfile
+import time
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -60,6 +61,7 @@ from transcriptml.models.saluki_cnn import (
     _SmallCNNFeatureEncoder,
 )
 from transcriptml.models.universe import ConvolutionUniverse
+from transcriptml.progress import ProgressReporter, log_progress
 
 
 ReferenceStrategy = Literal[
@@ -576,8 +578,13 @@ def evaluate_references(
     zero_atol: float = 1e-6,
     reference_predictions_path: str | Path | None = None,
     reference_predictions_format: Literal["none", "csv", "parquet"] = "none",
+    progress: bool = True,
 ) -> ReferenceEvaluation:
-    """Predict all references and classify each eligible original sequence."""
+    """Predict all references and classify each eligible original sequence.
+
+    Args:
+        progress: Whether to emit throttled progress messages to stderr.
+    """
 
     arr = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else np.asarray(X)
     if arr.ndim != 3:
@@ -601,6 +608,10 @@ def evaluate_references(
     if len(ids) != arr.shape[0]:
         raise ValueError("sequence_ids length must match X.shape[0]")
 
+    log_progress(
+        f"deep-shap: predicting original outputs for {len(indices)} sequences",
+        enabled=progress,
+    )
     originals = _predict_selected(
         predictor,
         arr,
@@ -612,6 +623,12 @@ def evaluate_references(
     high: list[int] = []
     low: list[int] = []
     ineligible: list[int] = []
+    reporter = ProgressReporter(
+        "deep-shap: reference evaluation",
+        total=len(indices),
+        unit="sequences",
+        enabled=progress,
+    )
     try:
         for local_index, sequence_index_value in enumerate(indices.tolist()):
             sequence_index = int(sequence_index_value)
@@ -634,6 +651,9 @@ def evaluate_references(
             if not generated.eligible:
                 diagnostics.append(row)
                 ineligible.append(sequence_index)
+                reporter.update(
+                    extra=f"high={len(high)}, low={len(low)}, ineligible={len(ineligible)}"
+                )
                 continue
 
             assert generated.references is not None
@@ -698,8 +718,15 @@ def evaluate_references(
                     }
                 )
             writer.write(prediction_rows)
+            reporter.update(
+                extra=f"high={len(high)}, low={len(low)}, ineligible={len(ineligible)}"
+            )
     finally:
         writer.close()
+
+    reporter.close(
+        extra=f"high={len(high)}, low={len(low)}, ineligible={len(ineligible)}"
+    )
 
     return ReferenceEvaluation(
         sequence_indices=indices,
@@ -1087,8 +1114,13 @@ def compute_deep_shap_attributions(
     convergence_atol: float = 1e-3,
     convergence_rtol: float = 0.01,
     storage_dir: str | Path | None = None,
+    progress: bool = True,
 ) -> DeepSHAPAttributionResult:
-    """Calculate and partition DeepLIFT/SHAP attributions for eligible inputs."""
+    """Calculate and partition DeepLIFT/SHAP attributions for eligible inputs.
+
+    Args:
+        progress: Whether to emit throttled progress messages to stderr.
+    """
 
     arr = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else np.asarray(X)
     if arr.ndim != 3 or arr.shape[1] < 4:
@@ -1130,10 +1162,21 @@ def compute_deep_shap_attributions(
     }
     diagnostic_by_index = evaluation.diagnostic_by_index
     unresolved: list[int] = []
-
-    for sequence_index_value in np.concatenate(
+    eligible_indices = np.concatenate(
         (evaluation.high_confidence_indices, evaluation.low_confidence_indices)
-    ):
+    )
+    reporter = ProgressReporter(
+        "deep-shap: attribution",
+        total=len(eligible_indices),
+        unit="sequences",
+        enabled=progress,
+    )
+    progress_started = time.monotonic()
+    processed_high = 0
+    processed_low = 0
+    retry_count = 0
+
+    for sequence_index_value in eligible_indices:
         sequence_index = int(sequence_index_value)
         generated = reference_generator.generate(arr[sequence_index], sequence_index=sequence_index)
         if not generated.eligible or generated.references is None:
@@ -1156,11 +1199,13 @@ def compute_deep_shap_attributions(
         pairwise_warning = False
         pairwise_messages: list[str] = []
         all_pairwise_messages: list[str] = []
+        sequence_attempts = 0
         convergence_pass = False
         absolute_error = math.inf
         relative_error = math.inf
         attribution_sum = math.nan
         while True:
+            sequence_attempts += 1
             operations = _local_ig_operations(prepared.model, points)
             contains_padding = bool(torch.any(prepared.sequences.sum(dim=1) == 0))
             with warnings.catch_warnings(record=True) as caught:
@@ -1224,10 +1269,33 @@ def compute_deep_shap_attributions(
             position = high_positions[sequence_index]
             high_hyp[position] = final_hyp
             high_actual[position] = final_actual
+            processed_high += 1
         else:
             position = low_positions[sequence_index]
             low_hyp[position] = final_hyp
             low_actual[position] = final_actual
+            processed_low += 1
+        retry_count += sequence_attempts - 1
+        completed = processed_high + processed_low
+        elapsed = max(0.0, time.monotonic() - progress_started)
+        eta_seconds = (
+            elapsed * (len(eligible_indices) - completed) / completed if completed else 0.0
+        )
+        reporter.update(
+            extra=(
+                f"high={processed_high}, low={processed_low}, retries={retry_count}, "
+                f"convergence_failures={len(unresolved)}, last_K={points}, "
+                f"elapsed={elapsed / 60.0:.1f}m, eta={eta_seconds / 60.0:.1f}m"
+            )
+        )
+
+    reporter.close(
+        extra=(
+            f"high={processed_high}, low={processed_low}, retries={retry_count}, "
+            f"convergence_failures={len(unresolved)}, "
+            f"elapsed={(time.monotonic() - progress_started) / 60.0:.1f}m"
+        )
+    )
 
     for array in (high_hyp, high_actual, low_hyp, low_actual):
         if isinstance(array, np.memmap):
@@ -1455,8 +1523,13 @@ def run_deep_shap(
     reference_predictions_format: Literal["none", "csv", "parquet"] = "none",
     checkpoint: str | Path | None = None,
     dataset: str | Path | None = None,
+    progress: bool = True,
 ) -> DeepSHAPAttributionResult:
-    """Run reference generation, evaluation, attribution, and persistence."""
+    """Run reference generation, evaluation, attribution, and persistence.
+
+    Args:
+        progress: Whether to emit progress messages to stderr.
+    """
 
     arr = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else np.asarray(X)
     if arr.ndim != 3:
@@ -1505,6 +1578,7 @@ def run_deep_shap(
         zero_atol=zero_atol,
         reference_predictions_path=prediction_path,
         reference_predictions_format=reference_predictions_format,
+        progress=progress,
     )
     result = compute_deep_shap_attributions(
         arr,
@@ -1518,9 +1592,11 @@ def run_deep_shap(
         convergence_atol=convergence_atol,
         convergence_rtol=convergence_rtol,
         storage_dir=out,
+        progress=progress,
     )
     if prediction_path is not None and prediction_final_path is not None:
         os.replace(prediction_path, prediction_final_path)
+    log_progress(f"deep-shap: saving outputs to {out}", enabled=progress)
     save_deep_shap_result(
         result,
         out,
@@ -1529,6 +1605,14 @@ def run_deep_shap(
         checkpoint=checkpoint,
         dataset=dataset,
         reference_predictions_format=reference_predictions_format,
+    )
+    log_progress(
+        "deep-shap: completed; "
+        f"high={len(evaluation.high_confidence_indices)}, "
+        f"low={len(evaluation.low_confidence_indices)}, "
+        f"ineligible={len(evaluation.ineligible_indices)}, "
+        f"convergence_failures={len(result.unresolved_convergence_indices)}",
+        enabled=progress,
     )
     return result
 
