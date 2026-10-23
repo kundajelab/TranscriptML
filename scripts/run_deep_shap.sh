@@ -54,13 +54,8 @@ fi
 
 CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/${DEEP_SHAP_CHECKPOINT_NAME}"
 OUT_DIR="${DEEP_SHAP_OUT_ROOT}/fold${FOLD}"
-SHARD_ARGS=()
 if ((DEEP_SHAP_SEQUENCE_SHARDS > 1)); then
   OUT_DIR="${OUT_DIR}/shard${SHARD}"
-  SHARD_ARGS=(
-    --sequence-shard-index "${SHARD}"
-    --sequence-shards "${DEEP_SHAP_SEQUENCE_SHARDS}"
-  )
 fi
 
 if [[ ! -f "${CHECKPOINT}" ]]; then
@@ -93,9 +88,14 @@ DEEP_SHAP_ARGS=(
   --convergence-atol "${DEEP_SHAP_CONVERGENCE_ATOL}"
   --convergence-rtol "${DEEP_SHAP_CONVERGENCE_RTOL}"
   --reference-predictions-format "${DEEP_SHAP_REFERENCE_PREDICTIONS_FORMAT}"
-  "${SHARD_ARGS[@]}"
 )
 
+if ((DEEP_SHAP_SEQUENCE_SHARDS > 1)); then
+  DEEP_SHAP_ARGS+=(
+    --sequence-shard-index "${SHARD}"
+    --sequence-shards "${DEEP_SHAP_SEQUENCE_SHARDS}"
+  )
+fi
 if [[ -n "${DEEP_SHAP_MINIMUM_EFFECT_SIZE}" ]]; then
   DEEP_SHAP_ARGS+=(--minimum-effect-size "${DEEP_SHAP_MINIMUM_EFFECT_SIZE}")
 fi

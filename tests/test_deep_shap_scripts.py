@@ -90,6 +90,23 @@ def test_deep_shap_worker_maps_fold_and_shard(deep_shap_jobs):
     assert args[args.index("--batch-size") + 1] == "7"
 
 
+def test_deep_shap_worker_supports_single_unsharded_task(deep_shap_jobs):
+    _, _, env = deep_shap_jobs
+    result = _invoke(
+        deep_shap_jobs,
+        "run_deep_shap.sh",
+        DEEP_SHAP_SEQUENCE_SHARDS="1",
+        SLURM_ARRAY_TASK_ID="2",
+    )
+    assert result.returncode == 0, result.stderr
+    args = result.stdout.splitlines()
+    assert args[args.index("--out-dir") + 1] == (
+        f"{env['INTERPRET_ROOT']}/deep_shap/full-mono/fold2"
+    )
+    assert "--sequence-shard-index" not in args
+    assert "--sequence-shards" not in args
+
+
 def test_deep_shap_submit_combines_fold_and_shard_arrays(deep_shap_jobs):
     result = _invoke(deep_shap_jobs, "submit_deep_shap.sh")
     assert result.returncode == 0, result.stderr
