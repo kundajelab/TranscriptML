@@ -388,6 +388,90 @@ def test_average_all_deep_shap_excludes_rows_ineligible_in_any_fold(tmp_path: Pa
     assert union_summary["aligned_row_count"] == 3
 
 
+def test_deep_shap_use_all_folds_selects_by_confidence_then_uses_both_partitions(
+    tmp_path: Path,
+):
+    high_by_fold = ([0, 1, 2], [1, 2, 3], [2, 3, 4])
+    all_indices = list(range(5))
+    for fold, high_indices in enumerate(high_by_fold):
+        low_indices = [index for index in all_indices if index not in high_indices]
+        for partition, indices in (
+            ("high_confidence", high_indices),
+            ("low_confidence", low_indices),
+        ):
+            for attribution_kind, offset in (("hypothetical", 0.0), ("actual", 100.0)):
+                values = np.stack(
+                    [
+                        np.full(
+                            (4, 2),
+                            offset + 10.0 * fold + index,
+                            dtype=np.float32,
+                        )
+                        for index in indices
+                    ]
+                )
+                path = _write_fold_array(
+                    tmp_path,
+                    fold,
+                    f"{partition}_{attribution_kind}_attributions.npy",
+                    values,
+                )
+                np.save(path.with_name(f"{partition}_indices.npy"), indices)
+                path.with_name(f"{partition}_ids.txt").write_text(
+                    "".join(f"tx{index}\n" for index in indices),
+                    encoding="utf-8",
+                )
+
+    X = np.arange(5 * 4 * 2, dtype=np.float32).reshape(5, 4, 2)
+    dataset = tmp_path / "all_fold_dataset"
+    save_bundle(
+        DatasetBundle(
+            X=X,
+            ids=tuple(f"tx{index}" for index in all_indices),
+            schema="rna4",
+        ),
+        dataset,
+    )
+    out = tmp_path / "high_union_all_folds"
+    summary = average_attributions(
+        tmp_path,
+        out_dir=out,
+        confidence="high",
+        use_all_folds=True,
+        dataset=dataset,
+        alignment="union",
+        batch_size=2,
+        progress=False,
+    )
+
+    for attribution_kind, offset in (("hypothetical", 0.0), ("actual", 100.0)):
+        expected = np.stack(
+            [
+                np.full((4, 2), offset + 10.0 + index, dtype=np.float32)
+                for index in all_indices
+            ]
+        )
+        np.testing.assert_array_equal(
+            np.load(
+                out
+                / f"average_high_confidence_{attribution_kind}_attributions.npy"
+            ),
+            expected,
+        )
+    np.testing.assert_array_equal(
+        np.load(out / "high_confidence_confidence_support.npy"),
+        [1, 2, 3, 2, 1],
+    )
+    np.testing.assert_array_equal(
+        np.load(out / "high_confidence_fold_support.npy"),
+        [3, 3, 3, 3, 3],
+    )
+    np.testing.assert_array_equal(np.load(out / "sequences.npy"), X)
+    assert summary["use_all_folds"] is True
+    assert summary["confidence_support_min"] == 1
+    assert summary["fold_support_min"] == 3
+
+
 @pytest.mark.parametrize("method", ("mean", "median", "conservative"))
 def test_ism_combination_and_channel_centering(tmp_path: Path, method: str):
     values = np.asarray(
@@ -516,3 +600,18 @@ def test_average_attributions_cli_deep_shap_options():
     )
     assert mode_args.alignment == "mode"
     assert mode_args.mode_threshold == 0.7
+
+    all_fold_args = build_parser().parse_args(
+        [
+            "average-attributions",
+            "deep-shap-root",
+            "--confidence",
+            "high",
+            "--dataset",
+            "dataset",
+            "--alignment",
+            "union",
+            "--use-all-folds",
+        ]
+    )
+    assert all_fold_args.use_all_folds is True

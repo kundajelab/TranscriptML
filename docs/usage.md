@@ -482,6 +482,14 @@ The command writes a matching `*_fold_support.npy` array containing the number
 of folds contributing to every averaged row. For `--confidence all`, high and
 low are combined within each fold before applying the selected alignment.
 
+By default, union and mode average only folds where the transcript belongs to
+the requested confidence class. Add `--use-all-folds` to use confidence only
+for transcript selection and then average each selected transcript across
+every eligible fold, retrieving its attribution from the opposite confidence
+partition where necessary. In this mode, `*_confidence_support.npy` records
+the number of folds that assigned the requested class, while
+`*_fold_support.npy` records the number actually averaged.
+
 For example, retain high-confidence sequences in more than 70% of folds:
 
 ```bash
@@ -489,6 +497,7 @@ transcriptml average-attributions interpret/deep_shap/full-mono \
   --confidence high \
   --alignment mode \
   --mode-threshold 0.7 \
+  --use-all-folds \
   --dataset runs/saluki_cv10/dataset \
   --out-dir interpret/deep_shap/full-mono/average_high_mode
 ```

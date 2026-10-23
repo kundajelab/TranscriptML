@@ -458,6 +458,7 @@ def average_attributions(
     alignment: AlignmentMode = "intersection",
     mode_threshold: float = 0.5,
     confidence: ConfidenceSubset | None = None,
+    use_all_folds: bool = False,
     dataset: str | Path | None = None,
     all_channels: bool = False,
     batch_size: int = 256,
@@ -479,6 +480,8 @@ def average_attributions(
         raise ValueError("DeepSHAP attributions are averaged; --method requires --ism")
     if ism and confidence is not None:
         raise ValueError("confidence is only available for DeepSHAP averaging")
+    if ism and use_all_folds:
+        raise ValueError("use_all_folds is only available for DeepSHAP averaging")
     alignment_value = str(alignment).strip().lower()
     if alignment_value not in {"intersection", "union", "mode", "exact"}:
         raise ValueError(
@@ -504,6 +507,7 @@ def average_attributions(
             input_dir,
             out_dir=out_dir,
             confidence=confidence,
+            use_all_folds=bool(use_all_folds),
             dataset=dataset,
             alignment=selected_alignment,
             mode_threshold=float(mode_threshold),
@@ -515,6 +519,10 @@ def average_attributions(
 
     if input_file is None and not ism:
         raise ValueError("input_file is required for DeepSHAP attribution averaging")
+    if use_all_folds:
+        raise ValueError(
+            "use_all_folds requires high-level DeepSHAP mode with --confidence"
+        )
     relative = Path("deltas.npy" if input_file is None else input_file)
     paths = find_fold_attribution_paths(input_dir, relative)
     partitioned = not ism and _DEEP_SHAP_PATTERN.fullmatch(relative.name) is not None
@@ -616,8 +624,12 @@ def average_attributions(
         indices_output = output_root / f"{partition}_indices.npy"
         ids_output = output_root / f"{partition}_ids.txt"
         support_output = output_root / f"{partition}_fold_support.npy"
+        confidence_support_output = (
+            output_root / f"{partition}_confidence_support.npy"
+        )
         np.save(indices_output, indices)
         np.save(support_output, fold_support)
+        np.save(confidence_support_output, fold_support)
         ids_output.write_text(
             "".join(f"{identifier}\n" for identifier in ids),
             encoding="utf-8",
@@ -626,6 +638,7 @@ def average_attributions(
             indices=str(indices_output),
             ids=str(ids_output),
             fold_support=str(support_output),
+            confidence_support=str(confidence_support_output),
         )
     summary: dict[str, Any] = {
         "analysis": "average_attributions",
@@ -741,6 +754,7 @@ def _average_deep_shap_partition(
     *,
     out_dir: str | Path | None,
     confidence: ConfidenceSubset,
+    use_all_folds: bool,
     dataset: str | Path,
     alignment: AlignmentMode,
     mode_threshold: float,
@@ -750,6 +764,20 @@ def _average_deep_shap_partition(
     progress: bool,
 ) -> dict[str, Any]:
     """Average actual and hypothetical DeepSHAP tensors and slice their inputs."""
+
+    if use_all_folds and confidence != "all":
+        return _average_selected_confidence_across_all_folds(
+            input_dir,
+            out_dir=out_dir,
+            confidence=cast(Literal["high", "low"], confidence),
+            dataset=dataset,
+            alignment=alignment,
+            mode_threshold=mode_threshold,
+            all_channels=all_channels,
+            batch_size=batch_size,
+            dtype=dtype,
+            progress=progress,
+        )
 
     if confidence == "all":
         return _average_all_deep_shap_partitions(
@@ -796,12 +824,16 @@ def _average_deep_shap_partition(
         "hypothetical_attributions": summaries["hypothetical"]["outputs"]["combined"],
         "actual_attributions": summaries["actual"]["outputs"]["combined"],
         "fold_support": summaries["hypothetical"]["outputs"]["fold_support"],
+        "confidence_support": summaries["hypothetical"]["outputs"][
+            "confidence_support"
+        ],
         **sequence_outputs,
     }
     summary: dict[str, Any] = {
         "analysis": "average_attributions",
         "attribution_type": "deep_shap",
         "confidence": confidence,
+        "use_all_folds": False,
         "input_dir": str(input_dir),
         "out_dir": str(output_root),
         "dataset": str(dataset),
@@ -874,7 +906,216 @@ def _write_union_average(
         _close_memmap(output)
         temporary.unlink(missing_ok=True)
         raise
-    reporter.close(extra=f"{len(unions)} folds; confidence=all; method=mean")
+    reporter.close(extra=f"{len(unions)} folds; method=mean")
+
+
+def _align_unions_for_confidence(
+    unions: list[_FoldPartitionUnion],
+    *,
+    confidence: Literal["high", "low"],
+    alignment: AlignmentMode,
+    mode_threshold: float,
+) -> tuple[np.ndarray, list[str], list[np.ndarray], np.ndarray, np.ndarray]:
+    """Select by confidence membership but locate rows in either partition."""
+
+    desired_indices = [
+        union.indices[
+            union.source_is_high
+            if confidence == "high"
+            else ~union.source_is_high
+        ]
+        for union in unions
+    ]
+    if alignment == "exact":
+        selected_indices = desired_indices[0]
+        for union, indices in zip(unions[1:], desired_indices[1:], strict=True):
+            if not np.array_equal(indices, selected_indices):
+                raise ValueError(
+                    f"{confidence}-confidence DeepSHAP rows are not identically "
+                    f"aligned across folds; mismatch at {union.fold_dir}"
+                )
+        confidence_support = np.full(
+            len(selected_indices), len(unions), dtype=np.int64
+        )
+    else:
+        selected_indices, confidence_support = _select_indices_by_fold_support(
+            desired_indices,
+            alignment=alignment,
+            mode_threshold=mode_threshold,
+        )
+
+    positions: list[np.ndarray] = []
+    ids_by_fold: list[dict[int, str]] = []
+    for union in unions:
+        position_by_index = {
+            int(index): row for row, index in enumerate(union.indices)
+        }
+        positions.append(
+            np.asarray(
+                [position_by_index.get(int(index), -1) for index in selected_indices],
+                dtype=np.int64,
+            )
+        )
+        ids_by_fold.append(
+            {int(index): union.ids[row] for row, index in enumerate(union.indices)}
+        )
+
+    selected_ids: list[str] = []
+    for index in selected_indices:
+        observed = [
+            values[int(index)] for values in ids_by_fold if int(index) in values
+        ]
+        if any(identifier != observed[0] for identifier in observed[1:]):
+            raise ValueError(f"Sequence ID mismatch for global index {int(index)}")
+        selected_ids.append(observed[0])
+    contribution_support = np.sum(
+        np.stack([fold_positions >= 0 for fold_positions in positions], axis=0),
+        axis=0,
+        dtype=np.int64,
+    )
+    return (
+        selected_indices,
+        selected_ids,
+        positions,
+        confidence_support,
+        contribution_support,
+    )
+
+
+def _average_selected_confidence_across_all_folds(
+    input_dir: str | Path,
+    *,
+    out_dir: str | Path | None,
+    confidence: Literal["high", "low"],
+    dataset: str | Path,
+    alignment: AlignmentMode,
+    mode_threshold: float,
+    all_channels: bool,
+    batch_size: int,
+    dtype: np.dtype,
+    progress: bool,
+) -> dict[str, Any]:
+    """Select by confidence support, then average every eligible fold."""
+
+    output_root = Path(input_dir) if out_dir is None else Path(out_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    kind_data: dict[str, tuple[Any, ...]] = {}
+    for attribution_kind in ("hypothetical", "actual"):
+        kind = cast(Literal["actual", "hypothetical"], attribution_kind)
+        unions, paths, shape_tail = _load_deep_shap_unions(input_dir, kind)
+        alignment_result = _align_unions_for_confidence(
+            unions,
+            confidence=confidence,
+            alignment=alignment,
+            mode_threshold=mode_threshold,
+        )
+        kind_data[attribution_kind] = (
+            unions,
+            paths,
+            shape_tail,
+            *alignment_result,
+        )
+
+    hypothetical = kind_data["hypothetical"]
+    actual = kind_data["actual"]
+    if (
+        len(hypothetical[0]) != len(actual[0])
+        or hypothetical[2] != actual[2]
+        or not np.array_equal(hypothetical[3], actual[3])
+        or hypothetical[4] != actual[4]
+        or not np.array_equal(hypothetical[6], actual[6])
+        or not np.array_equal(hypothetical[7], actual[7])
+    ):
+        raise ValueError(
+            "Actual and hypothetical DeepSHAP rows do not align for all-fold averaging"
+        )
+
+    partition = f"{confidence}_confidence"
+    attribution_outputs: dict[str, str] = {}
+    for attribution_kind in ("hypothetical", "actual"):
+        unions, _, shape_tail, _, _, positions, _, _ = kind_data[attribution_kind]
+        output_path = (
+            output_root
+            / f"average_{partition}_{attribution_kind}_attributions.npy"
+        )
+        _write_union_average(
+            unions,
+            positions,
+            output_path,
+            shape_tail=shape_tail,
+            dtype=dtype,
+            batch_size=batch_size,
+            progress=progress,
+        )
+        attribution_outputs[f"{attribution_kind}_attributions"] = str(output_path)
+
+    indices = hypothetical[3]
+    ids = hypothetical[4]
+    confidence_support = hypothetical[6]
+    fold_support = hypothetical[7]
+    indices_path = output_root / f"{partition}_indices.npy"
+    ids_path = output_root / f"{partition}_ids.txt"
+    confidence_support_path = output_root / f"{partition}_confidence_support.npy"
+    fold_support_path = output_root / f"{partition}_fold_support.npy"
+    np.save(indices_path, indices)
+    np.save(confidence_support_path, confidence_support)
+    np.save(fold_support_path, fold_support)
+    ids_path.write_text(
+        "".join(f"{identifier}\n" for identifier in ids),
+        encoding="utf-8",
+    )
+    sequence_outputs = _write_sequence_slice(
+        dataset,
+        output_root,
+        partition=partition,
+        all_channels=all_channels,
+        batch_size=batch_size,
+    )
+    outputs = {
+        **attribution_outputs,
+        "indices": str(indices_path),
+        "partition_ids": str(ids_path),
+        "confidence_support": str(confidence_support_path),
+        "fold_support": str(fold_support_path),
+        **sequence_outputs,
+    }
+    summary: dict[str, Any] = {
+        "analysis": "average_attributions",
+        "attribution_type": "deep_shap",
+        "confidence": confidence,
+        "use_all_folds": True,
+        "input_dir": str(input_dir),
+        "out_dir": str(output_root),
+        "dataset": str(dataset),
+        "fold_count": len(hypothetical[0]),
+        "fold_files": {
+            kind: [str(path) for path in data[1]] for kind, data in kind_data.items()
+        },
+        "alignment": alignment,
+        "mode_threshold": mode_threshold,
+        "aligned_row_count": int(len(indices)),
+        "confidence_support_min": (
+            int(np.min(confidence_support)) if len(confidence_support) else None
+        ),
+        "confidence_support_max": (
+            int(np.max(confidence_support)) if len(confidence_support) else None
+        ),
+        "fold_support_min": int(np.min(fold_support)) if len(fold_support) else None,
+        "fold_support_max": int(np.max(fold_support)) if len(fold_support) else None,
+        "all_channels": bool(all_channels),
+        "sequence_shape": list(
+            np.load(sequence_outputs["sequences"], mmap_mode="r").shape
+        ),
+        "attribution_shape": [len(indices), *hypothetical[2]],
+        "dtype": str(dtype),
+        "batch_size": int(batch_size),
+        "outputs": outputs,
+    }
+    (output_root / "average_attributions_summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return summary
 
 
 def _average_all_deep_shap_partitions(
@@ -1026,6 +1267,7 @@ def run_average_attributions_from_args(args: Any) -> dict[str, Any]:
         alignment=args.alignment,
         mode_threshold=args.mode_threshold,
         confidence=args.confidence,
+        use_all_folds=args.use_all_folds,
         dataset=args.dataset,
         all_channels=args.all_channels,
         batch_size=args.batch_size,

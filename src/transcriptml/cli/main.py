@@ -661,6 +661,15 @@ def build_parser() -> argparse.ArgumentParser:
             "this fraction of folds (default: 0.5)"
         ),
     )
+    p.add_argument(
+        "--use-all-folds",
+        action="store_true",
+        help=(
+            "After selecting high/low transcripts by fold membership, average "
+            "their attribution from every eligible fold, including the opposite "
+            "confidence partition"
+        ),
+    )
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--dtype", default="float32")
 
