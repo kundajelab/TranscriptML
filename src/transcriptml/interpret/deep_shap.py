@@ -52,6 +52,7 @@ from transcriptml.interpret.codon_ism import (
     resolve_analysis_indices,
 )
 from transcriptml.interpret.predictor import EnsemblePredictor, Predictor
+from transcriptml.models.cnn import SmallCNN
 from transcriptml.models.legnet import LegNet, SELayer
 from transcriptml.models.reproduce import SalukiExact
 from transcriptml.models.saluki import SalukiLike
@@ -838,11 +839,113 @@ class _RecurrentSummary(torch.nn.Module):
         return final[0] if directions == 1 else torch.cat((final[0], final[1]), dim=1)
 
 
-class _MaxMeanPool(torch.nn.Module):
-    """Hookable global max-plus-mean pooling used by the hybrid CNN branch."""
+class _AdaptiveMaxPool1d(torch.nn.Module):
+    """Hookable adaptive max pooling with a matching exact DeepLIFT rule."""
+
+    def __init__(self, output_size: int) -> None:
+        super().__init__()
+        self.output_size = int(output_size)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
-        return torch.cat((X.amax(dim=-1), X.mean(dim=-1)), dim=1)
+        return torch.nn.functional.adaptive_max_pool1d(X, self.output_size)
+
+
+def _adaptive_max_pool_rescale(
+    module: _AdaptiveMaxPool1d,
+    grad_input: tuple[torch.Tensor, ...],
+    grad_output: tuple[torch.Tensor, ...],
+) -> tuple[torch.Tensor]:
+    """Apply the DeepLIFT rescale rule to adaptive one-dimensional max pooling.
+
+    Tangermeme supplies the observed and reference activations concatenated on
+    the batch axis. Each pooled output change is routed through its winning
+    input position. ``scatter_add_`` is required because adaptive windows can
+    overlap, allowing one input position to win more than one output window.
+    """
+
+    with torch.no_grad():
+        inputs = module.input
+        outputs = module.output
+        delta_input = torch.sub(*inputs.chunk(2))
+        output, output_reference = outputs.chunk(2)
+        joint_maximum = torch.maximum(output, output_reference)
+        delta_output = torch.cat(
+            (joint_maximum - output_reference, output - joint_maximum), dim=0
+        )
+        _, indices = torch.nn.functional.adaptive_max_pool1d(
+            inputs, module.output_size, return_indices=True
+        )
+        routed = torch.zeros_like(inputs)
+        routed.scatter_add_(-1, indices, grad_output[0] * delta_output)
+        routed_input, routed_reference = routed.chunk(2)
+        routed_delta = routed_input + routed_reference
+
+    zero_delta = delta_input == 0
+    denominator = delta_input.masked_fill(zero_delta, 1)
+    ordinary_gradient = grad_input[0].chunk(2)[0]
+    multiplier = torch.where(
+        zero_delta,
+        ordinary_gradient,
+        routed_delta / denominator,
+    )
+    return (torch.cat((multiplier, multiplier), dim=0),)
+
+
+# Tangermeme defaults custom rules to reading both tensors. Keep this explicit
+# because the rescale rule depends on both cached values.
+_adaptive_max_pool_rescale._reads = ("input", "output")  # type: ignore[attr-defined]
+
+
+class _AdaptiveGlobalPool(torch.nn.Module):
+    """Prediction-equivalent adaptive average/max feature pooling."""
+
+    def __init__(self, mode: str, output_size: int) -> None:
+        super().__init__()
+        if mode not in {"avg", "max", "avgmax", "maxavg"}:
+            raise ValueError(f"Unsupported adaptive global pooling mode {mode!r}")
+        if int(output_size) < 1:
+            raise ValueError("output_size must be at least 1")
+        self.mode = mode
+        self.output_size = int(output_size)
+        self.max_pool = (
+            _AdaptiveMaxPool1d(self.output_size)
+            if mode in {"max", "avgmax", "maxavg"}
+            else None
+        )
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        features: list[torch.Tensor] = []
+        if self.mode == "maxavg":
+            assert self.max_pool is not None
+            return torch.cat(
+                (
+                    self.max_pool(X).flatten(1),
+                    torch.nn.functional.adaptive_avg_pool1d(
+                        X, self.output_size
+                    ).flatten(1),
+                ),
+                dim=1,
+            )
+        if self.mode in {"avg", "avgmax"}:
+            features.append(
+                torch.nn.functional.adaptive_avg_pool1d(X, self.output_size).flatten(1)
+            )
+        if self.max_pool is not None:
+            features.append(self.max_pool(X).flatten(1))
+        return torch.cat(features, dim=1)
+
+
+class _SmallCNNAttributionModel(torch.nn.Module):
+    """Checkpoint-preserving SmallCNN with hookable global pooling."""
+
+    def __init__(self, source: SmallCNN) -> None:
+        super().__init__()
+        self.encoder = source.encoder
+        self.pool = _AdaptiveGlobalPool("maxavg", 1)
+        self.head = source.head
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        return self.head(self.pool(self.encoder(X.float()))).squeeze(-1)
 
 
 class _SalukiLikeAttributionModel(torch.nn.Module):
@@ -914,7 +1017,7 @@ class _SmallCNNFeatureAttributionModel(torch.nn.Module):
     def __init__(self, source: _SmallCNNFeatureEncoder) -> None:
         super().__init__()
         self.encoder = source.encoder
-        self.pool = _MaxMeanPool()
+        self.pool = _AdaptiveGlobalPool("maxavg", 1)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         return self.pool(self.encoder(X.float()))
@@ -939,15 +1042,22 @@ class _SalukiCNNHybridAttributionModel(torch.nn.Module):
 class _ConvolutionUniverseAttributionModel(torch.nn.Module):
     def __init__(self, source: ConvolutionUniverse) -> None:
         super().__init__()
-        if source.rnn is None:
-            raise ValueError("The recurrent attribution adapter requires an RNN")
         self.source = source
-        self.recurrent = _RecurrentSummary(
-            source.rnn,
-            summary=source.rnn_summary,
-            layers=source.rnn_layers,
-            bidirectional=source.rnn_bidirectional,
-            recurrent_type=source.rnn_type,
+        self.pool = (
+            _AdaptiveGlobalPool(source.global_pool, source.global_pool_size)
+            if source.rnn is None
+            else None
+        )
+        self.recurrent = (
+            _RecurrentSummary(
+                source.rnn,
+                summary=source.rnn_summary,
+                layers=source.rnn_layers,
+                bidirectional=source.rnn_bidirectional,
+                recurrent_type=source.rnn_type,
+            )
+            if source.rnn is not None
+            else None
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
@@ -955,6 +1065,10 @@ class _ConvolutionUniverseAttributionModel(torch.nn.Module):
         z = source.shift(source._to_bcl(X))
         source.output_length(z.shape[-1])
         z = source.tower(z)
+        if self.recurrent is None:
+            assert self.pool is not None
+            prediction = source.head(self.pool(z))
+            return prediction[:, 0] if source.output_dim == 1 else prediction
         z = source.pre_rnn_activation(source.pre_rnn_norm(z)).transpose(1, 2)
         if source.rnn_reverse:
             z = torch.flip(z, dims=[1])
@@ -971,7 +1085,9 @@ def _adapt_attribution_model(model: torch.nn.Module) -> torch.nn.Module:
         return _SalukiExactAttributionModel(model)
     if isinstance(model, SalukiCNNHybrid):
         return _SalukiCNNHybridAttributionModel(model)
-    if isinstance(model, ConvolutionUniverse) and model.rnn is not None:
+    if isinstance(model, SmallCNN):
+        return _SmallCNNAttributionModel(model)
+    if isinstance(model, ConvolutionUniverse):
         return _ConvolutionUniverseAttributionModel(model)
     return model
 
@@ -1129,8 +1245,8 @@ def _local_ig_operations(model: torch.nn.Module, points: int) -> dict[type, Call
         operations[_RecurrentSummary] = integrated_gradients_op(K=points, name="recurrent")
     if SELayer in module_types:
         operations[SELayer] = integrated_gradients_op(K=points, name="squeeze_excitation")
-    if _MaxMeanPool in module_types:
-        operations[_MaxMeanPool] = integrated_gradients_op(K=points, name="max_mean_pool")
+    if _AdaptiveMaxPool1d in module_types:
+        operations[_AdaptiveMaxPool1d] = _adaptive_max_pool_rescale
     return operations
 
 

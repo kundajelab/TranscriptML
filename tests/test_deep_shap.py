@@ -17,13 +17,16 @@ from transcriptml.interpret.deep_shap import (
     ReferenceDiagnostic,
     ReferenceEvaluation,
     ReferenceGenerator,
+    _AdaptiveMaxPool1d,
     _RecurrentSummary,
     _TargetPredictor,
+    _adaptive_max_pool_rescale,
     _adapt_attribution_model,
     compute_deep_shap_attributions,
     evaluate_references,
 )
 from transcriptml.interpret.predictor import Predictor
+from transcriptml.models.cnn import SmallCNN
 from transcriptml.models.legnet import LegNet
 from transcriptml.models.reproduce import SalukiExact
 from transcriptml.models.registry import save_checkpoint
@@ -390,6 +393,102 @@ def test_other_recurrent_attribution_adapters_preserve_predictions():
             torch.testing.assert_close(_adapt_attribution_model(model)(X), model(X))
 
 
+@pytest.mark.parametrize("in_ch,output_dim", [(4, 1), (6, 2)])
+def test_small_cnn_attribution_adapter_preserves_predictions(in_ch, output_dim):
+    torch.manual_seed(33)
+    X = _random_ohe(2, 20, seed=34)
+    if in_ch == 6:
+        X = np.concatenate((X, np.zeros((2, 2, 20), dtype=np.float32)), axis=1)
+    values = torch.tensor(X)
+    model = SmallCNN(
+        in_ch=in_ch,
+        n_filters=3,
+        kernel_size=3,
+        n_layers=2,
+        dropout=0,
+        head_hidden=4,
+        output_dim=output_dim,
+    ).eval()
+    with torch.no_grad():
+        torch.testing.assert_close(_adapt_attribution_model(model)(values), model(values))
+
+
+@pytest.mark.parametrize("global_pool", ["avg", "max", "avgmax"])
+@pytest.mark.parametrize("global_pool_size", [1, 2])
+@pytest.mark.parametrize("block_type", ["conv", "convnext"])
+def test_pure_universe_attribution_adapter_preserves_predictions(
+    global_pool, global_pool_size, block_type
+):
+    torch.manual_seed(35)
+    X = torch.tensor(
+        np.concatenate(
+            (_random_ohe(2, 24, seed=36), np.zeros((2, 2, 24), dtype=np.float32)),
+            axis=1,
+        )
+    )
+    model = ConvolutionUniverse(
+        in_ch=6,
+        output_dim=2,
+        filters=4,
+        num_layers=2,
+        stem_kernel_size=3,
+        block_type=block_type,
+        kernel_size=3,
+        dilations=(1, 2),
+        use_residual=True,
+        pooling=("max", "avg"),
+        pool_size=2,
+        dropout=0,
+        drop_path_rate=0,
+        rnn_type="none",
+        global_pool=global_pool,
+        global_pool_size=global_pool_size,
+        head_hidden=4,
+        head_dropout=0,
+    ).eval()
+    with torch.no_grad():
+        torch.testing.assert_close(_adapt_attribution_model(model)(X), model(X))
+
+
+def _assert_adaptive_max_rule(device: str) -> None:
+    module = _AdaptiveMaxPool1d(3).to(device)
+    observed = torch.tensor([[[3.0, 1.0, 2.0, 0.0]]], device=device)
+    reference = torch.tensor([[[0.0, 4.0, 2.0, 0.0]]], device=device)
+    inputs = torch.cat((observed, reference), dim=0)
+    outputs = module(inputs)
+    module.input = inputs
+    module.output = outputs
+    grad_input = (torch.ones_like(inputs),)
+    grad_output = (torch.ones_like(outputs),)
+    multipliers = _adaptive_max_pool_rescale(module, grad_input, grad_output)[0]
+
+    delta_input = observed - reference
+    expected_delta = module(observed).sum() - module(reference).sum()
+    observed_delta = (multipliers[:1] * delta_input).sum()
+    torch.testing.assert_close(observed_delta, expected_delta)
+    torch.testing.assert_close(multipliers[:1], multipliers[1:])
+
+    identical = torch.cat((observed, observed), dim=0)
+    module.input = identical
+    module.output = module(identical)
+    fallback = torch.full_like(identical, 0.25)
+    zero_delta_multipliers = _adaptive_max_pool_rescale(
+        module,
+        (fallback,),
+        (torch.ones_like(module.output),),
+    )[0]
+    torch.testing.assert_close(zero_delta_multipliers, fallback)
+
+
+def test_adaptive_max_rule_handles_overlap_winner_changes_ties_and_zero_deltas():
+    _assert_adaptive_max_rule("cpu")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_adaptive_max_rule_supports_cuda():
+    _assert_adaptive_max_rule("cuda")
+
+
 def test_saluki_exact_adapter_exposes_functional_head_relu_modules():
     model = SalukiExact(
         filters=3,
@@ -454,6 +553,100 @@ def test_tiny_saluki_deep_shap_converges_and_preserves_actual_relation():
     assert evaluation.diagnostics[0].convergence_absolute_error is not None
     assert evaluation.diagnostics[0].convergence_pass is True
     assert evaluation.diagnostics[0].ig_points_used in {8, 16}
+
+
+def test_small_cnn_and_pure_universe_deep_shap_converge_without_pooling_warnings():
+    universe_common = dict(
+        in_ch=6,
+        output_dim=2,
+        filters=3,
+        num_layers=1,
+        stem_kernel_size=3,
+        kernel_size=3,
+        dilations=1,
+        use_residual=False,
+        pooling="none",
+        dropout=0,
+        rnn_type="none",
+        head_hidden=3,
+        head_dropout=0,
+    )
+    cases = [
+        (
+            "small-cnn",
+            lambda: SmallCNN(
+                in_ch=4,
+                n_filters=3,
+                kernel_size=3,
+                n_layers=1,
+                dropout=0,
+                head_hidden=3,
+                output_dim=2,
+            ),
+            "rna4",
+        )
+    ]
+    for global_pool in ("avg", "max", "avgmax"):
+        for global_pool_size in (1, 2):
+            cases.append(
+                (
+                    f"universe-{global_pool}-{global_pool_size}",
+                    lambda global_pool=global_pool, global_pool_size=global_pool_size: (
+                        ConvolutionUniverse(
+                            **universe_common,
+                            global_pool=global_pool,
+                            global_pool_size=global_pool_size,
+                        )
+                    ),
+                    "saluki6",
+                )
+            )
+
+    for seed in (0, 1):
+        for name, factory, schema in cases:
+            torch.manual_seed(seed)
+            X = _random_ohe(1, 24, seed=100 + seed)
+            if schema == "saluki6":
+                X = np.concatenate(
+                    (X, np.zeros((1, 2, 24), dtype=np.float32)), axis=1
+                )
+            model = factory().eval()
+            predictor = Predictor(model, device="cpu", batch_size=3)
+            generator = ReferenceGenerator(
+                ReferenceConfig(n_references=3, seed=200 + seed), schema=schema
+            )
+            evaluation = evaluate_references(
+                X,
+                _TargetPredictor(predictor, target=1, batch_size=3),
+                generator,
+                confidence_threshold=0.0,
+                progress=False,
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = compute_deep_shap_attributions(
+                    X,
+                    predictor,
+                    generator,
+                    evaluation,
+                    target=1,
+                    attribution_batch_size=3,
+                    ig_points=8,
+                    max_ig_points=32,
+                    progress=False,
+                )
+
+            diagnostic = evaluation.diagnostics[0]
+            assert diagnostic.convergence_pass is True, name
+            assert diagnostic.convergence_warning_count == 0, name
+            assert diagnostic.ig_points_used == 8, name
+            assert result.unresolved_convergence_indices.size == 0, name
+            assert not any("treated as linear" in str(item.message) for item in caught), name
+            np.testing.assert_allclose(
+                result.high_confidence_actual_attributions,
+                result.high_confidence_hypothetical_attributions * X[:, :4],
+                atol=1e-6,
+            )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for cuDNN RNN")

@@ -404,6 +404,11 @@ separates transcripts by how consistently the selected reference distribution
 changes the model prediction. This label is a diagnostic for comparing
 attribution maps, not a statistically calibrated confidence estimate.
 
+The attribution backend includes model-specific DeepLIFT rules for Saluki,
+MPRA-LegNet, `SmallCNN`, and recurrent or pure-CNN `ConvolutionUniverse`
+checkpoints. Pure-CNN Universe models support `avg`, `max`, and `avgmax` global
+pooling with any configured `global_pool_size`.
+
 For Saluki, only A/C/G/U vary. The CDS-frame and splice-junction channels remain
 fixed for every reference. The default makes 20 reproducible mononucleotide
 shuffles of the complete valid transcript; padding is never shuffled:
