@@ -9,10 +9,13 @@ stages regenerate identical tensors without retaining a potentially enormous
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import csv
 import json
 import math
 import os
+import re
 import tempfile
 import time
 import warnings
@@ -23,7 +26,7 @@ from typing import Callable, Literal, Sequence
 import numpy as np
 import torch
 from tangermeme import __version__ as tangermeme_version
-from tangermeme.deep_lift_shap import deep_lift_shap, integrated_gradients_op
+from tangermeme.deep_lift_shap import BilinearOp, deep_lift_shap, integrated_gradients_op
 from tangermeme.ersatz import dinucleotide_shuffle, shuffle
 from tangermeme.predict import predict as tangermeme_predict
 
@@ -53,7 +56,7 @@ from transcriptml.interpret.codon_ism import (
 )
 from transcriptml.interpret.predictor import EnsemblePredictor, Predictor
 from transcriptml.models.cnn import SmallCNN
-from transcriptml.models.legnet import LegNet, SELayer
+from transcriptml.models.legnet import EffBlock, LegNet, ResidualConcat, SELayer
 from transcriptml.models.reproduce import SalukiExact
 from transcriptml.models.saluki import SalukiLike
 from transcriptml.models.saluki_cnn import (
@@ -447,19 +450,35 @@ class ReferenceEvaluation:
         return {row.sequence_index: row for row in self.diagnostics}
 
 
+@contextlib.contextmanager
+def _ieee_fp32_precision():
+    """Temporarily disable CUDA TensorFloat-32 so linear layers satisfy DeepLIFT conservation."""
+
+    cudnn_tf32 = torch.backends.cudnn.allow_tf32
+    matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.allow_tf32 = cudnn_tf32
+        torch.backends.cuda.matmul.allow_tf32 = matmul_tf32
+
+
 def _predict_values(
     predictor: Predictor | EnsemblePredictor | Callable[[np.ndarray], np.ndarray],
     X: np.ndarray,
     *,
     batch_size: int | None,
 ) -> np.ndarray:
-    if hasattr(predictor, "predict"):
-        try:
-            values = predictor.predict(X, batch_size=batch_size)  # type: ignore[attr-defined]
-        except TypeError:
-            values = predictor.predict(X)  # type: ignore[attr-defined]
-    else:
-        values = predictor(X)
+    with _ieee_fp32_precision():
+        if hasattr(predictor, "predict"):
+            try:
+                values = predictor.predict(X, batch_size=batch_size)  # type: ignore[attr-defined]
+            except TypeError:
+                values = predictor.predict(X)  # type: ignore[attr-defined]
+        else:
+            values = predictor(X)
     return np.asarray(values, dtype=np.float32).reshape(-1)
 
 
@@ -826,6 +845,8 @@ class _RecurrentSummary(torch.nn.Module):
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         output, state = self._forward_recurrent(X)
+        if self.summary == "sequence":
+            return output.transpose(1, 2)
         if self.summary == "output-last":
             return output[:, -1, :]
         if self.summary == "mean":
@@ -1039,6 +1060,55 @@ class _SalukiCNNHybridAttributionModel(torch.nn.Module):
         return prediction[:, 0] if source.output_dim == 1 else prediction
 
 
+class _SELayerAttribution(torch.nn.Module):
+    """Checkpoint-preserving squeeze-excitation block using an exact bilinear product rule."""
+
+    def __init__(self, source: SELayer) -> None:
+        super().__init__()
+        self.fc = source.fc
+        self.multiply = BilinearOp("...,...->...")
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        batch, channels, _ = X.size()
+        weights = self.fc(X.mean(dim=2)).view(batch, channels, 1)
+        return self.multiply(X, weights)
+
+
+def _replace_se_layers(module: torch.nn.Module) -> torch.nn.Module:
+    if isinstance(module, SELayer):
+        return _SELayerAttribution(module)
+    if isinstance(module, ResidualConcat):
+        return ResidualConcat(_replace_se_layers(module.fn))
+    if isinstance(module, EffBlock):
+        adapted = copy.copy(module)
+        adapted._modules = module._modules.copy()
+        adapted.block = torch.nn.Sequential(
+            *(_replace_se_layers(child) for child in module.block)
+        )
+        return adapted
+    if isinstance(module, torch.nn.Sequential):
+        return torch.nn.Sequential(*(_replace_se_layers(child) for child in module))
+    return module
+
+
+class _LegNetAttributionModel(torch.nn.Module):
+    """Checkpoint-preserving LegNet with exact bilinear squeeze-excitation attribution."""
+
+    def __init__(self, source: LegNet) -> None:
+        super().__init__()
+        self.stem = source.stem
+        self.main = _replace_se_layers(source.main)
+        self.mapper = source.mapper
+        self.head = source.head
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        z = self.stem(X.float())
+        z = self.main(z)
+        z = self.mapper(z)
+        z = torch.nn.functional.adaptive_avg_pool1d(z, 1).squeeze(-1)
+        return self.head(z).squeeze(-1)
+
+
 class _ConvolutionUniverseAttributionModel(torch.nn.Module):
     def __init__(self, source: ConvolutionUniverse) -> None:
         super().__init__()
@@ -1048,15 +1118,23 @@ class _ConvolutionUniverseAttributionModel(torch.nn.Module):
             if source.rnn is None
             else None
         )
+        recurrent_summary = (
+            "sequence" if source.rnn_summary == "max" else source.rnn_summary
+        )
         self.recurrent = (
             _RecurrentSummary(
                 source.rnn,
-                summary=source.rnn_summary,
+                summary=recurrent_summary,
                 layers=source.rnn_layers,
                 bidirectional=source.rnn_bidirectional,
                 recurrent_type=source.rnn_type,
             )
             if source.rnn is not None
+            else None
+        )
+        self.recurrent_pool = (
+            _AdaptiveMaxPool1d(1)
+            if source.rnn is not None and source.rnn_summary == "max"
             else None
         )
 
@@ -1072,13 +1150,18 @@ class _ConvolutionUniverseAttributionModel(torch.nn.Module):
         z = source.pre_rnn_activation(source.pre_rnn_norm(z)).transpose(1, 2)
         if source.rnn_reverse:
             z = torch.flip(z, dims=[1])
-        prediction = source.head(self.recurrent(z))
+        summary = self.recurrent(z)
+        if self.recurrent_pool is not None:
+            summary = self.recurrent_pool(summary).squeeze(-1)
+        prediction = source.head(summary)
         return prediction[:, 0] if source.output_dim == 1 else prediction
 
 
 def _adapt_attribution_model(model: torch.nn.Module) -> torch.nn.Module:
     """Return a checkpoint-preserving model with hookable coupled operations."""
 
+    if isinstance(model, LegNet):
+        return _LegNetAttributionModel(model)
     if isinstance(model, SalukiLike):
         return _SalukiLikeAttributionModel(model)
     if isinstance(model, SalukiExact):
@@ -1190,15 +1273,16 @@ class _TargetPredictor:
         resolved_batch_size = self.batch_size if batch_size is None else int(batch_size)
         if resolved_batch_size <= 0:
             raise ValueError("batch_size must be positive")
-        output = tangermeme_predict(
-            self.model,
-            values,
-            func=select_target,
-            batch_size=resolved_batch_size,
-            dtype=torch.float32,
-            device=self.device,
-            verbose=False,
-        )
+        with _ieee_fp32_precision():
+            output = tangermeme_predict(
+                self.model,
+                values,
+                func=select_target,
+                batch_size=resolved_batch_size,
+                dtype=torch.float32,
+                device=self.device,
+                verbose=False,
+            )
         assert isinstance(output, torch.Tensor)
         return output.numpy().astype(np.float32, copy=False)
 
@@ -1238,6 +1322,15 @@ def _allocate_attributions(
     )
 
 
+_LOCAL_IG_MODULE_TYPES = (_RecurrentSummary, SELayer)
+
+
+def _uses_local_ig(model: torch.nn.Module) -> bool:
+    """Return whether ``model`` contains any submodule attributed via local IG."""
+
+    return any(isinstance(module, _LOCAL_IG_MODULE_TYPES) for module in model.modules())
+
+
 def _local_ig_operations(model: torch.nn.Module, points: int) -> dict[type, Callable]:
     operations: dict[type, Callable] = {}
     module_types = {type(module) for module in model.modules()}
@@ -1250,9 +1343,33 @@ def _local_ig_operations(model: torch.nn.Module, points: int) -> dict[type, Call
     return operations
 
 
+_RELATIVE_CONVERGENCE_WARNING_RE = re.compile(
+    r"Convergence deltas are\s+([0-9]+(?:\.[0-9]+)?)%\s+of the output differences"
+)
+
+
 def _is_convergence_warning(message: Warning) -> bool:
     text = str(message)
     return "Convergence deltas" in text or "of the output differences" in text
+
+
+def _is_actionable_convergence_warning(
+    message: Warning,
+    *,
+    atol: float,
+    rtol: float,
+    scale: float,
+) -> bool:
+    text = str(message)
+    if not _is_convergence_warning(message):
+        return False
+    if "of the output differences" in text:
+        match = _RELATIVE_CONVERGENCE_WARNING_RE.search(text)
+        if match is not None:
+            reported_relative = float(match.group(1)) / 100.0
+            allowed_relative = float(rtol) + float(atol) / max(float(scale), 1e-12)
+            return reported_relative > allowed_relative
+    return True
 
 
 def _is_padding_warning(message: Warning) -> bool:
@@ -1352,6 +1469,15 @@ def compute_deep_shap_attributions(
         expected_delta = float(
             diagnostic.original_prediction - float(diagnostic.reference_prediction_mean)
         )
+        tolerance = float(convergence_atol) + float(convergence_rtol) * abs(expected_delta)
+        pairwise_scale = max(
+            abs(expected_delta),
+            float(diagnostic.mean_absolute_prediction_difference or 0.0),
+        )
+        pairwise_threshold = (
+            float(convergence_atol) + float(convergence_rtol) * pairwise_scale
+        )
+        has_local_ig = _uses_local_ig(prepared.model)
         points = int(ig_points)
         final_hyp: np.ndarray | None = None
         final_actual: np.ndarray | None = None
@@ -1371,7 +1497,7 @@ def compute_deep_shap_attributions(
                 (module, module.training) for module in prepared.model.modules()
             ]
             try:
-                with warnings.catch_warnings(record=True) as caught:
+                with _ieee_fp32_precision(), warnings.catch_warnings(record=True) as caught:
                     warnings.simplefilter("always")
                     attributed = deep_lift_shap(
                         prepared.model,
@@ -1381,7 +1507,7 @@ def compute_deep_shap_attributions(
                         batch_size=int(attribution_batch_size),
                         references=references,
                         hypothetical=True,
-                        warning_threshold=float(convergence_atol),
+                        warning_threshold=pairwise_threshold,
                         additional_nonlinear_ops=operations or None,
                         only_warn=contains_padding,
                         dtype=torch.float32,
@@ -1395,7 +1521,14 @@ def compute_deep_shap_attributions(
                 for module, training in training_modes:
                     module.training = training
             pairwise_messages = [
-                str(item.message) for item in caught if _is_convergence_warning(item.message)
+                str(item.message)
+                for item in caught
+                if _is_actionable_convergence_warning(
+                    item.message,
+                    atol=float(convergence_atol),
+                    rtol=float(convergence_rtol),
+                    scale=pairwise_scale,
+                )
             ]
             all_pairwise_messages.extend(
                 f"K={points}: {message}" for message in pairwise_messages
@@ -1412,13 +1545,12 @@ def compute_deep_shap_attributions(
             actual = hyp * np.asarray(arr[sequence_index, :4], dtype=np.float32)
             attribution_sum = float(np.sum(actual, dtype=np.float64))
             absolute_error = abs(attribution_sum - expected_delta)
-            tolerance = float(convergence_atol) + float(convergence_rtol) * abs(expected_delta)
             relative_error = absolute_error / max(
                 abs(expected_delta), float(convergence_atol), 1e-12
             )
             convergence_pass = absolute_error <= tolerance and not pairwise_warning
             final_hyp, final_actual = hyp, actual
-            if convergence_pass or points >= int(max_ig_points) or not operations:
+            if convergence_pass or points >= int(max_ig_points) or not has_local_ig:
                 break
             points = min(points * 2, int(max_ig_points))
 

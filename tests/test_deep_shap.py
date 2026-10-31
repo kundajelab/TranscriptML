@@ -18,16 +18,21 @@ from transcriptml.interpret.deep_shap import (
     ReferenceEvaluation,
     ReferenceGenerator,
     _AdaptiveMaxPool1d,
+    _LegNetAttributionModel,
     _RecurrentSummary,
+    _SELayerAttribution,
     _TargetPredictor,
     _adaptive_max_pool_rescale,
     _adapt_attribution_model,
+    _ieee_fp32_precision,
+    _local_ig_operations,
+    _uses_local_ig,
     compute_deep_shap_attributions,
     evaluate_references,
 )
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.models.cnn import SmallCNN
-from transcriptml.models.legnet import LegNet
+from transcriptml.models.legnet import LegNet, SELayer
 from transcriptml.models.reproduce import SalukiExact
 from transcriptml.models.registry import save_checkpoint
 from transcriptml.models.saluki import SalukiLike
@@ -950,3 +955,202 @@ def test_deep_shap_cli_defaults():
         ]
     )
     assert slice_args.all_channels is True
+
+
+def test_ieee_fp32_precision_disables_and_restores_tf32():
+    orig_cudnn = torch.backends.cudnn.allow_tf32
+    orig_matmul = torch.backends.cuda.matmul.allow_tf32
+    try:
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        with _ieee_fp32_precision():
+            assert torch.backends.cudnn.allow_tf32 is False
+            assert torch.backends.cuda.matmul.allow_tf32 is False
+        assert torch.backends.cudnn.allow_tf32 is True
+        assert torch.backends.cuda.matmul.allow_tf32 is True
+    finally:
+        torch.backends.cudnn.allow_tf32 = orig_cudnn
+        torch.backends.cuda.matmul.allow_tf32 = orig_matmul
+
+
+def test_legnet_adapter_uses_exact_bilinear_se_without_local_ig():
+    torch.manual_seed(44)
+    legnet = LegNet(
+        stem_ch=4,
+        stem_ks=3,
+        ef_ks=3,
+        ef_block_sizes=(4,),
+        pool_sizes=(2,),
+        resize_factor=2,
+        head_dropout=0,
+    ).eval()
+    adapted = _adapt_attribution_model(legnet)
+    assert isinstance(adapted, _LegNetAttributionModel)
+    assert any(isinstance(module, SELayer) for module in legnet.modules())
+    assert not any(isinstance(module, SELayer) for module in adapted.modules())
+    assert any(isinstance(module, _SELayerAttribution) for module in adapted.modules())
+    assert _uses_local_ig(adapted) is False
+    assert _local_ig_operations(adapted, 8) == {}
+
+    X = _random_ohe(1, 16, seed=45)
+    predictor = Predictor(legnet, device="cpu", batch_size=2)
+    generator = ReferenceGenerator(
+        ReferenceConfig(strategy="full-mono", n_references=3, seed=46), schema="rna4"
+    )
+    evaluation = evaluate_references(
+        X,
+        _TargetPredictor(predictor, target=0, batch_size=2),
+        generator,
+        confidence_threshold=0.0,
+        progress=False,
+    )
+    result = compute_deep_shap_attributions(
+        X,
+        predictor,
+        generator,
+        evaluation,
+        attribution_batch_size=3,
+        ig_points=8,
+        max_ig_points=32,
+        convergence_atol=1e-5,
+        convergence_rtol=1e-4,
+        progress=False,
+    )
+    diagnostic = evaluation.diagnostics[0]
+    assert diagnostic.convergence_pass is True
+    assert diagnostic.convergence_warning_count == 0
+    assert diagnostic.ig_points_used == 8
+    assert diagnostic.convergence_absolute_error is not None
+    assert diagnostic.convergence_absolute_error < 1e-5
+    assert result.unresolved_convergence_indices.size == 0
+
+
+def test_convolution_universe_rnn_max_separates_max_pool_from_local_ig():
+    torch.manual_seed(51)
+    model = ConvolutionUniverse(
+        in_ch=6,
+        filters=4,
+        num_layers=1,
+        stem_kernel_size=3,
+        kernel_size=3,
+        dilations=1,
+        use_residual=False,
+        pooling="none",
+        dropout=0,
+        rnn_type="gru",
+        rnn_hidden=4,
+        rnn_summary="max",
+        head_hidden=4,
+        head_dropout=0,
+    ).eval()
+    adapted = _adapt_attribution_model(model)
+    assert adapted.recurrent is not None
+    assert adapted.recurrent.summary == "sequence"
+    assert isinstance(adapted.recurrent_pool, _AdaptiveMaxPool1d)
+
+    X = np.concatenate(
+        (_random_ohe(1, 16, seed=52), np.zeros((1, 2, 16), dtype=np.float32)),
+        axis=1,
+    )
+    with torch.no_grad():
+        torch.testing.assert_close(adapted(torch.tensor(X)), model(torch.tensor(X)))
+
+    predictor = Predictor(model, device="cpu", batch_size=4)
+    generator = ReferenceGenerator(
+        ReferenceConfig(strategy="full-mono", n_references=3, seed=53), schema="saluki6"
+    )
+    evaluation = evaluate_references(
+        X,
+        _TargetPredictor(predictor, target=0, batch_size=4),
+        generator,
+        confidence_threshold=0.0,
+        progress=False,
+    )
+    result = compute_deep_shap_attributions(
+        X,
+        predictor,
+        generator,
+        evaluation,
+        attribution_batch_size=3,
+        ig_points=8,
+        max_ig_points=32,
+        convergence_atol=1e-4,
+        convergence_rtol=1e-3,
+        progress=False,
+    )
+    diagnostic = evaluation.diagnostics[0]
+    assert diagnostic.convergence_pass is True
+    assert diagnostic.convergence_warning_count == 0
+    assert result.unresolved_convergence_indices.size == 0
+
+
+def test_pairwise_threshold_scaling_and_non_local_ig_no_retry(monkeypatch):
+    import transcriptml.interpret.deep_shap as deep_shap_module
+
+    model = SmallCNN(
+        in_ch=4,
+        n_filters=3,
+        kernel_size=3,
+        n_layers=1,
+        dropout=0,
+        head_hidden=3,
+        output_dim=1,
+    ).eval()
+    X = _random_ohe(1, 12, seed=60)
+    generator = ReferenceGenerator(
+        ReferenceConfig(n_references=2, seed=61), schema="rna4"
+    )
+    diagnostic = ReferenceDiagnostic(
+        sequence_index=0,
+        sequence_id="0",
+        strategy="full-mono",
+        eligible=True,
+        eligibility_reason=None,
+        n_references=2,
+        original_prediction=2.0,
+        reference_prediction_mean=0.0,
+        mean_absolute_prediction_difference=3.0,
+        confidence_classification="high_confidence",
+        valid_length=12,
+    )
+    evaluation = ReferenceEvaluation(
+        sequence_indices=np.asarray([0]),
+        diagnostics=[diagnostic],
+        original_predictions=np.asarray([2.0], dtype=np.float32),
+        high_confidence_indices=np.asarray([0]),
+        low_confidence_indices=np.empty(0, dtype=np.int64),
+        ineligible_indices=np.empty(0, dtype=np.int64),
+        confidence_threshold=0.95,
+        minimum_effect_size=None,
+        zero_atol=1e-6,
+    )
+    thresholds = []
+
+    def fake_deep_lift(_model, sequences, **kwargs):
+        thresholds.append(kwargs["warning_threshold"])
+        warnings.warn(
+            "Convergence deltas are 1.2% of the output differences: "
+            "an operation in the model has no DeepLIFT rule and is being treated as linear.",
+            RuntimeWarning,
+        )
+        return torch.zeros_like(sequences)
+
+    monkeypatch.setattr(deep_shap_module, "deep_lift_shap", fake_deep_lift)
+    with pytest.warns(RuntimeWarning, match="remained outside tolerance"):
+        compute_deep_shap_attributions(
+            X,
+            Predictor(model, device="cpu"),
+            generator,
+            evaluation,
+            ig_points=8,
+            max_ig_points=32,
+            convergence_atol=1e-3,
+            convergence_rtol=0.02,
+            progress=False,
+        )
+    assert len(thresholds) == 1
+    assert thresholds[0] == pytest.approx(1e-3 + 0.02 * 3.0)
+    assert diagnostic.convergence_pairwise_warning is False
+    assert diagnostic.convergence_warning_count == 0
+    assert diagnostic.ig_points_used == 8
+
