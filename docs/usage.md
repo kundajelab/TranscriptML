@@ -199,6 +199,8 @@ runs/saluki_cv10/fold0/
   model/best.pt
   model/last.pt
   model/history.json
+  model/loss_curve.png
+  model/pearson_curve.png
   model/summary.json
   model/test_predictions.csv
   eval/test_predictions.csv

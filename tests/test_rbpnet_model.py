@@ -377,6 +377,10 @@ def test_group_split_and_structured_training_profile_only_and_enrichment(tmp_pat
     assert profile["summary"]["trainer"] == "rbpnet"
     assert profile["summary"]["loss"]["effective_lambda_enrichment"] == 0
     assert np.isfinite(profile["history"][0]["train_loss"])
+    assert (tmp_path / "profile" / "loss_curve.png").is_file()
+    assert (tmp_path / "profile" / "ip_profile_loss_curve.png").is_file()
+    assert (tmp_path / "profile" / "sm_profile_loss_curve.png").is_file()
+    assert not (tmp_path / "profile" / "enrichment_loss_curve.png").exists()
 
     enrichment_config = dict(base_config)
     enrichment_config["output_dir"] = str(tmp_path / "enrichment")
@@ -389,6 +393,10 @@ def test_group_split_and_structured_training_profile_only_and_enrichment(tmp_pat
     assert np.isfinite(enriched["history"][0]["train_enrichment_loss"])
     assert (tmp_path / "enrichment" / "best.pt").is_file()
     assert (tmp_path / "enrichment" / "test_predictions.csv").is_file()
+    assert (tmp_path / "enrichment" / "loss_curve.png").is_file()
+    assert (tmp_path / "enrichment" / "ip_profile_loss_curve.png").is_file()
+    assert (tmp_path / "enrichment" / "sm_profile_loss_curve.png").is_file()
+    assert (tmp_path / "enrichment" / "enrichment_loss_curve.png").is_file()
 
     bundle_dir = tmp_path / "bundle"
     # Deliberately disagree with the checkpoint: RBPNet evaluation must use

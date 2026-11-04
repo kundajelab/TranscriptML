@@ -17,6 +17,7 @@ from transcriptml.data.controls import apply_sequence_controls_to_bundle
 from transcriptml.devices import resolve_device
 from transcriptml.models.common import squeeze_prediction
 from transcriptml.models.registry import build_model, normalize_model_config, save_checkpoint
+from transcriptml.plotting.training import plot_training_history
 from transcriptml.training.evaluation import evaluate_model, predict_to_csv
 from transcriptml.training.losses import TrainingLoss, build_training_loss
 from transcriptml.training.metrics import pearson_corr
@@ -761,6 +762,12 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             log_progress(f"early stopping after epoch {epoch}: patience exceeded", enabled=cfg.progress)
             break
     (out / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    plot_training_history(
+        history,
+        out,
+        loss_name=str(normalized_loss_config["name"]),
+        best_epoch=best_epoch,
+    )
     (out / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
 
     # Well there's a chance there is none, so kind of weird...

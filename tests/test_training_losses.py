@@ -143,6 +143,10 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
     assert "best_monitors" not in result["summary"]
     assert result["summary"]["test_loss"] == pytest.approx(result["summary"]["test_mse"])
     assert (tmp_path / "best.pt").exists()
+    assert (tmp_path / "loss_curve.png").is_file()
+    assert (tmp_path / "loss_curve.png").stat().st_size > 0
+    assert (tmp_path / "pearson_curve.png").is_file()
+    assert (tmp_path / "pearson_curve.png").stat().st_size > 0
     assert not (tmp_path / "debug_epoch_predictions.csv").exists()
 
 
@@ -353,3 +357,34 @@ def test_train_model_binomial_nll_can_train_without_targets(tmp_path):
     assert result["summary"]["loss"]["name"] == "binomial_nll"
     assert result["summary"]["test_mse"] is None
     assert math.isnan(result["history"][0]["train_pearson"])
+    assert (tmp_path / "loss_curve.png").is_file()
+    assert (tmp_path / "loss_curve.png").stat().st_size > 0
+    assert not (tmp_path / "pearson_curve.png").exists()
+
+
+def test_train_model_loss_curve_written_without_validation_split(tmp_path):
+    bundle = DatasetBundle(
+        X=_tiny_x(6),
+        y=np.linspace(-1.0, 1.0, 6, dtype=np.float32),
+        schema="rna4",
+        splits={"train": [0, 1, 2, 3, 4], "val": [], "test": [5]},
+    )
+
+    result = train_model(
+        bundle,
+        {
+            "dataset": "unused",
+            "output_dir": str(tmp_path),
+            "model": _tiny_model_config(),
+            "batch_size": 2,
+            "epochs": 2,
+            "patience": -1,
+            "progress": False,
+        },
+    )
+
+    assert math.isnan(result["history"][0]["val_loss"])
+    assert (tmp_path / "loss_curve.png").is_file()
+    assert (tmp_path / "loss_curve.png").stat().st_size > 0
+    assert (tmp_path / "pearson_curve.png").is_file()
+    assert (tmp_path / "pearson_curve.png").stat().st_size > 0

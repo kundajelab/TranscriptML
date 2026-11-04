@@ -16,6 +16,7 @@ from transcriptml.data.bundle import DatasetBundle
 from transcriptml.devices import resolve_device
 from transcriptml.models.rbpnet import RBPNet
 from transcriptml.models.registry import build_model, normalize_model_config, save_checkpoint
+from transcriptml.plotting.training import plot_training_history
 from transcriptml.progress import ProgressReporter, log_progress
 from transcriptml.rbpnet.dataset import (
     RBPNetBatch,
@@ -655,6 +656,13 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
             replicate_names=eval_dataset.replicate_names,
         )
     (out / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    plot_training_history(
+        history,
+        out,
+        loss_name="rbpnet",
+        best_epoch=best_epoch,
+        include_enrichment=model.enrichment_enabled,
+    )
     (out / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
     summary = {
         "trainer": "rbpnet",

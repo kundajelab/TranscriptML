@@ -634,7 +634,10 @@ both the plan path and its validated `plan_id` in summaries and checkpoints.
 AdamW, Adam, and SGD; plateau, cosine, and step schedulers; clipping; early
 stopping; device selection; DataLoader workers; seeds; and mixed precision are
 configurable. `history.json` logs total, pooled-IP profile, SMInput profile, and
-enrichment losses independently. `best.pt` and `last.pt` retain model, loss,
+enrichment losses independently, and training automatically writes
+`loss_curve.png`, `ip_profile_loss_curve.png`, `sm_profile_loss_curve.png`, and
+(when the enrichment head is enabled) `enrichment_loss_curve.png`. `best.pt` and
+`last.pt` retain model, loss,
 optimizer, samples, coordinate space, split, receptive-field, and training
 provenance. Evaluation CSVs contain `pi`, optional `eta`, and each replicate's
 depth-adjusted predicted IP fraction. The raw structured tensors remain
