@@ -25,6 +25,11 @@ from transcriptml.rbpnet.dataset import (
     deduplicate_locus_indices,
 )
 from transcriptml.rbpnet.losses import RBPNetLossConfig, RBPNetObjective
+from transcriptml.training.optim import (
+    SchedulerBundle,
+    build_optimizer as _build_optimizer,
+    build_scheduler,
+)
 from transcriptml.training.splits import (
     group_split_indices,
     normalize_splits,
@@ -32,63 +37,6 @@ from transcriptml.training.splits import (
     random_split_indices,
     validate_group_disjoint,
 )
-
-
-def _config_dict(value: str | Mapping[str, Any] | None, default_name: str) -> dict[str, Any]:
-    if value is None:
-        return {"name": default_name, "params": {}}
-    if isinstance(value, str):
-        return {"name": value, "params": {}}
-    result = dict(value)
-    params = dict(result.pop("params", {}) or {})
-    params.update(result)
-    return {"name": str(params.pop("name", default_name)).lower(), "params": params}
-
-
-def _build_optimizer(model: torch.nn.Module, cfg) -> tuple[torch.optim.Optimizer, dict[str, Any]]:
-    config = _config_dict(getattr(cfg, "optimizer", None), "adamw")
-    name = config["name"]
-    params = dict(config["params"])
-    params.setdefault("lr", float(cfg.learning_rate))
-    params.setdefault("weight_decay", float(cfg.weight_decay))
-    if name == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), **params)
-    elif name == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), **params)
-    elif name == "sgd":
-        optimizer = torch.optim.SGD(model.parameters(), **params)
-    else:
-        raise ValueError("RBPNet optimizer must be one of: adamw, adam, sgd")
-    return optimizer, {"name": name, "params": params}
-
-
-def _build_scheduler(
-    optimizer: torch.optim.Optimizer,
-    value: str | Mapping[str, Any] | None,
-    *,
-    epochs: int,
-) -> tuple[object | None, dict[str, Any] | None, bool]:
-    if value is None:
-        return None, None, False
-    config = _config_dict(value, "none")
-    name = config["name"]
-    params = dict(config["params"])
-    if name in {"none", "off", "disabled"}:
-        return None, {"name": "none", "params": {}}, False
-    if name in {"reduce_on_plateau", "plateau"}:
-        params.setdefault("mode", "min")
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **params)
-        return scheduler, {"name": "reduce_on_plateau", "params": params}, True
-    if name in {"cosine", "cosine_annealing"}:
-        params.setdefault("T_max", int(epochs))
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **params)
-        return scheduler, {"name": "cosine", "params": params}, False
-    if name in {"step", "step_lr"}:
-        params.setdefault("step_size", 10)
-        params.setdefault("gamma", 0.1)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, **params)
-        return scheduler, {"name": "step", "params": params}, False
-    raise ValueError("RBPNet lr_scheduler must be one of: none, reduce_on_plateau, cosine, step")
 
 
 def _build_grad_scaler(*, enabled: bool):
@@ -282,6 +230,7 @@ def _run_loader(
     device: torch.device,
     objective: RBPNetObjective,
     optimizer: torch.optim.Optimizer | None = None,
+    scheduler: SchedulerBundle | None = None,
     gradient_clip_norm: float | None = None,
     mixed_precision: bool = False,
     scaler: Any | None = None,
@@ -353,6 +302,8 @@ def _run_loader(
                             model.parameters(), float(gradient_clip_norm)
                         )
                     optimizer.step()
+                if scheduler is not None:
+                    scheduler.step_batch()
         for name in names:
             numerators[name] += float(loss_output.numerators[name].detach().cpu())
             denominators[name] += float(loss_output.denominators[name].detach().cpu())
@@ -507,11 +458,13 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
         pin_memory=pin_memory,
     )
     optimizer, optimizer_config = _build_optimizer(model, cfg)
-    scheduler, scheduler_config, scheduler_uses_metric = _build_scheduler(
+    scheduler_bundle = build_scheduler(
         optimizer,
         getattr(cfg, "lr_scheduler", None),
         epochs=int(cfg.epochs),
+        steps_per_epoch=0 if train_loader is None else len(train_loader),
     )
+    scheduler_config = scheduler_bundle.config
     mixed_precision = bool(getattr(cfg, "mixed_precision", False))
     if mixed_precision and device.type not in {"cpu", "cuda"}:
         raise ValueError("RBPNet mixed precision currently supports CPU and CUDA devices")
@@ -537,18 +490,22 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
     stale = 0
     for epoch in range(1, int(cfg.epochs) + 1):
         train_dataset.set_epoch(epoch)
+        epoch_lr = float(optimizer.param_groups[0]["lr"])
         train_metrics = _run_loader(
             model,
             train_loader,
             device=device,
             objective=objective,
             optimizer=optimizer,
+            scheduler=scheduler_bundle,
             gradient_clip_norm=cfg.gradient_clip_norm,
             mixed_precision=mixed_precision,
             scaler=scaler,
             progress=cfg.progress,
             progress_label=f"epoch {epoch} RBPNet train",
         )
+        if scheduler_bundle.step_mode == "batch":
+            epoch_lr = float(optimizer.param_groups[0]["lr"])
         val_metrics = _run_loader(
             model,
             val_loader,
@@ -560,7 +517,7 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
         )
         row: dict[str, float | int] = {
             "epoch": epoch,
-            "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "learning_rate": epoch_lr,
             "train_loss": float(train_metrics["loss"]),
             "val_loss": float(val_metrics["loss"]),
         }
@@ -612,11 +569,7 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
             optimizer_state=optimizer.state_dict(),
             extra=checkpoint_extra,
         )
-        if scheduler is not None:
-            metric = float(val_metrics["loss"])
-            if not np.isfinite(metric):
-                metric = float(train_metrics["loss"])
-            scheduler.step(metric) if scheduler_uses_metric else scheduler.step()
+        scheduler_bundle.step_epoch(row)
         log_progress(
             (
                 f"epoch {epoch}/{cfg.epochs}: train={row['train_loss']:.6g}, "
@@ -662,6 +615,7 @@ def train_rbpnet_model(bundle: DatasetBundle, cfg) -> dict[str, Any]:
         loss_name="rbpnet",
         best_epoch=best_epoch,
         include_enrichment=model.enrichment_enabled,
+        include_learning_rate=scheduler_bundle.enabled,
     )
     (out / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
     summary = {

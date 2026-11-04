@@ -21,6 +21,7 @@ from transcriptml.plotting.training import plot_training_history
 from transcriptml.training.evaluation import evaluate_model, predict_to_csv
 from transcriptml.training.losses import TrainingLoss, build_training_loss
 from transcriptml.training.metrics import pearson_corr
+from transcriptml.training.optim import SchedulerBundle, build_optimizer, build_scheduler
 from transcriptml.training.splits import normalize_splits, predefined_split_indices, random_split_indices
 from transcriptml.progress import ProgressReporter, log_progress
 
@@ -300,6 +301,7 @@ def _run_loader(
     device: torch.device,
     loss_fn: TrainingLoss,
     optimizer: torch.optim.Optimizer | None = None,
+    scheduler: SchedulerBundle | None = None,
     gradient_clip_norm: float | None = None,
     target_metrics: bool = True,
     progress: bool = True,
@@ -314,6 +316,8 @@ def _run_loader(
         device: Torch device used for tensors and model execution.
         loss_fn: Loss module used to compare predictions and targets.
         optimizer: Optional optimizer. When provided, gradients are updated.
+        scheduler: Optional scheduler bundle stepped after each training batch
+            when configured in batch mode.
         gradient_clip_norm: Optional positive norm for gradient clipping during
             training.
         target_metrics: Whether to compute target-based metrics such as
@@ -360,6 +364,8 @@ def _run_loader(
                 if gradient_clip_norm is not None and float(gradient_clip_norm) > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(gradient_clip_norm))
                 optimizer.step()
+                if scheduler is not None:
+                    scheduler.step_batch()
         loss_numerator += float(loss_output.numerator.detach().cpu().item())
         loss_denominator += float(loss_output.denominator.detach().cpu().item())
         preds.append(yhat.detach().cpu().numpy())
@@ -593,7 +599,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         enabled=cfg.progress,
     )
     model = build_model(model_config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+    optimizer, optimizer_config = build_optimizer(model, cfg)
     dataset = _ArrayRegressionDataset(bundle.X, y_train, aux_arrays)
     pin_memory = device.type == "cuda"
     drop_last_train = _has_batch_normalization(model) and _would_create_singleton_batch(
@@ -624,6 +630,12 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         num_workers=cfg.num_workers,
         pin_memory=pin_memory,
     )
+    scheduler_bundle = build_scheduler(
+        optimizer,
+        cfg.lr_scheduler,
+        epochs=int(cfg.epochs),
+        steps_per_epoch=0 if train_loader is None else len(train_loader),
+    )
     debug_train_loader = (
         _loader(
             dataset,
@@ -646,17 +658,21 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     stale = 0
     for epoch in range(1, cfg.epochs + 1):
         log_progress(f"epoch {epoch}/{cfg.epochs}: starting", enabled=cfg.progress)
+        epoch_lr = float(optimizer.param_groups[0]["lr"])
         train_metrics = _run_loader(
             model,
             train_loader,
             device=device,
             loss_fn=loss_fn,
             optimizer=optimizer,
+            scheduler=scheduler_bundle,
             gradient_clip_norm=cfg.gradient_clip_norm,
             target_metrics=has_targets,
             progress=cfg.progress,
             progress_label=f"epoch {epoch} train",
         )
+        if scheduler_bundle.step_mode == "batch":
+            epoch_lr = float(optimizer.param_groups[0]["lr"])
         val_metrics = _run_loader(
             model,
             val_loader,
@@ -670,6 +686,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         )
         row = {
             "epoch": epoch,
+            "learning_rate": epoch_lr,
             "train_loss": train_metrics["loss"],
             "train_pearson": train_metrics["pearson"],
             "val_loss": val_metrics["loss"],
@@ -713,6 +730,15 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
                 loss_name=str(normalized_loss_config["name"]),
                 monitor_improved=improved,
             )
+        checkpoint_extra = {
+            "splits": splits,
+            "split_source_used": split_source_used,
+            "cv_plan_id": cv_plan_id,
+            "train_config": asdict(cfg),
+            "loss_config": normalized_loss_config,
+            "optimizer_config": optimizer_config,
+            "lr_scheduler_config": scheduler_bundle.config,
+        }
         if improved:
             best_metrics = dict(monitor_values)
             best_epoch = epoch
@@ -724,13 +750,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
                 epoch=epoch,
                 metrics=row,
                 optimizer_state=optimizer.state_dict(),
-                extra={
-                    "splits": splits,
-                    "split_source_used": split_source_used,
-                    "cv_plan_id": cv_plan_id,
-                    "train_config": asdict(cfg),
-                    "loss_config": normalized_loss_config,
-                },
+                extra=checkpoint_extra,
             )
         else:
             stale += 1
@@ -741,14 +761,9 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
             epoch=epoch,
             metrics=row,
             optimizer_state=optimizer.state_dict(),
-            extra={
-                "splits": splits,
-                "split_source_used": split_source_used,
-                "cv_plan_id": cv_plan_id,
-                "train_config": asdict(cfg),
-                "loss_config": normalized_loss_config,
-            },
+            extra=checkpoint_extra,
         )
+        scheduler_bundle.step_epoch(row)
         log_progress(
             (
                 f"epoch {epoch}/{cfg.epochs}: "
@@ -767,6 +782,7 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         out,
         loss_name=str(normalized_loss_config["name"]),
         best_epoch=best_epoch,
+        include_learning_rate=scheduler_bundle.enabled,
     )
     (out / "splits.json").write_text(json.dumps(splits, indent=2), encoding="utf-8")
 
@@ -814,6 +830,8 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "best_monitor_values": best_metrics,
         "epochs_run": len(history),
         "loss": normalized_loss_config,
+        "optimizer": optimizer_config,
+        "lr_scheduler": scheduler_bundle.config,
         "split_source_requested": cfg.split_source,
         "split_source_used": split_source_used,
         "cv_plan": cfg.cv_plan,

@@ -187,10 +187,10 @@ above.
 | `model` | mapping or string | `small_cnn` | Registered model name and optional constructor parameters. Workflow starters explicitly select their model. |
 | `batch_size` | integer | `64` | Number of examples per optimizer or evaluation batch. A final singleton training batch is dropped because batch-normalized models cannot train on it reliably. |
 | `epochs` | integer | `20` | Maximum number of training epochs before early stopping. |
-| `learning_rate` | float | `0.001` | Learning rate. Structured RBPNet passes this to the selected optimizer unless overridden there. |
-| `weight_decay` | float | `0.0` | Weight-decay coefficient. |
-| `optimizer` | string or mapping | `"adamw"` | Structured RBPNet supports AdamW, Adam, and SGD, with optional optimizer parameters. Scalar workflows retain AdamW. |
-| `lr_scheduler` | string, mapping, or `null` | `null` | Structured RBPNet supports plateau, cosine, and step schedulers. |
+| `learning_rate` | float | `0.001` | Base learning rate passed to the selected optimizer unless overridden inside `optimizer`. |
+| `weight_decay` | float | `0.0` | Weight-decay coefficient passed to the selected optimizer unless overridden inside `optimizer`. |
+| `optimizer` | string or mapping | `"adamw"` | Optimizer name (`"adamw"`, `"adam"`, or `"sgd"`) or mapping with optional optimizer parameters. |
+| `lr_scheduler` | string, mapping, or `null` | `null` | Optional learning-rate schedule (`"none"`, `"reduce_on_plateau"`, `"cosine"`, `"warmup_cosine"`, `"one_cycle"`, `"step"`, `"exponential"`, or `"linear"`). |
 | `mixed_precision` | boolean | `false` | Enable autocast; CUDA also uses gradient scaling. |
 | `gradient_clip_norm` | float or `null` | `0.5` | Maximum global gradient norm. Set to `null`, `0`, or a negative value to disable clipping. |
 | `patience` | integer | `5` | Number of consecutive non-improving epochs tolerated by early stopping. A negative value disables early stopping. |
@@ -226,6 +226,54 @@ mapping:
 ```
 
 Parameters that are absent from `params` use the selected model's defaults.
+
+### Optimizers And Learning-Rate Schedules
+
+All scalar and RBPNet workflows share the same `optimizer` and `lr_scheduler`
+configuration.
+
+`optimizer` accepts `"adamw"` (default), `"adam"`, or `"sgd"`, either as a
+string or as a mapping with additional PyTorch optimizer parameters:
+
+```json
+{
+  "learning_rate": 0.001,
+  "weight_decay": 0.01,
+  "optimizer": {
+    "name": "adamw",
+    "betas": [0.9, 0.999]
+  }
+}
+```
+
+`lr_scheduler` defaults to `null` (constant learning rate). When enabled,
+`history.json` records each epoch's `learning_rate` and training writes
+`learning_rate_curve.png` alongside `loss_curve.png`:
+
+| Scheduler `name` | Aliases | Key parameters & defaults | Stepping |
+| --- | --- | --- | --- |
+| `"none"` | `"off"`, `"disabled"`, `null` | none | Constant learning rate |
+| `"reduce_on_plateau"` | `"plateau"` | `mode` (`"min"`, or `"max"` when monitoring Pearson), `patience` (`10`), `factor` (`0.1`), `monitor` (`"val_loss"`, falls back to train metric) | End of epoch (metric-based) |
+| `"cosine"` | `"cosine_annealing"` | `T_max` (`epochs`), `eta_min` / `min_lr` (`0.0`) | End of epoch |
+| `"warmup_cosine"` | `"cosine_with_warmup"` | `warmup_epochs` (`min(5, epochs - 1)`), `start_factor` (`0.1`), `eta_min` / `min_lr` (`0.0`), `T_max` (`epochs`) | End of epoch |
+| `"one_cycle"` | `"onecycle"` | `max_lr` (`learning_rate`), `pct_start` (`0.3`), `anneal_strategy` (`"cos"`), `div_factor` (`25.0`), `final_div_factor` (`1e4`) | Every training batch |
+| `"step"` | `"step_lr"` | `step_size` (`10`), `gamma` (`0.1`) | End of epoch |
+| `"exponential"` | `"exponential_lr"` | `gamma` (`0.95`) | End of epoch |
+| `"linear"` | `"linear_lr"` | `start_factor` (`1.0`), `end_factor` (`0.01`), `total_iters` (`epochs`) | End of epoch |
+
+For example, linear warmup followed by cosine decay:
+
+```json
+{
+  "learning_rate": 0.001,
+  "lr_scheduler": {
+    "name": "warmup_cosine",
+    "warmup_epochs": 5,
+    "start_factor": 0.1,
+    "eta_min": 1e-6
+  }
+}
+```
 
 ### Checkpoint Selection And Early Stopping
 

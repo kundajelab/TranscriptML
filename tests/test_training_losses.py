@@ -138,6 +138,8 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
     )
 
     assert result["summary"]["loss"] == {"name": "mse"}
+    assert result["summary"]["optimizer"]["name"] == "adamw"
+    assert result["summary"]["lr_scheduler"] is None
     assert result["summary"]["best_monitor_values"].keys() == {"val_loss"}
     assert "best_monitor" not in result["summary"]
     assert "best_monitors" not in result["summary"]
@@ -147,6 +149,7 @@ def test_train_model_default_mse_remains_compatible(tmp_path):
     assert (tmp_path / "loss_curve.png").stat().st_size > 0
     assert (tmp_path / "pearson_curve.png").is_file()
     assert (tmp_path / "pearson_curve.png").stat().st_size > 0
+    assert not (tmp_path / "learning_rate_curve.png").exists()
     assert not (tmp_path / "debug_epoch_predictions.csv").exists()
 
 
@@ -388,3 +391,106 @@ def test_train_model_loss_curve_written_without_validation_split(tmp_path):
     assert (tmp_path / "loss_curve.png").stat().st_size > 0
     assert (tmp_path / "pearson_curve.png").is_file()
     assert (tmp_path / "pearson_curve.png").stat().st_size > 0
+
+
+@pytest.mark.parametrize(
+    ("optimizer_cfg", "scheduler_cfg", "expected_scheduler_name"),
+    [
+        ("adamw", {"name": "cosine", "eta_min": 1e-5}, "cosine"),
+        (
+            {"name": "adam", "betas": [0.9, 0.99]},
+            {"name": "warmup_cosine", "warmup_epochs": 1, "start_factor": 0.2, "eta_min": 1e-5},
+            "warmup_cosine",
+        ),
+        ("adamw", {"name": "one_cycle", "pct_start": 0.5}, "one_cycle"),
+        ({"name": "sgd", "momentum": 0.9}, {"name": "step", "step_size": 1, "gamma": 0.5}, "step"),
+        ("adamw", {"name": "exponential", "gamma": 0.8}, "exponential"),
+        ("adamw", {"name": "linear", "start_factor": 1.0, "end_factor": 0.2}, "linear"),
+        (
+            "adamw",
+            {
+                "name": "reduce_on_plateau",
+                "patience": 0,
+                "factor": 0.5,
+                "threshold": 100.0,
+                "threshold_mode": "abs",
+                "monitor": "val_pearson",
+            },
+            "reduce_on_plateau",
+        ),
+    ],
+)
+def test_train_model_supports_optimizers_and_lr_schedulers(
+    tmp_path,
+    optimizer_cfg,
+    scheduler_cfg,
+    expected_scheduler_name,
+):
+    bundle = DatasetBundle(
+        X=_tiny_x(6),
+        y=np.linspace(-1.0, 1.0, 6, dtype=np.float32),
+        schema="rna4",
+        splits={"train": [0, 1, 2, 3], "val": [4, 5], "test": []},
+    )
+    out_dir = tmp_path / expected_scheduler_name
+    result = train_model(
+        bundle,
+        {
+            "dataset": "unused",
+            "output_dir": str(out_dir),
+            "model": _tiny_model_config(),
+            "batch_size": 2,
+            "epochs": 3,
+            "learning_rate": 0.01,
+            "optimizer": optimizer_cfg,
+            "lr_scheduler": scheduler_cfg,
+            "patience": -1,
+            "progress": False,
+        },
+    )
+
+    lrs = [row["learning_rate"] for row in result["history"]]
+    assert len(lrs) == 3
+    assert all(np.isfinite(lr) and lr > 0 for lr in lrs)
+    assert lrs[0] != pytest.approx(lrs[-1])
+    assert result["summary"]["lr_scheduler"]["name"] == expected_scheduler_name
+    assert (out_dir / "learning_rate_curve.png").is_file()
+    assert (out_dir / "learning_rate_curve.png").stat().st_size > 0
+    _, ckpt = load_checkpoint(out_dir / "best.pt")
+    assert ckpt["lr_scheduler_config"]["name"] == expected_scheduler_name
+    assert "optimizer_config" in ckpt
+
+
+def test_train_model_rejects_unknown_optimizer_or_scheduler(tmp_path):
+    bundle = DatasetBundle(
+        X=_tiny_x(4),
+        y=np.linspace(-1.0, 1.0, 4, dtype=np.float32),
+        schema="rna4",
+        splits={"train": [0, 1], "val": [2], "test": [3]},
+    )
+
+    with pytest.raises(ValueError, match="optimizer must be one of"):
+        train_model(
+            bundle,
+            {
+                "dataset": "unused",
+                "output_dir": str(tmp_path / "bad_opt"),
+                "model": _tiny_model_config(),
+                "optimizer": "rmsprop",
+                "epochs": 1,
+                "progress": False,
+            },
+        )
+
+    with pytest.raises(ValueError, match="lr_scheduler must be one of"):
+        train_model(
+            bundle,
+            {
+                "dataset": "unused",
+                "output_dir": str(tmp_path / "bad_sched"),
+                "model": _tiny_model_config(),
+                "lr_scheduler": "cyclic_triangle",
+                "epochs": 1,
+                "progress": False,
+            },
+        )

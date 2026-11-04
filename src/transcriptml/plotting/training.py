@@ -69,6 +69,8 @@ def plot_training_curve(
     *,
     train_key: str = "train_loss",
     val_key: str | None = "val_loss",
+    train_label: str = "Train",
+    val_label: str = "Validation",
     ylabel: str = "Loss",
     title: str | None = None,
     best_epoch: int | None = None,
@@ -80,6 +82,8 @@ def plot_training_curve(
         out_path: Destination image path.
         train_key: Key in ``history`` for the training split curve.
         val_key: Optional key in ``history`` for the validation split curve.
+        train_label: Legend label for ``train_key``.
+        val_label: Legend label for ``val_key``.
         ylabel: Y-axis label.
         title: Optional plot title; defaults to ``ylabel``.
         best_epoch: Optional 1-based best checkpoint epoch marked with a vertical line.
@@ -99,7 +103,7 @@ def plot_training_curve(
         ax.plot(
             train_epochs,
             train_values,
-            label="Train",
+            label=train_label,
             color="#1f77b4",
             linewidth=1.8,
             marker=marker,
@@ -112,7 +116,7 @@ def plot_training_curve(
         ax.plot(
             val_epochs,
             val_values,
-            label="Validation",
+            label=val_label,
             color="#ff7f0e",
             linewidth=1.8,
             marker=marker,
@@ -175,13 +179,16 @@ def plot_training_history(
     loss_name: str | None = None,
     best_epoch: int | None = None,
     include_enrichment: bool | None = None,
+    include_learning_rate: bool | None = None,
 ) -> dict[str, Path]:
     """Write separate train/validation curve plots for all active metrics in ``history``.
 
     Always writes ``loss_curve.png``. Writes ``pearson_curve.png`` when finite
-    Pearson values exist, and writes RBPNet component loss plots
-    (``ip_profile_loss_curve.png``, ``sm_profile_loss_curve.png``, and
-    ``enrichment_loss_curve.png`` when enabled) when present in ``history``.
+    Pearson values exist, ``learning_rate_curve.png`` when a learning-rate
+    schedule is active or learning rate varies across epochs, and RBPNet
+    component loss plots (``ip_profile_loss_curve.png``,
+    ``sm_profile_loss_curve.png``, and ``enrichment_loss_curve.png`` when
+    enabled) when present in ``history``.
     """
 
     directory = Path(out_dir)
@@ -205,6 +212,26 @@ def plot_training_history(
             title="Training and Validation Pearson Correlation",
             best_epoch=best_epoch,
         )
+
+    if _has_finite_values(history, "learning_rate"):
+        if include_learning_rate is None:
+            _, lr_values = _extract_series(history, "learning_rate")
+            should_plot_lr = bool(
+                lr_values.size > 1 and not np.allclose(lr_values, lr_values[0])
+            )
+        else:
+            should_plot_lr = bool(include_learning_rate)
+        if should_plot_lr:
+            written["learning_rate_curve.png"] = plot_training_curve(
+                history,
+                directory / "learning_rate_curve.png",
+                train_key="learning_rate",
+                val_key=None,
+                train_label="Learning rate",
+                ylabel="Learning rate",
+                title="Learning Rate Schedule",
+                best_epoch=best_epoch,
+            )
 
     if _has_finite_values(history, "train_ip_profile_loss", "val_ip_profile_loss"):
         written["ip_profile_loss_curve.png"] = plot_training_curve(

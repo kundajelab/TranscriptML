@@ -20,6 +20,9 @@ TOP_LEVEL_CONFIG_KEYS = {
     "epochs",
     "learning_rate",
     "weight_decay",
+    "optimizer",
+    "lr_scheduler",
+    "mixed_precision",
     "gradient_clip_norm",
     "patience",
     "monitor",
@@ -29,7 +32,9 @@ TOP_LEVEL_CONFIG_KEYS = {
     "mmap_mode",
     "seed",
     "progress",
+    "debug_epoch_predictions",
     "sequence_controls",
+    "split_source",
     "split",
 }
 
