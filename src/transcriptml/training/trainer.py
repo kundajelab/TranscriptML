@@ -46,7 +46,6 @@ class TrainConfig:
     seed: int = 123
     progress: bool = True
     debug_epoch_predictions: bool = False
-    head_layernorm: bool = False
     sequence_controls: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     split_source: str = "auto"
     cv_plan: str | None = None
@@ -100,7 +99,13 @@ def _as_train_config(config: TrainConfig | Mapping[str, Any]) -> TrainConfig:
 
     if isinstance(config, TrainConfig):
         return config
-    return TrainConfig(**dict(config))
+    raw = dict(config)
+    if "head_layernorm" in raw:
+        raise ValueError(
+            "head_layernorm is now a 'saluki_exact' model parameter; set it in "
+            "model.params instead of the top-level training configuration."
+        )
+    return TrainConfig(**raw)
 
 
 def _make_config_splits(bundle: DatasetBundle, cfg: TrainConfig) -> dict[str, list[int]]:
@@ -576,16 +581,10 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
     cv_plan_id = _cv_plan_id(cfg)
     split_counts = {name: len(splits.get(name, [])) for name in ("train", "val", "test")}
     model_config = normalize_model_config(cfg.model)
-    if cfg.head_layernorm and model_config.name != "saluki_exact":
-        raise ValueError("head_layernorm is only supported for model 'saluki_exact'")
-    if model_config.name == "saluki_exact":
-        model_config.params = dict(model_config.params or {})
-        model_config.params["head_layernorm"] = bool(cfg.head_layernorm)
     log_progress(
         (
             "training: "
             f"device={device}, output={out}, loss={normalized_loss_config['name']}, "
-            f"head_layernorm={cfg.head_layernorm}, "
             f"split_source={split_source_used} requested={cfg.split_source}, "
             f"train={split_counts['train']}, val={split_counts['val']}, "
             f"test={split_counts['test']}"
@@ -808,7 +807,6 @@ def train_model(bundle: DatasetBundle, config: TrainConfig | Mapping[str, Any]) 
         "best_monitor_values": best_metrics,
         "epochs_run": len(history),
         "loss": normalized_loss_config,
-        "head_layernorm": bool(cfg.head_layernorm),
         "split_source_requested": cfg.split_source,
         "split_source_used": split_source_used,
         "cv_plan": cfg.cv_plan,
@@ -853,7 +851,7 @@ def train_from_config(
         output_dir: Optional output-directory override.
     """
 
-    cfg = TrainConfig(**_load_config(config_path))
+    cfg = _as_train_config(_load_config(config_path))
     if cv_plan is not None:
         cfg.cv_plan = str(cv_plan)
     if fold is not None:

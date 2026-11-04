@@ -47,7 +47,7 @@ def test_init_run_cli_writes_templates(tmp_path):
     assert train_config["num_workers"] == 0
     assert train_config["mmap_mode"] == "r"
     assert train_config["seed"] == 42
-    assert train_config["head_layernorm"] is False
+    assert "head_layernorm" not in train_config
     assert train_config["split_source"] == "auto"
     assert not (out_dir / "run_config.json").exists()
     assert (out_dir / "README.md").exists()

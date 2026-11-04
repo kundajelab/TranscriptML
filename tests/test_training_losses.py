@@ -167,9 +167,9 @@ def test_train_model_saluki_head_layernorm_checkpoint_roundtrip(tmp_path):
                     "num_layers": 1,
                     "dropout": 0.0,
                     "augment_shift": 0,
+                    "head_layernorm": True,
                 },
             },
-            "head_layernorm": True,
             "batch_size": 1,
             "epochs": 1,
             "progress": False,
@@ -179,31 +179,55 @@ def test_train_model_saluki_head_layernorm_checkpoint_roundtrip(tmp_path):
     assert isinstance(result["model"].bn1, torch.nn.LayerNorm)
     assert isinstance(result["model"].bn2, torch.nn.LayerNorm)
     assert np.isfinite(result["history"][0]["train_loss"])
-    assert result["summary"]["head_layernorm"] is True
+    assert "head_layernorm" not in result["summary"]
 
     loaded_model, checkpoint = load_checkpoint(tmp_path / "best.pt")
     assert isinstance(loaded_model.bn1, torch.nn.LayerNorm)
     assert isinstance(loaded_model.bn2, torch.nn.LayerNorm)
     assert checkpoint["model_config"]["params"]["head_layernorm"] is True
-    assert checkpoint["train_config"]["head_layernorm"] is True
+    assert "head_layernorm" not in checkpoint["train_config"]
 
 
-def test_train_model_rejects_head_layernorm_for_other_models(tmp_path):
+def test_train_model_rejects_top_level_head_layernorm(tmp_path):
+    bundle = DatasetBundle(
+        X=_tiny_saluki_x(4),
+        y=np.linspace(-1.0, 1.0, 4, dtype=np.float32),
+        schema="saluki6",
+        splits={"train": [0, 1], "val": [2], "test": [3]},
+    )
+
+    for value in (True, False):
+        with pytest.raises(ValueError, match="head_layernorm.*model parameter.*model.params"):
+            train_model(
+                bundle,
+                {
+                    "dataset": "unused",
+                    "output_dir": str(tmp_path),
+                    "model": {"name": "saluki_exact", "params": {}},
+                    "head_layernorm": value,
+                    "epochs": 1,
+                    "progress": False,
+                },
+            )
+
+
+def test_train_model_rejects_head_layernorm_param_for_other_models(tmp_path):
     bundle = DatasetBundle(
         X=_tiny_x(4),
         y=np.linspace(-1.0, 1.0, 4, dtype=np.float32),
         schema="rna4",
         splits={"train": [0, 1], "val": [2], "test": [3]},
     )
+    model_cfg = _tiny_model_config()
+    model_cfg["params"] = {**model_cfg["params"], "head_layernorm": True}
 
-    with pytest.raises(ValueError, match="only supported.*saluki_exact"):
+    with pytest.raises(TypeError, match="head_layernorm"):
         train_model(
             bundle,
             {
                 "dataset": "unused",
                 "output_dir": str(tmp_path),
-                "model": _tiny_model_config(),
-                "head_layernorm": True,
+                "model": model_cfg,
                 "epochs": 1,
                 "progress": False,
             },

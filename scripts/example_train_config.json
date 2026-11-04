@@ -9,7 +9,8 @@
       "kernel_size": 5,
       "num_layers": 6,
       "dropout": 0.3,
-      "augment_shift": 3
+      "augment_shift": 3,
+      "head_layernorm": false
     }
   },
   "batch_size": 64,
@@ -23,6 +24,5 @@
   "num_workers": 0,
   "mmap_mode": "r",
   "seed": 42,
-  "debug_epoch_predictions": false,
-  "head_layernorm": false
+  "debug_epoch_predictions": false
 }
