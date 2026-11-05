@@ -30,6 +30,114 @@ def test_models_cli_list_and_show_json(capsys):
     assert payload["params"]["head_layernorm"] is False
 
 
+def test_param_count_cli_model_params_and_config(capsys, tmp_path):
+    expected_default = sum(p.numel() for p in build_model("saluki_exact").parameters())
+    main(["param-count", "--model", "saluki_exact"])
+    out = capsys.readouterr().out.strip()
+    assert out == f"saluki_exact (SalukiExact): {expected_default:,} parameters ({expected_default:,} trainable)"
+
+    # Supports model class name and repeatable / space-separated --param overrides
+    custom_cfg = {"name": "saluki_exact", "params": {"filters": 16, "num_layers": 2, "head_layernorm": True}}
+    expected_custom = sum(p.numel() for p in build_model(custom_cfg).parameters())
+    main(
+        [
+            "param-count",
+            "--model",
+            "SalukiExact",
+            "--param",
+            "filters=16",
+            "--param",
+            "num_layers=2",
+            "head_layernorm=true",
+        ]
+    )
+    out = capsys.readouterr().out.strip()
+    assert out == f"saluki_exact (SalukiExact): {expected_custom:,} parameters ({expected_custom:,} trainable)"
+
+    # Supports --config train_config.json and additional --param overrides + --json
+    train_config_path = tmp_path / "train_config.json"
+    train_config_path.write_text(
+        json.dumps(
+            {
+                "dataset": "data/saluki",
+                "output_dir": "runs/out",
+                "model": {
+                    "name": "legnet",
+                    "params": {
+                        "stem_ch": 16,
+                        "ef_block_sizes": [16, 32],
+                        "pool_sizes": [2, 2],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    expected_legnet = sum(
+        p.numel()
+        for p in build_model(
+            {
+                "name": "legnet",
+                "params": {
+                    "stem_ch": 16,
+                    "ef_block_sizes": [16, 32],
+                    "pool_sizes": [2, 2],
+                    "resize_factor": 2,
+                },
+            }
+        ).parameters()
+    )
+    main(["param-count", "--config", str(train_config_path), "--param", "resize_factor=2", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["model"] == "legnet"
+    assert payload["model_class"] == "LegNet"
+    assert payload["total_params"] == expected_legnet
+    assert payload["trainable_params"] == expected_legnet
+    assert payload["non_trainable_params"] == 0
+    assert payload["params"]["stem_ch"] == 16
+    assert payload["params"]["resize_factor"] == 2
+
+    # Supports nested dotted keys (e.g. saluki_cnn_hybrid)
+    expected_hybrid = sum(
+        p.numel()
+        for p in build_model(
+            {
+                "name": "saluki_cnn_hybrid",
+                "params": {"saluki": {"filters": 16}, "cnn": {"n_filters": 12}},
+            }
+        ).parameters()
+    )
+    main(
+        [
+            "param-count",
+            "--model",
+            "saluki_cnn_hybrid",
+            "--param",
+            "saluki.filters=16",
+            "cnn.n_filters=12",
+        ]
+    )
+    out = capsys.readouterr().out.strip()
+    assert out == (
+        f"saluki_cnn_hybrid (SalukiCNNHybrid): {expected_hybrid:,} parameters "
+        f"({expected_hybrid:,} trainable)"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["param-count"],
+        ["param-count", "--model", "unknown_model"],
+        ["param-count", "--model", "saluki_exact", "--param", "invalid_kv"],
+        ["param-count", "--model", "saluki_exact", "--param", "unknown_param=1"],
+    ],
+)
+def test_param_count_cli_rejects_invalid_inputs(argv):
+    with pytest.raises(SystemExit):
+        main(argv)
+
+
 def test_init_run_cli_writes_templates(tmp_path):
     out_dir = tmp_path / "run"
     main(["init-run", "--workflow", "saluki", "--out-dir", str(out_dir)])

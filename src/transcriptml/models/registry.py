@@ -45,6 +45,41 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
 }
 
 
+def resolve_model_name(name: str) -> str:
+    """Resolve a registered model name or model/config class name to its registry key.
+
+    Args:
+        name: Registered model name (e.g. ``"saluki_exact"``) or model/config
+            class name (e.g. ``"SalukiExact"`` or ``"SalukiExactConfig"``).
+    """
+
+    key = str(name).strip()
+    if key in MODEL_REGISTRY:
+        return key
+    lower = key.lower()
+    if lower in MODEL_REGISTRY:
+        return lower
+    for reg_name, spec in MODEL_REGISTRY.items():
+        if key in {spec.ctor.__name__, spec.config_cls.__name__} or lower in {
+            spec.ctor.__name__.lower(),
+            spec.config_cls.__name__.lower(),
+        }:
+            return reg_name
+    raise ValueError(f"Unknown model '{name}'. Available: {sorted(MODEL_REGISTRY)}")
+
+
+def _merge_param_dicts(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Recursively merge nested parameter dictionaries."""
+
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _merge_param_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def list_models() -> dict[str, str]:
     """Return registered model names mapped to their config class names."""
 
@@ -55,13 +90,11 @@ def model_default_params(name: str) -> dict[str, Any]:
     """Return default constructor parameters for a registered model.
 
     Args:
-        name: Registered model name.
+        name: Registered model name or model/config class name.
     """
 
-    try:
-        spec = MODEL_REGISTRY[name]
-    except KeyError as exc:
-        raise ValueError(f"Unknown model '{name}'. Available: {sorted(MODEL_REGISTRY)}") from exc
+    resolved_name = resolve_model_name(name)
+    spec = MODEL_REGISTRY[resolved_name]
     defaults = spec.config_cls()
     return defaults.to_kwargs() if hasattr(defaults, "to_kwargs") else asdict(defaults)
 
@@ -95,14 +128,38 @@ def build_model(config: ModelConfig | Mapping[str, Any] | str) -> nn.Module:
     """
 
     cfg = normalize_model_config(config)
-    try:
-        spec = MODEL_REGISTRY[cfg.name]
-    except KeyError as exc:
-        raise ValueError(f"Unknown model '{cfg.name}'. Available: {sorted(MODEL_REGISTRY)}") from exc
+    resolved_name = resolve_model_name(cfg.name)
+    spec = MODEL_REGISTRY[resolved_name]
     defaults = spec.config_cls()
-    params = defaults.to_kwargs() if hasattr(defaults, "to_kwargs") else asdict(defaults)
-    params.update(cfg.params or {})
+    default_params = defaults.to_kwargs() if hasattr(defaults, "to_kwargs") else asdict(defaults)
+    params = _merge_param_dicts(default_params, cfg.params or {})
     return spec.ctor(**params)
+
+
+def count_model_parameters(config: ModelConfig | Mapping[str, Any] | str) -> dict[str, Any]:
+    """Instantiate a registered model and return parameter count metadata.
+
+    Args:
+        config: ModelConfig instance, mapping, or registered model/class name.
+    """
+
+    cfg = normalize_model_config(config)
+    resolved_name = resolve_model_name(cfg.name)
+    spec = MODEL_REGISTRY[resolved_name]
+    defaults = spec.config_cls()
+    default_params = defaults.to_kwargs() if hasattr(defaults, "to_kwargs") else asdict(defaults)
+    resolved_params = _merge_param_dicts(default_params, cfg.params or {})
+    model = spec.ctor(**resolved_params)
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return {
+        "model": resolved_name,
+        "model_class": spec.ctor.__name__,
+        "params": resolved_params,
+        "total_params": int(total_params),
+        "trainable_params": int(trainable_params),
+        "non_trainable_params": int(total_params - trainable_params),
+    }
 
 
 def _strip_module_prefix(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:

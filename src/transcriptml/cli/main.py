@@ -204,6 +204,127 @@ def _resolve_interpret_args(args: argparse.Namespace, parser: argparse.ArgumentP
     )
 
 
+def _parse_scalar_param_value(text: str) -> object:
+    """Parse one scalar CLI hyperparameter value."""
+
+    stripped = text.strip()
+    if stripped == "":
+        return ""
+    lower = stripped.lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    if lower == "null" or stripped == "None":
+        return None
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return stripped
+
+
+def _parse_param_value(text: str) -> object:
+    """Parse a CLI hyperparameter value (JSON literal, comma-separated list, or scalar)."""
+
+    stripped = text.strip()
+    if stripped == "":
+        return ""
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    if "," in stripped and not (
+        (stripped.startswith("[") and stripped.endswith("]"))
+        or (stripped.startswith("{") and stripped.endswith("}"))
+    ):
+        return [_parse_scalar_param_value(part) for part in stripped.split(",")]
+    return _parse_scalar_param_value(stripped)
+
+
+def _param_override(value: str) -> tuple[str, object]:
+    """Parse one ``KEY=VALUE`` model hyperparameter override."""
+
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("expected KEY=VALUE")
+    raw_key, raw_value = value.split("=", 1)
+    key = raw_key.strip()
+    if key.startswith("model.params."):
+        key = key[len("model.params.") :]
+    elif key.startswith("params."):
+        key = key[len("params.") :]
+    parts = [part.strip() for part in key.split(".")]
+    if not key or any(not part for part in parts):
+        raise argparse.ArgumentTypeError("expected KEY=VALUE")
+    return ".".join(parts), _parse_param_value(raw_value)
+
+
+def _set_nested_param(params: dict[str, object], key: str, value: object) -> None:
+    """Set a flat or dot-separated key inside a hyperparameter mapping."""
+
+    parts = key.split(".")
+    current: dict[str, object] = params
+    for part in parts[:-1]:
+        existing = current.get(part)
+        if not isinstance(existing, dict):
+            existing = {}
+            current[part] = existing
+        current = existing
+    leaf = parts[-1]
+    existing_leaf = current.get(leaf)
+    if isinstance(value, dict) and isinstance(existing_leaf, dict):
+        merged = dict(existing_leaf)
+        for sub_key, sub_value in value.items():
+            _set_nested_param(merged, str(sub_key), sub_value)
+        current[leaf] = merged
+    else:
+        current[leaf] = value
+
+
+def _resolve_param_count_model_config(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> dict[str, object]:
+    """Resolve model name and hyperparameter overrides for ``param-count``."""
+
+    from transcriptml.models.registry import normalize_model_config
+    from transcriptml.training.trainer import _load_config
+
+    if args.config is None and not args.model:
+        parser.error("param-count requires --model or --config")
+
+    model_name: str | None = None
+    params: dict[str, object] = {}
+
+    if args.config is not None:
+        try:
+            raw_cfg = _load_config(args.config)
+        except Exception as exc:
+            parser.error(f"param-count could not load --config {args.config}: {exc}")
+        if not isinstance(raw_cfg, dict):
+            parser.error("param-count --config must contain a JSON/TOML object")
+        try:
+            if "model" in raw_cfg and isinstance(raw_cfg["model"], (dict, str)) and "name" not in raw_cfg:
+                base_cfg = normalize_model_config(raw_cfg["model"])
+            else:
+                base_cfg = normalize_model_config(raw_cfg)
+        except Exception as exc:
+            parser.error(f"param-count invalid model configuration in {args.config}: {exc}")
+        model_name = base_cfg.name
+        for key, value in (base_cfg.params or {}).items():
+            _set_nested_param(params, str(key), value)
+
+    if args.model:
+        model_name = str(args.model).strip()
+
+    if not model_name:
+        parser.error("param-count requires --model or a --config containing a model name")
+
+    for key, value in args.param:
+        _set_nested_param(params, key, value)
+
+    return {"name": model_name, "params": params}
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the TranscriptML command-line argument parser."""
 
@@ -226,6 +347,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = model_sub.add_parser("show", help="Show default parameters for a model")
     p_show.add_argument("model")
     p_show.add_argument("--json", action="store_true", help="Print JSON instead of a table")
+
+    p = sub.add_parser(
+        "param-count",
+        help="Count parameters for a model class and hyperparameter combination",
+    )
+    p.add_argument("--model", help="Registered model name or model class name")
+    p.add_argument(
+        "--param",
+        type=_param_override,
+        nargs="+",
+        action="extend",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Model hyperparameter override (repeatable; supports JSON literals and dotted keys)",
+    )
+    p.add_argument("--config", type=Path, help="Training or model configuration JSON/TOML file")
+    p.add_argument("--json", action="store_true", help="Print JSON instead of a summary line")
 
     p = sub.add_parser("cv", help="Cross-validation workflow helpers")
     cv_sub = p.add_subparsers(dest="cv_command", required=True)
@@ -770,6 +908,30 @@ def main(argv: list[str] | None = None) -> None:
                 for key, value in params.items():
                     print(f"{key}\t{value}")
             return
+    if args.command == "param-count":
+        from transcriptml.models.registry import count_model_parameters
+
+        model_config = _resolve_param_count_model_config(args, parser)
+        try:
+            summary = count_model_parameters(model_config)
+        except (ValueError, TypeError) as exc:
+            parser.error(str(exc))
+        if args.json:
+            print(json.dumps(summary, indent=2))
+        elif summary["non_trainable_params"] > 0:
+            print(
+                f"{summary['model']} ({summary['model_class']}): "
+                f"{summary['total_params']:,} parameters "
+                f"({summary['trainable_params']:,} trainable, "
+                f"{summary['non_trainable_params']:,} non-trainable)"
+            )
+        else:
+            print(
+                f"{summary['model']} ({summary['model_class']}): "
+                f"{summary['total_params']:,} parameters "
+                f"({summary['trainable_params']:,} trainable)"
+            )
+        return
     if args.command == "cv":
         from transcriptml.workflows import find_fold_checkpoints, prepare_cv_fold
 
