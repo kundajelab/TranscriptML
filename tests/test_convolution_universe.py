@@ -215,14 +215,71 @@ def test_saluki_ablations_use_ordinary_model_parameters():
             "augment_shift": 0,
             "pooling": "average",
             "head_norm": "layer",
+            "head_norm_position": "optimal",
             "rnn_bidirectional": True,
             "head_hidden": [32, 16],
         }
     )
     model = ConvolutionUniverse(**params).eval()
     assert model.rnn.bidirectional
+    assert model.head.norm_position == "optimal"
+    assert len(model.head.linears) == 3
+    assert len(model.head.norms) == 2
     assert isinstance(model.head.norms[0], torch.nn.LayerNorm)
     assert model(torch.randn(2, 6, 1024)).shape == (2,)
+
+
+def test_optimal_head_matches_saluki_exact_use_optimal_head():
+    saluki_params = ConvolutionUniverseConfig.saluki().to_kwargs()
+    saluki_params.update({"head_norm": "layer", "head_norm_position": "optimal"})
+
+    torch.manual_seed(41)
+    exact = SalukiExact(head_layernorm=True, use_optimal_head=True).eval()
+    torch.manual_seed(41)
+    universe = ConvolutionUniverse(**saluki_params).eval()
+
+    assert isinstance(exact.bn1, torch.nn.Identity)
+    assert isinstance(exact.bn2, torch.nn.LayerNorm)
+    assert len(universe.head.norms) == 1
+    assert torch.equal(exact.bn2.weight, universe.head.norms[0].weight)
+    assert torch.equal(exact.fc1.weight, universe.head.linears[0].weight)
+    assert torch.equal(exact.fc2.weight, universe.head.linears[1].weight)
+
+    x = torch.randn(2, 6, 1024)
+    assert torch.allclose(exact(x), universe(x), atol=1e-6)
+
+
+def test_optimal_backbone_and_spatial_dropout_match_saluki_exact():
+    saluki_params = ConvolutionUniverseConfig.saluki().to_kwargs()
+    saluki_params.update(
+        {
+            "stem_bias": True,
+            "norm_position": "optimal",
+            "spatial_dropout": True,
+            "head_norm": "layer",
+            "head_norm_position": "optimal",
+        }
+    )
+
+    torch.manual_seed(43)
+    exact = SalukiExact(
+        head_layernorm=True,
+        use_optimal_head=True,
+        use_optimal_backbone=True,
+        spatial_dropout=True,
+    ).eval()
+    torch.manual_seed(43)
+    universe = ConvolutionUniverse(**saluki_params).eval()
+
+    assert exact.conv0.bias is not None
+    assert isinstance(exact.pre_rnn_ln, torch.nn.Identity)
+    assert isinstance(universe.pre_rnn_norm, torch.nn.Identity)
+    assert isinstance(exact.blocks[0]["drop"], torch.nn.Dropout1d)
+    assert isinstance(universe.tower.stages[0]["block"].dropout, torch.nn.Dropout1d)
+
+    x = torch.randn(2, 6, 1024)
+    assert torch.allclose(exact.forward_features(x), universe.forward_features(x), atol=1e-6)
+    assert torch.allclose(exact(x), universe(x), atol=1e-6)
 
 
 @pytest.mark.parametrize(

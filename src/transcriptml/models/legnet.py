@@ -22,6 +22,8 @@ class LegNetConfig:
     head_dropout: float = 0.1
     stem_dropout: float = 0.0
     output_dim: int = 1
+    use_optimal_head: bool = False
+    use_optimal_backbone: bool = False
 
     def to_kwargs(self) -> dict[str, object]:
         """Return constructor keyword arguments for ``LegNet``."""
@@ -56,7 +58,16 @@ class SELayer(nn.Module):
 
 
 class LocalBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, ks: int, dropout: float = 0.0):
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        ks: int,
+        dropout: float = 0.0,
+        *,
+        pool: int = 1,
+        use_optimal_backbone: bool = False,
+    ):
         """Create a local convolution, normalization, activation, and dropout block.
 
         Args:
@@ -64,15 +75,34 @@ class LocalBlock(nn.Module):
             out_ch: Number of output channels.
             ks: Convolution kernel size.
             dropout: Dropout probability after activation.
+            pool: Max-pooling factor applied before normalization when
+                ``use_optimal_backbone=True``.
+            use_optimal_backbone: Whether to order the block as ``Conv1d(bias=True)
+                -> SiLU -> [MaxPool1d] -> BatchNorm1d -> Dropout1d``.
         """
 
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv1d(in_ch, out_ch, kernel_size=ks, padding="same", bias=False),
-            nn.BatchNorm1d(out_ch),
-            nn.SiLU(),
-            dropout1d_or_identity(dropout),
-        )
+        if use_optimal_backbone:
+            layers: list[nn.Module] = [
+                nn.Conv1d(in_ch, out_ch, kernel_size=ks, padding="same", bias=True),
+                nn.SiLU(),
+            ]
+            if int(pool) > 1:
+                layers.append(nn.MaxPool1d(int(pool)))
+            layers.extend(
+                [
+                    nn.BatchNorm1d(out_ch),
+                    dropout1d_or_identity(dropout),
+                ]
+            )
+            self.block = nn.Sequential(*layers)
+        else:
+            self.block = nn.Sequential(
+                nn.Conv1d(in_ch, out_ch, kernel_size=ks, padding="same", bias=False),
+                nn.BatchNorm1d(out_ch),
+                nn.SiLU(),
+                dropout1d_or_identity(dropout),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the local convolutional block.
@@ -85,7 +115,15 @@ class LocalBlock(nn.Module):
 
 
 class EffBlock(nn.Module):
-    def __init__(self, in_ch: int, ks: int, resize_factor: int, dropout: float = 0.0):
+    def __init__(
+        self,
+        in_ch: int,
+        ks: int,
+        resize_factor: int,
+        dropout: float = 0.0,
+        *,
+        use_optimal_backbone: bool = False,
+    ):
         """Create a LegNet efficient residual-style convolutional block.
 
         Args:
@@ -93,25 +131,44 @@ class EffBlock(nn.Module):
             ks: Depthwise convolution kernel size.
             resize_factor: Expansion factor for the internal channel dimension.
             dropout: Dropout probability inside the block.
+            use_optimal_backbone: Whether to order each sub-block as
+                ``Conv1d(bias=True) -> SiLU -> BatchNorm1d -> Dropout1d``.
         """
 
         super().__init__()
         inner = int(in_ch) * int(resize_factor)
-        self.block = nn.Sequential(
-            nn.Conv1d(in_ch, inner, kernel_size=1, bias=False),
-            nn.BatchNorm1d(inner),
-            nn.SiLU(),
-            dropout1d_or_identity(dropout),
-            nn.Conv1d(inner, inner, kernel_size=ks, padding="same", groups=inner, bias=False),
-            nn.BatchNorm1d(inner),
-            nn.SiLU(),
-            dropout1d_or_identity(dropout),
-            SELayer(inner, reduction=max(1, int(resize_factor))),
-            nn.Conv1d(inner, in_ch, kernel_size=1, bias=False),
-            nn.BatchNorm1d(in_ch),
-            nn.SiLU(),
-            dropout1d_or_identity(dropout),
-        )
+        if use_optimal_backbone:
+            self.block = nn.Sequential(
+                nn.Conv1d(in_ch, inner, kernel_size=1, bias=True),
+                nn.SiLU(),
+                nn.BatchNorm1d(inner),
+                dropout1d_or_identity(dropout),
+                nn.Conv1d(inner, inner, kernel_size=ks, padding="same", groups=inner, bias=True),
+                nn.SiLU(),
+                nn.BatchNorm1d(inner),
+                dropout1d_or_identity(dropout),
+                SELayer(inner, reduction=max(1, int(resize_factor))),
+                nn.Conv1d(inner, in_ch, kernel_size=1, bias=True),
+                nn.SiLU(),
+                nn.BatchNorm1d(in_ch),
+                dropout1d_or_identity(dropout),
+            )
+        else:
+            self.block = nn.Sequential(
+                nn.Conv1d(in_ch, inner, kernel_size=1, bias=False),
+                nn.BatchNorm1d(inner),
+                nn.SiLU(),
+                dropout1d_or_identity(dropout),
+                nn.Conv1d(inner, inner, kernel_size=ks, padding="same", groups=inner, bias=False),
+                nn.BatchNorm1d(inner),
+                nn.SiLU(),
+                dropout1d_or_identity(dropout),
+                SELayer(inner, reduction=max(1, int(resize_factor))),
+                nn.Conv1d(inner, in_ch, kernel_size=1, bias=False),
+                nn.BatchNorm1d(in_ch),
+                nn.SiLU(),
+                dropout1d_or_identity(dropout),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the efficient block.
@@ -161,6 +218,8 @@ class LegNet(nn.Module):
         head_dropout: float = 0.1,
         stem_dropout: float = 0.0,
         output_dim: int = 1,
+        use_optimal_head: bool = False,
+        use_optimal_backbone: bool = False,
     ):
         """Create the compact LegNet regression model.
 
@@ -176,32 +235,82 @@ class LegNet(nn.Module):
             head_dropout: Dropout probability in the regression head.
             stem_dropout: Dropout probability in the stem block.
             output_dim: Number of output units produced by the head.
+            use_optimal_head: Whether to use ``Linear -> SiLU -> BatchNorm1d ->
+                Dropout -> Linear`` in the head instead of ``Linear ->
+                BatchNorm1d -> SiLU -> Dropout -> Linear``.
+            use_optimal_backbone: Whether to order convolutional blocks as
+                ``Conv1d(bias=True) -> SiLU -> [MaxPool1d] -> BatchNorm1d ->
+                Dropout1d`` and order the mapper as ``Conv1d(bias=True) -> SiLU
+                -> BatchNorm1d``.
         """
 
         super().__init__()
         if len(pool_sizes) != len(ef_block_sizes):
             raise ValueError("pool_sizes and ef_block_sizes must have the same length")
-        self.stem = LocalBlock(in_ch, stem_ch, stem_ks, dropout=stem_dropout)
+        self.use_optimal_head = bool(use_optimal_head)
+        self.use_optimal_backbone = bool(use_optimal_backbone)
+        self.stem = LocalBlock(
+            in_ch,
+            stem_ch,
+            stem_ks,
+            dropout=stem_dropout,
+            use_optimal_backbone=self.use_optimal_backbone,
+        )
         blocks: list[nn.Module] = []
         ch = int(stem_ch)
         for pool, out_ch in zip(pool_sizes, ef_block_sizes):
             blocks.append(
                 nn.Sequential(
-                    ResidualConcat(EffBlock(ch, ef_ks, resize_factor, dropout=block_dropout)),
-                    LocalBlock(ch * 2, int(out_ch), ef_ks, dropout=block_dropout),
-                    nn.MaxPool1d(int(pool)) if int(pool) > 1 else nn.Identity(),
+                    ResidualConcat(
+                        EffBlock(
+                            ch,
+                            ef_ks,
+                            resize_factor,
+                            dropout=block_dropout,
+                            use_optimal_backbone=self.use_optimal_backbone,
+                        )
+                    ),
+                    LocalBlock(
+                        ch * 2,
+                        int(out_ch),
+                        ef_ks,
+                        dropout=block_dropout,
+                        pool=int(pool) if self.use_optimal_backbone else 1,
+                        use_optimal_backbone=self.use_optimal_backbone,
+                    ),
+                    (
+                        nn.Identity()
+                        if self.use_optimal_backbone or int(pool) <= 1
+                        else nn.MaxPool1d(int(pool))
+                    ),
                 )
             )
             ch = int(out_ch)
         self.main = nn.Sequential(*blocks)
-        self.mapper = nn.Sequential(nn.BatchNorm1d(ch), nn.Conv1d(ch, ch * 2, kernel_size=1))
-        self.head = nn.Sequential(
-            nn.Linear(ch * 2, ch * 2),
-            nn.BatchNorm1d(ch * 2),
-            nn.SiLU(),
-            dropout_or_identity(head_dropout),
-            nn.Linear(ch * 2, output_dim),
-        )
+        if self.use_optimal_backbone:
+            self.mapper = nn.Sequential(
+                nn.Conv1d(ch, ch * 2, kernel_size=1, bias=True),
+                nn.SiLU(),
+                nn.BatchNorm1d(ch * 2),
+            )
+        else:
+            self.mapper = nn.Sequential(nn.BatchNorm1d(ch), nn.Conv1d(ch, ch * 2, kernel_size=1))
+        if self.use_optimal_head:
+            self.head = nn.Sequential(
+                nn.Linear(ch * 2, ch * 2),
+                nn.SiLU(),
+                nn.BatchNorm1d(ch * 2),
+                dropout_or_identity(head_dropout),
+                nn.Linear(ch * 2, output_dim),
+            )
+        else:
+            self.head = nn.Sequential(
+                nn.Linear(ch * 2, ch * 2),
+                nn.BatchNorm1d(ch * 2),
+                nn.SiLU(),
+                dropout_or_identity(head_dropout),
+                nn.Linear(ch * 2, output_dim),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run a forward pass on ``(B, C, L)`` encoded sequences.

@@ -359,7 +359,10 @@ This is the model used by the standard Saluki workflow.
       "ln_epsilon": 0.007,
       "keras_bn_momentum": 0.9,
       "bn_eps": 0.001,
-      "head_layernorm": false
+      "head_layernorm": false,
+      "use_optimal_head": false,
+      "use_optimal_backbone": false,
+      "spatial_dropout": false
     }
   }
 }
@@ -377,7 +380,10 @@ This is the model used by the standard Saluki workflow.
 | `ln_epsilon` | `0.007` | Numerical epsilon used by channel layer normalization. |
 | `keras_bn_momentum` | `0.9` | Batch-normalization momentum expressed using the Keras convention reproduced by this model. |
 | `bn_eps` | `0.001` | Numerical epsilon used by normalization layers in the head. |
-| `head_layernorm` | `false` | Replace both dense-head BatchNorm layers with per-example LayerNorm. |
+| `head_layernorm` | `false` | Replace the dense-head BatchNorm layer(s) with per-example LayerNorm. |
+| `use_optimal_head` | `false` | Reorder the dense head to `Linear → ReLU → Normalization → Dropout → Linear` (omitting the pre-`fc1` `Normalization → ReLU`). |
+| `use_optimal_backbone` | `false` | Order the stem as `Conv0(bias=true) → ReLU → ChannelLayerNorm` and each stage as `Conv → ReLU → Pool → ChannelLayerNorm → Dropout` (feeding directly into the reversed GRU without an extra pre-RNN `LN → ReLU`). |
+| `spatial_dropout` | `false` | Use full-filter `nn.Dropout1d` in the convolutional blocks instead of elementwise `nn.Dropout`. |
 
 Set `head_layernorm` in `model.params` to enable the LayerNorm head:
 
@@ -538,6 +544,7 @@ itself and its checkpoints unchanged:
       "norm_eps": 0.007,
       "activation": "relu",
       "dropout": 0.3,
+      "spatial_dropout": false,
       "use_residual": false,
       "pooling": "max",
       "pool_size": 2,
@@ -598,18 +605,23 @@ them.
 | Group | Parameters |
 | --- | --- |
 | Input and stem | `in_ch`, `output_dim`, `augment_shift`, `weight_init`, `filters`, `stem_kernel_size`, `stem_padding`, `stem_bias` |
-| Convolutional tower | `num_layers`, `block_type`, `kernel_size`, `dilations`, `padding`, `conv_bias`, `norm`, `norm_position`, `norm_eps`, `activation`, `dropout`, `use_residual`, `pooling`, `pool_size` |
+| Convolutional tower | `num_layers`, `block_type`, `kernel_size`, `dilations`, `padding`, `conv_bias`, `norm`, `norm_position`, `norm_eps`, `activation`, `dropout`, `spatial_dropout`, `use_residual`, `pooling`, `pool_size` |
 | ConvNeXt-specific | `mlp_ratio`, `layer_scale_init`, `drop_path_rate` |
 | Recurrent encoder | `pre_rnn_norm`, `pre_rnn_activation`, `rnn_type`, `rnn_hidden`, `rnn_layers`, `rnn_bidirectional`, `rnn_reverse`, `rnn_summary`, `rnn_dropout` |
 | CNN-only readout | `global_pool`, `global_pool_size` |
 | Prediction head | `head_type`, `head_hidden`, `head_norm`, `head_norm_position`, `head_activation`, `head_dropout`, `head_norm_eps`, `head_bn_momentum` |
 
 `block_type` accepts `conv` or `convnext`. Standard convolution blocks honor the
-tower normalization and activation fields. ConvNeXt blocks use their defining
+tower normalization and activation fields (`norm_position` accepts `pre`, `post`,
+or `optimal`, which applies `StemConv → Act → Norm` on the stem and
+`Conv → Act → (+ Residual) → Pool → Norm → Dropout` in each stage; `spatial_dropout`
+selects `nn.Dropout1d` instead of `nn.Dropout`). ConvNeXt blocks use their defining
 depthwise convolution, channel-last LayerNorm, GELU pointwise MLP, optional
 LayerScale, and stochastic depth. `rnn_type` accepts `none`, `gru`, or `lstm`;
-`rnn_summary` accepts `last`, `mean`, or `max`; and `global_pool` accepts `avg`,
-`max`, or `avgmax`.
+`rnn_summary` accepts `last`, `mean`, or `max`; `global_pool` accepts `avg`,
+`max`, or `avgmax`; and `head_norm_position` accepts `pre` (`Norm → Act → Linear → Dropout`),
+`post` (`Linear → Norm → Act → Dropout`), or `optimal` (`Linear → Act → Norm → Dropout`
+per hidden layer before the final readout `Linear`).
 
 This first implementation intentionally treats the complete fixed-width tensor
 as valid sequence. It does not infer padding lengths, mask convolutions, or pack
@@ -751,7 +763,9 @@ registered `legnet` model:
       "block_dropout": 0.0,
       "head_dropout": 0.1,
       "stem_dropout": 0.0,
-      "output_dim": 1
+      "output_dim": 1,
+      "use_optimal_head": false,
+      "use_optimal_backbone": false
     }
   }
 }
@@ -770,6 +784,8 @@ registered `legnet` model:
 | `head_dropout` | `0.1` | Dropout probability in the regression head. |
 | `stem_dropout` | `0.0` | Channel-dropout probability after the stem activation. |
 | `output_dim` | `1` | Number of outputs. Leave this at one for TranscriptML's scalar training workflow. |
+| `use_optimal_head` | `false` | Reorder the regression head from `Linear → BatchNorm1d → SiLU → Dropout → Linear` to `Linear → SiLU → BatchNorm1d → Dropout → Linear`. |
+| `use_optimal_backbone` | `false` | Order convolutional blocks as `Conv1d(bias=true) → SiLU → [MaxPool1d] → BatchNorm1d → Dropout1d` and order `mapper` as `Conv1d(bias=true) → SiLU → BatchNorm1d`. |
 
 Run `transcriptml models show legnet --json` to inspect these defaults from the
 installed package.

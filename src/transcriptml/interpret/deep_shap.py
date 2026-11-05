@@ -1002,14 +1002,27 @@ class _SalukiExactAttributionModel(torch.nn.Module):
         source = self.source
         z = source.shift(source._to_bcl(X))
         z = source.conv0(z)
-        for block in source.blocks:
-            z = block["ln"](z)
-            z = block["act"](z)
-            z = block["conv"](z)
-            z = block["drop"](z)
-            z = block["pool"](z)
-        z = source.pre_rnn_act(source.pre_rnn_ln(z)).transpose(1, 2)
+        if getattr(source, "use_optimal_backbone", False):
+            z = source.stem_ln(source.stem_act(z))
+            for block in source.blocks:
+                z = block["conv"](z)
+                z = block["act"](z)
+                z = block["pool"](z)
+                z = block["ln"](z)
+                z = block["drop"](z)
+            z = z.transpose(1, 2)
+        else:
+            for block in source.blocks:
+                z = block["ln"](z)
+                z = block["act"](z)
+                z = block["conv"](z)
+                z = block["drop"](z)
+                z = block["pool"](z)
+            z = source.pre_rnn_act(source.pre_rnn_ln(z)).transpose(1, 2)
         z = self.recurrent(torch.flip(z, dims=[1]))
+        if getattr(source, "use_optimal_head", False):
+            z = source.drop1(source.bn2(self.head_act1(source.fc1(z))))
+            return source.fc2(z).squeeze(-1)
         z = source.fc1(self.head_act1(source.bn1(z)))
         z = source.drop1(z)
         return source.fc2(self.head_act2(source.bn2(z))).squeeze(-1)

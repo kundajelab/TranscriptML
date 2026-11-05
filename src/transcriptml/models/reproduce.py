@@ -22,6 +22,9 @@ class SalukiExactConfig:
     keras_bn_momentum: float = 0.90
     bn_eps: float = 1e-3
     head_layernorm: bool = False
+    use_optimal_head: bool = False
+    use_optimal_backbone: bool = False
+    spatial_dropout: bool = False
 
     def to_kwargs(self) -> dict[str, object]:
         """Return constructor keyword arguments for ``SalukiExact``."""
@@ -98,6 +101,9 @@ class SalukiExact(nn.Module):
         keras_bn_momentum: float = 0.90,
         bn_eps: float = 1e-3,
         head_layernorm: bool = False,
+        use_optimal_head: bool = False,
+        use_optimal_backbone: bool = False,
+        spatial_dropout: bool = False,
     ):
         """Create the Saluki architecture reproduction.
 
@@ -114,8 +120,18 @@ class SalukiExact(nn.Module):
             keras_bn_momentum: Keras-style batch-normalization momentum value.
             bn_eps: Epsilon used by normalization layers in the prediction
                 head.
-            head_layernorm: Whether to replace the two head batch-normalization
-                layers with per-example layer normalization.
+            head_layernorm: Whether to replace the head batch-normalization
+                layer(s) with per-example layer normalization.
+            use_optimal_head: Whether to use the ``Linear -> ReLU -> Norm ->
+                Dropout -> Linear`` head ordering instead of the legacy
+                ``Norm -> ReLU -> Linear -> Dropout -> Norm -> ReLU -> Linear``
+                ordering.
+            use_optimal_backbone: Whether to order the stem and convolutional
+                stages as ``Conv0(bias=True) -> ReLU -> LN`` followed by
+                ``Conv -> ReLU -> Pool -> LN -> Dropout`` (feeding directly
+                into the reversed GRU without an extra pre-RNN ``LN -> ReLU``).
+            spatial_dropout: Whether to use full-filter ``nn.Dropout1d`` in
+                convolutional blocks instead of elementwise ``nn.Dropout``.
         """
 
         super().__init__()
@@ -131,9 +147,25 @@ class SalukiExact(nn.Module):
         else:
             raise ValueError("pooling must be either 'max' or 'average'")
         self.head_layernorm = bool(head_layernorm)
+        self.use_optimal_head = bool(use_optimal_head)
+        self.use_optimal_backbone = bool(use_optimal_backbone)
+        self.spatial_dropout = bool(spatial_dropout)
+        drop_cls = nn.Dropout1d if self.spatial_dropout else nn.Dropout
         bn_momentum_pt = 1.0 - float(keras_bn_momentum)
         self.shift = StochasticShift(augment_shift)
-        self.conv0 = nn.Conv1d(seq_depth, filters, kernel_size=kernel_size, padding=0, bias=False)
+        self.conv0 = nn.Conv1d(
+            seq_depth,
+            filters,
+            kernel_size=kernel_size,
+            padding=0,
+            bias=self.use_optimal_backbone,
+        )
+        self.stem_act: nn.Module = nn.ReLU() if self.use_optimal_backbone else nn.Identity()
+        self.stem_ln: nn.Module = (
+            ChannelLayerNorm(filters, eps=ln_epsilon)
+            if self.use_optimal_backbone
+            else nn.Identity()
+        )
         self.blocks = nn.ModuleList()
         for _ in range(num_layers):
             self.blocks.append(
@@ -142,19 +174,27 @@ class SalukiExact(nn.Module):
                         "ln": ChannelLayerNorm(filters, eps=ln_epsilon),
                         "act": nn.ReLU(),
                         "conv": nn.Conv1d(filters, filters, kernel_size=kernel_size, padding=0),
-                        "drop": nn.Dropout(dropout),
+                        "drop": drop_cls(dropout),
                         "pool": pool_cls(kernel_size=2, stride=2),
                     }
                 )
             )
-        self.pre_rnn_ln = ChannelLayerNorm(filters, eps=ln_epsilon)
-        self.pre_rnn_act = nn.ReLU()
+        self.pre_rnn_ln: nn.Module = (
+            nn.Identity()
+            if self.use_optimal_backbone
+            else ChannelLayerNorm(filters, eps=ln_epsilon)
+        )
+        self.pre_rnn_act: nn.Module = nn.Identity() if self.use_optimal_backbone else nn.ReLU()
         self.gru = nn.GRU(input_size=filters, hidden_size=filters, batch_first=True)
         if self.head_layernorm:
-            self.bn1 = nn.LayerNorm(filters, eps=bn_eps)
+            self.bn1 = nn.Identity() if self.use_optimal_head else nn.LayerNorm(filters, eps=bn_eps)
             self.bn2 = nn.LayerNorm(filters, eps=bn_eps)
         else:
-            self.bn1 = nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
+            self.bn1 = (
+                nn.Identity()
+                if self.use_optimal_head
+                else nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
+            )
             self.bn2 = nn.BatchNorm1d(filters, eps=bn_eps, momentum=bn_momentum_pt)
         self.fc1 = nn.Linear(filters, filters)
         self.drop1 = nn.Dropout(dropout)
@@ -165,6 +205,8 @@ class SalukiExact(nn.Module):
         """Initialize weights to match the legacy Keras conventions."""
 
         keras_he_normal_trunc_(self.conv0.weight)
+        if self.conv0.bias is not None:
+            nn.init.zeros_(self.conv0.bias)
         for blk in self.blocks:
             keras_he_normal_trunc_(blk["conv"].weight)
             nn.init.zeros_(blk["conv"].bias)
@@ -202,13 +244,23 @@ class SalukiExact(nn.Module):
 
         z = self.shift(self._to_bcl(x))
         z = self.conv0(z)
-        for blk in self.blocks:
-            z = blk["ln"](z)
-            z = blk["act"](z)
-            z = blk["conv"](z)
-            z = blk["drop"](z)
-            z = blk["pool"](z)
-        z = self.pre_rnn_act(self.pre_rnn_ln(z)).transpose(1, 2)
+        if self.use_optimal_backbone:
+            z = self.stem_ln(self.stem_act(z))
+            for blk in self.blocks:
+                z = blk["conv"](z)
+                z = blk["act"](z)
+                z = blk["pool"](z)
+                z = blk["ln"](z)
+                z = blk["drop"](z)
+            z = z.transpose(1, 2)
+        else:
+            for blk in self.blocks:
+                z = blk["ln"](z)
+                z = blk["act"](z)
+                z = blk["conv"](z)
+                z = blk["drop"](z)
+                z = blk["pool"](z)
+            z = self.pre_rnn_act(self.pre_rnn_ln(z)).transpose(1, 2)
         z = torch.flip(z, dims=[1])
         z, _ = self.gru(z)
         return z[:, -1, :]
@@ -221,6 +273,9 @@ class SalukiExact(nn.Module):
         """
 
         z = self.forward_features(x)
+        if self.use_optimal_head:
+            z = self.drop1(self.bn2(torch.relu(self.fc1(z))))
+            return self.fc2(z).squeeze(-1)
         z = self.fc1(torch.relu(self.bn1(z)))
         z = self.drop1(z)
         return self.fc2(torch.relu(self.bn2(z))).squeeze(-1)

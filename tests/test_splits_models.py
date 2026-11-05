@@ -175,3 +175,57 @@ def test_model_registry_dummy_forward():
     )
     legnet.eval()
     assert legnet(x4).shape == (2,)
+
+    saluki_exact_optimal = build_model(
+        {
+            "name": "saluki_exact",
+            "params": {
+                "filters": 8,
+                "kernel_size": 3,
+                "num_layers": 1,
+                "dropout": 0.0,
+                "augment_shift": 0,
+                "head_layernorm": True,
+                "use_optimal_head": True,
+                "use_optimal_backbone": True,
+                "spatial_dropout": True,
+            },
+        }
+    )
+    assert saluki_exact_optimal.use_optimal_head is True
+    assert saluki_exact_optimal.use_optimal_backbone is True
+    assert saluki_exact_optimal.spatial_dropout is True
+    assert saluki_exact_optimal.conv0.bias is not None
+    assert isinstance(saluki_exact_optimal.pre_rnn_ln, torch.nn.Identity)
+    assert isinstance(saluki_exact_optimal.bn1, torch.nn.Identity)
+    assert isinstance(saluki_exact_optimal.bn2, torch.nn.LayerNorm)
+    assert saluki_exact_optimal(x6).shape == (2,)
+
+    legnet_optimal = build_model(
+        {
+            "name": "legnet",
+            "params": {
+                "in_ch": 4,
+                "stem_ch": 8,
+                "ef_block_sizes": [8],
+                "pool_sizes": [2],
+                "resize_factor": 2,
+                "use_optimal_head": True,
+                "use_optimal_backbone": True,
+            },
+        }
+    )
+    assert legnet_optimal.use_optimal_head is True
+    assert legnet_optimal.use_optimal_backbone is True
+    assert isinstance(legnet_optimal.stem.block[0], torch.nn.Conv1d)
+    assert legnet_optimal.stem.block[0].bias is not None
+    assert isinstance(legnet_optimal.stem.block[1], torch.nn.SiLU)
+    assert isinstance(legnet_optimal.stem.block[2], torch.nn.BatchNorm1d)
+    assert isinstance(legnet_optimal.mapper[0], torch.nn.Conv1d)
+    assert isinstance(legnet_optimal.mapper[1], torch.nn.SiLU)
+    assert isinstance(legnet_optimal.mapper[2], torch.nn.BatchNorm1d)
+    assert isinstance(legnet_optimal.head[0], torch.nn.Linear)
+    assert isinstance(legnet_optimal.head[1], torch.nn.SiLU)
+    assert isinstance(legnet_optimal.head[2], torch.nn.BatchNorm1d)
+    legnet_optimal.eval()
+    assert legnet_optimal(x4).shape == (2,)

@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from transcriptml.models.common import ChannelLayerNorm, dropout_or_identity
+from transcriptml.models.common import ChannelLayerNorm, dropout1d_or_identity, dropout_or_identity
 from transcriptml.models.reproduce import StochasticShift, keras_he_normal_trunc_
 
 
@@ -40,6 +40,7 @@ class ConvolutionUniverseConfig:
     norm_eps: float = 1e-5
     activation: str = "gelu"
     dropout: float = 0.1
+    spatial_dropout: bool = False
     use_residual: bool = True
     pooling: StrPerLayer = "none"
     pool_size: IntPerLayer = 2
@@ -248,6 +249,7 @@ class StandardConvBlock1D(nn.Module):
         norm_eps: float,
         activation: str,
         dropout: float,
+        spatial_dropout: bool = False,
         use_residual: bool,
     ):
         super().__init__()
@@ -255,7 +257,9 @@ class StandardConvBlock1D(nn.Module):
         self.dilation = int(dilation)
         self.padding_mode = padding
         self.pad = _padding_for(self.kernel_size, self.dilation, padding, "kernel_size")
-        self.norm_position = _validate_choice("norm_position", norm_position, {"pre", "post"})
+        self.norm_position = _validate_choice(
+            "norm_position", norm_position, {"pre", "post", "optimal"}
+        )
         self.use_residual = bool(use_residual)
         if self.use_residual and padding != "same":
             raise ValueError("use_residual=True requires padding='same'")
@@ -274,7 +278,9 @@ class StandardConvBlock1D(nn.Module):
             dilation=self.dilation,
             bias=bool(bias),
         )
-        self.dropout = dropout_or_identity(dropout)
+        self.dropout = (
+            dropout1d_or_identity(dropout) if spatial_dropout else dropout_or_identity(dropout)
+        )
         if not self.use_residual:
             self.shortcut = None
         elif in_channels == out_channels:
@@ -282,16 +288,25 @@ class StandardConvBlock1D(nn.Module):
         else:
             self.shortcut = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pool: nn.Module | None = None) -> torch.Tensor:
         residual = x
         if self.norm_position == "pre":
             z = self.conv(self.activation(self.norm(x)))
             z = self.dropout(z)
-        else:
-            z = self.dropout(self.activation(self.norm(self.conv(x))))
+            if self.shortcut is not None:
+                z = z + self.shortcut(residual)
+            return z if pool is None else pool(z)
+        if self.norm_position == "optimal":
+            z = self.activation(self.conv(x))
+            if self.shortcut is not None:
+                z = z + self.shortcut(residual)
+            if pool is not None:
+                z = pool(z)
+            return self.dropout(self.norm(z))
+        z = self.dropout(self.activation(self.norm(self.conv(x))))
         if self.shortcut is not None:
             z = z + self.shortcut(residual)
-        return z
+        return z if pool is None else pool(z)
 
 
 class ConvNeXtBlock1D(nn.Module):
@@ -379,6 +394,7 @@ class ConvTower1D(nn.Module):
         norm_eps: float,
         activation: str,
         dropout: float,
+        spatial_dropout: bool = False,
         use_residual: bool,
         pooling: list[str],
         pool_sizes: list[int],
@@ -403,6 +419,16 @@ class ConvTower1D(nn.Module):
             padding=self.stem_pad,
             bias=bool(stem_bias),
         )
+        self.stem_activation: nn.Module = (
+            _activation(activation)
+            if norm_position == "optimal" and block_type == "conv"
+            else nn.Identity()
+        )
+        self.stem_norm: nn.Module = (
+            _channel_norm(norm, filters[0], norm_eps)
+            if norm_position == "optimal" and block_type == "conv"
+            else nn.Identity()
+        )
         self.stages = nn.ModuleList()
         depth = len(filters)
         in_channels = filters[0]
@@ -421,6 +447,7 @@ class ConvTower1D(nn.Module):
                     norm_eps=norm_eps,
                     activation=activation,
                     dropout=dropout,
+                    spatial_dropout=spatial_dropout,
                     use_residual=use_residual,
                 )
             else:
@@ -491,9 +518,14 @@ class ConvTower1D(nn.Module):
         return factor
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.stem(x)
+        z = self.stem_norm(self.stem_activation(self.stem(x)))
         for stage in self.stages:
-            z = stage["pool"](stage["block"](z))
+            block = stage["block"]
+            pool = stage["pool"]
+            if isinstance(block, StandardConvBlock1D) and block.norm_position == "optimal":
+                z = block(z, pool=pool)
+            else:
+                z = pool(block(z))
         return z
 
 
@@ -555,6 +587,12 @@ class DenseHead(nn.Module):
             ):
                 z = dropout(linear(activation(norm(z))))
             return z
+        if self.norm_position == "optimal":
+            for index, linear in enumerate(self.linears):
+                z = linear(z)
+                if index < len(self.linears) - 1:
+                    z = self.dropouts[index](self.norms[index](self.activations[index](z)))
+            return z
         for index, linear in enumerate(self.linears):
             z = linear(z)
             if index < len(self.linears) - 1:
@@ -586,6 +624,7 @@ class ConvolutionUniverse(nn.Module):
         norm_eps: float = 1e-5,
         activation: str = "gelu",
         dropout: float = 0.1,
+        spatial_dropout: bool = False,
         use_residual: bool = True,
         pooling: StrPerLayer = "none",
         pool_size: IntPerLayer = 2,
@@ -632,15 +671,16 @@ class ConvolutionUniverse(nn.Module):
         stem_padding = _validate_choice("stem_padding", stem_padding, {"same", "valid"})
         padding = _validate_choice("padding", padding, {"same", "valid"})
         norm = _validate_choice("norm", norm, {"none", "batch", "layer"})
-        norm_position = _validate_choice("norm_position", norm_position, {"pre", "post"})
+        norm_position = _validate_choice("norm_position", norm_position, {"pre", "post", "optimal"})
         activation = _validate_choice("activation", activation, {"relu", "gelu", "silu"})
+        self.spatial_dropout = bool(spatial_dropout)
         self.rnn_type = _validate_choice("rnn_type", rnn_type, {"none", "gru", "lstm"})
         self.rnn_summary = _validate_choice("rnn_summary", rnn_summary, {"last", "mean", "max"})
         self.global_pool = _validate_choice("global_pool", global_pool, {"avg", "max", "avgmax"})
         head_type = _validate_choice("head_type", head_type, {"linear", "mlp"})
         head_norm = _validate_choice("head_norm", head_norm, {"none", "batch", "layer"})
         head_norm_position = _validate_choice(
-            "head_norm_position", head_norm_position, {"pre", "post"}
+            "head_norm_position", head_norm_position, {"pre", "post", "optimal"}
         )
         head_activation = _validate_choice(
             "head_activation", head_activation, {"relu", "gelu", "silu"}
@@ -699,6 +739,7 @@ class ConvolutionUniverse(nn.Module):
             norm_eps=float(norm_eps),
             activation=activation,
             dropout=dropout,
+            spatial_dropout=self.spatial_dropout,
             use_residual=bool(use_residual),
             pooling=expanded_pooling,
             pool_sizes=expanded_pool_sizes,
@@ -713,8 +754,12 @@ class ConvolutionUniverse(nn.Module):
         pre_rnn_activation = _validate_choice(
             "pre_rnn_activation", pre_rnn_activation, {"none", "relu", "gelu", "silu"}
         )
-        self.pre_rnn_norm = _channel_norm(pre_rnn_norm, self.tower.out_channels, norm_eps)
-        self.pre_rnn_activation = _activation(pre_rnn_activation, allow_none=True)
+        if norm_position == "optimal" and block_type == "conv":
+            self.pre_rnn_norm = nn.Identity()
+            self.pre_rnn_activation = nn.Identity()
+        else:
+            self.pre_rnn_norm = _channel_norm(pre_rnn_norm, self.tower.out_channels, norm_eps)
+            self.pre_rnn_activation = _activation(pre_rnn_activation, allow_none=True)
         self.rnn_reverse = bool(rnn_reverse)
         self.rnn_layers = int(rnn_layers)
         self.rnn_bidirectional = bool(rnn_bidirectional)
