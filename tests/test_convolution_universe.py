@@ -253,7 +253,6 @@ def test_optimal_backbone_and_spatial_dropout_match_saluki_exact():
     saluki_params = ConvolutionUniverseConfig.saluki().to_kwargs()
     saluki_params.update(
         {
-            "stem_bias": True,
             "norm_position": "optimal",
             "spatial_dropout": True,
             "head_norm": "layer",
@@ -271,7 +270,7 @@ def test_optimal_backbone_and_spatial_dropout_match_saluki_exact():
     torch.manual_seed(43)
     universe = ConvolutionUniverse(**saluki_params).eval()
 
-    assert exact.conv0.bias is not None
+    assert exact.conv0.bias is None
     assert isinstance(exact.pre_rnn_ln, torch.nn.Identity)
     assert isinstance(universe.pre_rnn_norm, torch.nn.Identity)
     assert isinstance(exact.blocks[0]["drop"], torch.nn.Dropout1d)

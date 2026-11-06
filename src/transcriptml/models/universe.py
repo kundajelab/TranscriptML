@@ -297,12 +297,12 @@ class StandardConvBlock1D(nn.Module):
                 z = z + self.shortcut(residual)
             return z if pool is None else pool(z)
         if self.norm_position == "optimal":
-            z = self.activation(self.conv(x))
+            z = self.conv(x)
             if self.shortcut is not None:
                 z = z + self.shortcut(residual)
             if pool is not None:
                 z = pool(z)
-            return self.dropout(self.norm(z))
+            return self.dropout(self.activation(self.norm(z)))
         z = self.dropout(self.activation(self.norm(self.conv(x))))
         if self.shortcut is not None:
             z = z + self.shortcut(residual)
@@ -518,7 +518,7 @@ class ConvTower1D(nn.Module):
         return factor
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.stem_norm(self.stem_activation(self.stem(x)))
+        z = self.stem_activation(self.stem_norm(self.stem(x)))
         for stage in self.stages:
             block = stage["block"]
             pool = stage["pool"]

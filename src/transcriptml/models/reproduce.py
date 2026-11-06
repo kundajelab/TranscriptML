@@ -127,8 +127,8 @@ class SalukiExact(nn.Module):
                 ``Norm -> ReLU -> Linear -> Dropout -> Norm -> ReLU -> Linear``
                 ordering.
             use_optimal_backbone: Whether to order the stem and convolutional
-                stages as ``Conv0(bias=True) -> ReLU -> LN`` followed by
-                ``Conv -> ReLU -> Pool -> LN -> Dropout`` (feeding directly
+                stages as ``Conv0 -> LN -> ReLU`` followed by
+                ``Conv -> Pool -> LN -> ReLU -> Dropout`` (feeding directly
                 into the reversed GRU without an extra pre-RNN ``LN -> ReLU``).
             spatial_dropout: Whether to use full-filter ``nn.Dropout1d`` in
                 convolutional blocks instead of elementwise ``nn.Dropout``.
@@ -153,19 +153,13 @@ class SalukiExact(nn.Module):
         drop_cls = nn.Dropout1d if self.spatial_dropout else nn.Dropout
         bn_momentum_pt = 1.0 - float(keras_bn_momentum)
         self.shift = StochasticShift(augment_shift)
-        self.conv0 = nn.Conv1d(
-            seq_depth,
-            filters,
-            kernel_size=kernel_size,
-            padding=0,
-            bias=self.use_optimal_backbone,
-        )
-        self.stem_act: nn.Module = nn.ReLU() if self.use_optimal_backbone else nn.Identity()
+        self.conv0 = nn.Conv1d(seq_depth, filters, kernel_size=kernel_size, padding=0, bias=False)
         self.stem_ln: nn.Module = (
             ChannelLayerNorm(filters, eps=ln_epsilon)
             if self.use_optimal_backbone
             else nn.Identity()
         )
+        self.stem_act: nn.Module = nn.ReLU() if self.use_optimal_backbone else nn.Identity()
         self.blocks = nn.ModuleList()
         for _ in range(num_layers):
             self.blocks.append(
@@ -245,12 +239,12 @@ class SalukiExact(nn.Module):
         z = self.shift(self._to_bcl(x))
         z = self.conv0(z)
         if self.use_optimal_backbone:
-            z = self.stem_ln(self.stem_act(z))
+            z = self.stem_act(self.stem_ln(z))
             for blk in self.blocks:
                 z = blk["conv"](z)
-                z = blk["act"](z)
                 z = blk["pool"](z)
                 z = blk["ln"](z)
+                z = blk["act"](z)
                 z = blk["drop"](z)
             z = z.transpose(1, 2)
         else:

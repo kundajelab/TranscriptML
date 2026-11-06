@@ -382,7 +382,7 @@ This is the model used by the standard Saluki workflow.
 | `bn_eps` | `0.001` | Numerical epsilon used by normalization layers in the head. |
 | `head_layernorm` | `false` | Replace the dense-head BatchNorm layer(s) with per-example LayerNorm. |
 | `use_optimal_head` | `false` | Reorder the dense head to `Linear → ReLU → Normalization → Dropout → Linear` (omitting the pre-`fc1` `Normalization → ReLU`). |
-| `use_optimal_backbone` | `false` | Order the stem as `Conv0(bias=true) → ReLU → ChannelLayerNorm` and each stage as `Conv → ReLU → Pool → ChannelLayerNorm → Dropout` (feeding directly into the reversed GRU without an extra pre-RNN `LN → ReLU`). |
+| `use_optimal_backbone` | `false` | Order the stem as `Conv0 → ChannelLayerNorm → ReLU` and each stage as `Conv → Pool → ChannelLayerNorm → ReLU → Dropout` (feeding directly into the reversed GRU without an extra pre-RNN `LN → ReLU`). |
 | `spatial_dropout` | `false` | Use full-filter `nn.Dropout1d` in the convolutional blocks instead of elementwise `nn.Dropout`. |
 
 Set `head_layernorm` in `model.params` to enable the LayerNorm head:
@@ -613,8 +613,8 @@ them.
 
 `block_type` accepts `conv` or `convnext`. Standard convolution blocks honor the
 tower normalization and activation fields (`norm_position` accepts `pre`, `post`,
-or `optimal`, which applies `StemConv → Act → Norm` on the stem and
-`Conv → Act → (+ Residual) → Pool → Norm → Dropout` in each stage; `spatial_dropout`
+or `optimal`, which applies `StemConv → Norm → Act` on the stem and
+`Conv → (+ Residual) → Pool → Norm → Act → Dropout` in each stage; `spatial_dropout`
 selects `nn.Dropout1d` instead of `nn.Dropout`). ConvNeXt blocks use their defining
 depthwise convolution, channel-last LayerNorm, GELU pointwise MLP, optional
 LayerScale, and stochastic depth. `rnn_type` accepts `none`, `gru`, or `lstm`;
@@ -785,7 +785,7 @@ registered `legnet` model:
 | `stem_dropout` | `0.0` | Channel-dropout probability after the stem activation. |
 | `output_dim` | `1` | Number of outputs. Leave this at one for TranscriptML's scalar training workflow. |
 | `use_optimal_head` | `false` | Reorder the regression head from `Linear → BatchNorm1d → SiLU → Dropout → Linear` to `Linear → SiLU → BatchNorm1d → Dropout → Linear`. |
-| `use_optimal_backbone` | `false` | Order convolutional blocks as `Conv1d(bias=true) → SiLU → [MaxPool1d] → BatchNorm1d → Dropout1d` and order `mapper` as `Conv1d(bias=true) → SiLU → BatchNorm1d`. |
+| `use_optimal_backbone` | `false` | Order stage convolutional blocks as `Conv1d(bias=false) → [MaxPool1d] → BatchNorm1d → SiLU → Dropout1d` and order `mapper` as `Conv1d(bias=false) → BatchNorm1d → SiLU`. |
 
 Run `transcriptml models show legnet --json` to inspect these defaults from the
 installed package.

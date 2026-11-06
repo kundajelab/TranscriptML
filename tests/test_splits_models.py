@@ -195,7 +195,7 @@ def test_model_registry_dummy_forward():
     assert saluki_exact_optimal.use_optimal_head is True
     assert saluki_exact_optimal.use_optimal_backbone is True
     assert saluki_exact_optimal.spatial_dropout is True
-    assert saluki_exact_optimal.conv0.bias is not None
+    assert saluki_exact_optimal.conv0.bias is None
     assert isinstance(saluki_exact_optimal.pre_rnn_ln, torch.nn.Identity)
     assert isinstance(saluki_exact_optimal.bn1, torch.nn.Identity)
     assert isinstance(saluki_exact_optimal.bn2, torch.nn.LayerNorm)
@@ -217,13 +217,13 @@ def test_model_registry_dummy_forward():
     )
     assert legnet_optimal.use_optimal_head is True
     assert legnet_optimal.use_optimal_backbone is True
-    assert isinstance(legnet_optimal.stem.block[0], torch.nn.Conv1d)
-    assert legnet_optimal.stem.block[0].bias is not None
-    assert isinstance(legnet_optimal.stem.block[1], torch.nn.SiLU)
-    assert isinstance(legnet_optimal.stem.block[2], torch.nn.BatchNorm1d)
+    assert isinstance(legnet_optimal.main[0][1].block[0], torch.nn.Conv1d)
+    assert isinstance(legnet_optimal.main[0][1].block[1], torch.nn.MaxPool1d)
+    assert isinstance(legnet_optimal.main[0][1].block[2], torch.nn.BatchNorm1d)
+    assert isinstance(legnet_optimal.main[0][1].block[3], torch.nn.SiLU)
     assert isinstance(legnet_optimal.mapper[0], torch.nn.Conv1d)
-    assert isinstance(legnet_optimal.mapper[1], torch.nn.SiLU)
-    assert isinstance(legnet_optimal.mapper[2], torch.nn.BatchNorm1d)
+    assert isinstance(legnet_optimal.mapper[1], torch.nn.BatchNorm1d)
+    assert isinstance(legnet_optimal.mapper[2], torch.nn.SiLU)
     assert isinstance(legnet_optimal.head[0], torch.nn.Linear)
     assert isinstance(legnet_optimal.head[1], torch.nn.SiLU)
     assert isinstance(legnet_optimal.head[2], torch.nn.BatchNorm1d)

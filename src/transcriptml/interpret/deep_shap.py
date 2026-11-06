@@ -1003,12 +1003,12 @@ class _SalukiExactAttributionModel(torch.nn.Module):
         z = source.shift(source._to_bcl(X))
         z = source.conv0(z)
         if getattr(source, "use_optimal_backbone", False):
-            z = source.stem_ln(source.stem_act(z))
+            z = source.stem_act(source.stem_ln(z))
             for block in source.blocks:
                 z = block["conv"](z)
-                z = block["act"](z)
                 z = block["pool"](z)
                 z = block["ln"](z)
+                z = block["act"](z)
                 z = block["drop"](z)
             z = z.transpose(1, 2)
         else:
