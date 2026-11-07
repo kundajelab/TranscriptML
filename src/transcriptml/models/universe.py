@@ -36,7 +36,7 @@ class ConvolutionUniverseConfig:
     padding: str = "same"
     conv_bias: bool = True
     norm: str = "layer"
-    norm_position: str = "post"
+    norm_position: str = "optimal"
     norm_eps: float = 1e-5
     activation: str = "gelu"
     dropout: float = 0.1
@@ -65,7 +65,7 @@ class ConvolutionUniverseConfig:
     head_type: str = "mlp"
     head_hidden: int | list[int] | tuple[int, ...] | None = 64
     head_norm: str = "layer"
-    head_norm_position: str = "post"
+    head_norm_position: str = "optimal"
     head_activation: str = "gelu"
     head_dropout: float = 0.1
     head_norm_eps: float = 1e-5
@@ -233,7 +233,7 @@ class DropPath(nn.Module):
 
 
 class StandardConvBlock1D(nn.Module):
-    """Configurable pre- or post-normalized Conv1d block."""
+    """Configurable pre- or optimal-normalized Conv1d block."""
 
     def __init__(
         self,
@@ -258,7 +258,7 @@ class StandardConvBlock1D(nn.Module):
         self.padding_mode = padding
         self.pad = _padding_for(self.kernel_size, self.dilation, padding, "kernel_size")
         self.norm_position = _validate_choice(
-            "norm_position", norm_position, {"pre", "post", "optimal"}
+            "norm_position", norm_position, {"pre", "optimal"}
         )
         self.use_residual = bool(use_residual)
         if self.use_residual and padding != "same":
@@ -296,17 +296,12 @@ class StandardConvBlock1D(nn.Module):
             if self.shortcut is not None:
                 z = z + self.shortcut(residual)
             return z if pool is None else pool(z)
-        if self.norm_position == "optimal":
-            z = self.conv(x)
-            if self.shortcut is not None:
-                z = z + self.shortcut(residual)
-            if pool is not None:
-                z = pool(z)
-            return self.dropout(self.activation(self.norm(z)))
-        z = self.dropout(self.activation(self.norm(self.conv(x))))
+        z = self.conv(x)
         if self.shortcut is not None:
             z = z + self.shortcut(residual)
-        return z if pool is None else pool(z)
+        if pool is not None:
+            z = pool(z)
+        return self.dropout(self.activation(self.norm(z)))
 
 
 class ConvNeXtBlock1D(nn.Module):
@@ -587,16 +582,10 @@ class DenseHead(nn.Module):
             ):
                 z = dropout(linear(activation(norm(z))))
             return z
-        if self.norm_position == "optimal":
-            for index, linear in enumerate(self.linears):
-                z = linear(z)
-                if index < len(self.linears) - 1:
-                    z = self.dropouts[index](self.norms[index](self.activations[index](z)))
-            return z
         for index, linear in enumerate(self.linears):
             z = linear(z)
             if index < len(self.linears) - 1:
-                z = self.dropouts[index](self.activations[index](self.norms[index](z)))
+                z = self.dropouts[index](self.norms[index](self.activations[index](z)))
         return z
 
 
@@ -620,7 +609,7 @@ class ConvolutionUniverse(nn.Module):
         padding: str = "same",
         conv_bias: bool = True,
         norm: str = "layer",
-        norm_position: str = "post",
+        norm_position: str = "optimal",
         norm_eps: float = 1e-5,
         activation: str = "gelu",
         dropout: float = 0.1,
@@ -645,7 +634,7 @@ class ConvolutionUniverse(nn.Module):
         head_type: str = "mlp",
         head_hidden: int | list[int] | tuple[int, ...] | None = 64,
         head_norm: str = "layer",
-        head_norm_position: str = "post",
+        head_norm_position: str = "optimal",
         head_activation: str = "gelu",
         head_dropout: float = 0.1,
         head_norm_eps: float = 1e-5,
@@ -671,7 +660,7 @@ class ConvolutionUniverse(nn.Module):
         stem_padding = _validate_choice("stem_padding", stem_padding, {"same", "valid"})
         padding = _validate_choice("padding", padding, {"same", "valid"})
         norm = _validate_choice("norm", norm, {"none", "batch", "layer"})
-        norm_position = _validate_choice("norm_position", norm_position, {"pre", "post", "optimal"})
+        norm_position = _validate_choice("norm_position", norm_position, {"pre", "optimal"})
         activation = _validate_choice("activation", activation, {"relu", "gelu", "silu"})
         self.spatial_dropout = bool(spatial_dropout)
         self.rnn_type = _validate_choice("rnn_type", rnn_type, {"none", "gru", "lstm"})
@@ -680,7 +669,7 @@ class ConvolutionUniverse(nn.Module):
         head_type = _validate_choice("head_type", head_type, {"linear", "mlp"})
         head_norm = _validate_choice("head_norm", head_norm, {"none", "batch", "layer"})
         head_norm_position = _validate_choice(
-            "head_norm_position", head_norm_position, {"pre", "post", "optimal"}
+            "head_norm_position", head_norm_position, {"pre", "optimal"}
         )
         head_activation = _validate_choice(
             "head_activation", head_activation, {"relu", "gelu", "silu"}
