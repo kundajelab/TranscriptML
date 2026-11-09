@@ -120,19 +120,22 @@ def test_saluki_legacy_and_multi_experiment_cli(tmp_path: Path):
     assert f"ENV_CFG={run_root}/cv10/config_snapshot/base_train_config.json" in lines
     assert "ENV_MODEL=saluki_exact" in lines
 
-    # 2. Multi-experiment workflow with --exp and --train-config
+    # 2. Multi-experiment workflow with --exp and relative --train-config
+    # (even when SLURM_SUBMIT_DIR is inherited from an Open OnDemand session)
+    ood_env = {**env, "SLURM_SUBMIT_DIR": "/var/www/ood/apps/sys/dashboard"}
     exp_sub = subprocess.run(
         [
             "bash",
-            str(work / "submit_train_eval_cv.sh"),
+            "scripts/submit_train_eval_cv.sh",
             "--exp",
             "cnn_v1",
             "--train-config",
-            str(cnn_cfg),
+            "saluki_cnn.json",
             "--n-folds",
             "5",
         ],
-        env=env,
+        cwd=tmp_path,
+        env=ood_env,
         text=True,
         capture_output=True,
     )

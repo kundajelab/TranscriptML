@@ -149,7 +149,7 @@ DEEP_SHAP_MAX_CONCURRENT="${DEEP_SHAP_MAX_CONCURRENT:-}"
 # ---------------------------------------------------------------------------
 # Internal helpers: leave these alone unless you are editing the scripts.
 # ---------------------------------------------------------------------------
-_WORKFLOW_INITIAL_PWD="${SLURM_SUBMIT_DIR:-${PWD}}"
+_WORKFLOW_INITIAL_PWD="${PWD}"
 _DEFAULT_RUN_ROOT="${RUN_ROOT}"
 _DEFAULT_DATASET_DIR="${DATASET_DIR}"
 _DEFAULT_EXPERIMENTS_DIR="${EXPERIMENTS_DIR}"
