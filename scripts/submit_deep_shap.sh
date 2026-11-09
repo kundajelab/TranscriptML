@@ -10,6 +10,9 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/sherlock_config.sh"
+parse_workflow_args "$@"
+require_no_positional_args
+export_workflow_env
 
 if ! [[ "${N_FOLDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "N_FOLDS must be a positive integer" >&2

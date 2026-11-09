@@ -20,6 +20,8 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/sherlock_config.sh"
+parse_workflow_args "$@"
+set -- "${WORKFLOW_POSITIONAL_ARGS[@]+"${WORKFLOW_POSITIONAL_ARGS[@]}"}"
 setup_transcriptml_env
 
 if ! [[ "${DEEP_SHAP_SEQUENCE_SHARDS}" =~ ^[1-9][0-9]*$ ]]; then

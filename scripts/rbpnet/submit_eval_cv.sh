@@ -11,6 +11,9 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/rbpnet_config.sh"
+parse_workflow_args "$@"
+require_no_positional_args
+export_workflow_env
 
 case "${EVAL_SPLIT}" in
   train|val|test|all) ;;

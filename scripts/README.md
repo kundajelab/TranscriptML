@@ -72,9 +72,13 @@ SALUKI_TRUNCATE_FROM="5prime"
 RUN_NAME="human_kdeg_saluki_exact"
 RUN_ROOT="/scratch/users/isvock/TranscriptML/${RUN_NAME}"
 DATASET_DIR="${RUN_ROOT}/data/saluki"
-TRAIN_OUTPUT_ROOT="${RUN_ROOT}/train_eval"
-CV_ROOT="${RUN_ROOT}/cv10"
-INTERPRET_ROOT="${RUN_ROOT}/interpret"
+EXP_NAME=""
+EXPERIMENTS_DIR="${RUN_ROOT}/experiments"
+# When EXP_NAME is set (via sherlock_config.sh or --exp NAME), EXP_ROOT is
+# ${EXPERIMENTS_DIR}/${EXP_NAME}; otherwise EXP_ROOT defaults to ${RUN_ROOT}.
+TRAIN_OUTPUT_ROOT="${EXP_ROOT}/train_eval"
+CV_ROOT="${EXP_ROOT}/cv10"
+INTERPRET_ROOT="${EXP_ROOT}/interpret"
 
 # 4. Runtime choices.
 N_FOLDS="10"
@@ -92,8 +96,9 @@ What each group means:
 | `GTF`, `FASTA`, `TARGETS` | Set these to your annotation GTF, genome FASTA, and target table. |
 | `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
 | `SALUKI_LENGTH`, `SALUKI_TRUNCATE_FROM` | Set the encoded width and which end is removed from overlength transcripts. Use `5prime` for the legacy behavior or `3prime` to retain the 5-prime end; short transcripts are always padded on the right. |
-| `RUN_NAME`, `RUN_ROOT` | Pick a run name and scratch/OAK location where outputs should be written. |
-| `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | Usually leave these derived from `RUN_ROOT`. Change them only if you want outputs split across custom locations. |
+| `RUN_NAME`, `RUN_ROOT` | Pick a dataset/project run name and scratch/OAK location where outputs should be written. |
+| `EXP_NAME`, `EXPERIMENTS_DIR`, `EXP_ROOT` | Optional experiment namespace for training and interpreting multiple models on the same dataset in parallel. When `EXP_NAME` is set (or `--exp NAME` is passed on the CLI), `EXP_ROOT` becomes `${RUN_ROOT}/experiments/${EXP_NAME}`. When `EXP_NAME` is empty, `EXP_ROOT` defaults to `${RUN_ROOT}` (the legacy single-model layout). |
+| `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | `DATASET_DIR` defaults to `${RUN_ROOT}/data/saluki` (shared across experiments). `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `SWEEP_ROOT`, and `INTERPRET_ROOT` default to subdirectories under `${EXP_ROOT}`. |
 | `SWEEP_TABLE`, `SWEEP_ROOT`, `SWEEP_MAX_CONCURRENT`, `SWEEP_SKIP_COMPLETED` | Hyperparameter sweep controls. By default the sweep table is `scripts/saluki_hparams.tsv`, outputs go under `${RUN_ROOT}/hparam_sweep`, and completed folds are skipped on rerun. |
 | `N_FOLDS`, `CV_SEED`, `CV_VAL_OFFSET`, `CV_MODEL`, `EVAL_SPLIT` | Change these if you do not want the default 10-fold CV behavior or model name. |
 | `MODEL_DIR`, `EVAL_DIR`, `GENERATED_TRAIN_CONFIG`, `TRAIN_SEED`, `REQUIRE_SPLIT_FILE` | Optional controls for `train_eval_split.sh`. By default it writes under `${TRAIN_OUTPUT_ROOT}` and requires `${DATASET_DIR}/splits.json`. |
@@ -317,6 +322,67 @@ ${CV_ROOT}/fold0/eval/test_predictions.summary.json
 The fold split is deterministic from `CV_SEED`. For fold `i`, fold `i` is the
 test split, fold `i + CV_VAL_OFFSET` modulo `N_FOLDS` is validation, and the
 remaining folds are training.
+
+## Running Multiple Models In Parallel On One Dataset
+
+All `submit_*.sh` and worker scripts accept command-line options so you can use `sherlock_config.sh` as a shared dataset-level base config and launch multiple model experiments in parallel without editing `sherlock_config.sh` between submissions.
+
+When you pass `--exp <name>` (or `-e <name>`), outputs are scoped under `${RUN_ROOT}/experiments/<name>` while the dataset bundle at `${DATASET_DIR}` (`${RUN_ROOT}/data/saluki`) remains shared:
+
+```text
+${RUN_ROOT}/
+├── data/saluki/                              # Built once per dataset
+└── experiments/
+    ├── saluki_mse/
+    │   ├── config_snapshot/base_train_config.json
+    │   ├── cv10/
+    │   ├── train_eval/
+    │   └── interpret/
+    ├── saluki_weighted/
+    │   ├── config_snapshot/base_train_config.json
+    │   ├── cv10/
+    │   └── interpret/
+    └── saluki_cnn/
+        ├── config_snapshot/base_train_config.json
+        ├── cv10/
+        └── interpret/
+```
+
+When `--exp` is omitted (and `EXP_NAME` is empty), `EXP_ROOT` defaults to `${RUN_ROOT}`, preserving the single-model layout (`${RUN_ROOT}/cv10`, `${RUN_ROOT}/interpret`, etc.).
+
+### Example Parallel Workflow
+
+```bash
+# 1. Build the dataset once using sherlock_config.sh defaults
+sbatch scripts/build_saluki_gtf.sh
+
+# 2. Submit multiple model trainings in parallel (each snapshots its train config at submit time)
+bash scripts/submit_train_eval_cv.sh --exp saluki_mse      --train-config configs/saluki_mse.json
+bash scripts/submit_train_eval_cv.sh --exp saluki_weighted --train-config configs/saluki_weighted.json
+bash scripts/submit_train_eval_cv.sh --exp saluki_cnn      --train-config configs/saluki_cnn.json
+
+# 3. Submit interpretation workflows for any trained experiment via --exp
+bash scripts/submit_ism_by_fold.sh             --exp saluki_cnn
+bash scripts/submit_region_ablation_by_fold.sh --exp saluki_cnn
+bash scripts/submit_motif_ablation_by_fold.sh  --exp saluki_cnn
+bash scripts/submit_deep_shap.sh               --exp saluki_cnn --deep-shap-strategy full-dinuc
+```
+
+### Supported CLI Flags
+
+Run any script with `--help` to see all options:
+
+- `-e, --exp, --experiment NAME`: Scope `EXP_ROOT` to `${RUN_ROOT}/experiments/NAME` (and derive `CV_ROOT`, `TRAIN_OUTPUT_ROOT`, `SWEEP_ROOT`, and `INTERPRET_ROOT` from `EXP_ROOT`).
+- `-c, --train-config FILE`: Base JSON training config. Unless `--model` or `CV_MODEL` is explicitly overridden, `CV_MODEL` is automatically read from `model.name` in this config, and the file is snapshotted into `${EXP_ROOT}/config_snapshot/base_train_config.json` at submission time so queued jobs are unaffected by later file edits.
+- `-m, --model NAME`: Override `CV_MODEL` (or single-split model name) from the CLI.
+- `-d, --dataset, --dataset-dir DIR`: Override `DATASET_DIR` (and `INTERPRET_DATASET_DIR` unless set separately).
+- `--interpret-dataset-dir DIR`: Override `INTERPRET_DATASET_DIR`.
+- `-r, --run-root DIR` / `--run-name NAME`: Override `RUN_ROOT` or `RUN_NAME`.
+- `--cv-root DIR`, `--interpret-root DIR`, `--train-output-root DIR`, `--sweep-root DIR`: Override individual output directories.
+- `--deep-shap-strategy NAME`, `--deep-shap-run-name NAME`, `--deep-shap-out-root DIR`: DeepSHAP overrides.
+- `--region-custom-run-name NAME`, `--region-families LIST`, `--motif-region REGION`: Region and motif ablation overrides.
+- `--config, --run-config FILE`: Source an additional shell config file.
+- `-s, --set KEY=VALUE` (repeatable): Override any variable in `sherlock_config.sh` (e.g., `-s N_FOLDS=5 -s PRED_BATCH_SIZE=256`).
 
 ## Hyperparameter Sweep CV
 

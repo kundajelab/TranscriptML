@@ -20,9 +20,11 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/rbpnet_config.sh"
+parse_workflow_args "$@"
+set -- "${WORKFLOW_POSITIONAL_ARGS[@]+"${WORKFLOW_POSITIONAL_ARGS[@]}"}"
 setup_transcriptml_env
 
-FOLD="${SLURM_ARRAY_TASK_ID:-${1:-}}"
+FOLD="${SLURM_ARRAY_TASK_ID:-${FOLD:-${1:-}}}"
 if [[ -z "${FOLD}" ]]; then
   echo "Provide a fold argument or run as a Slurm array job." >&2
   exit 1

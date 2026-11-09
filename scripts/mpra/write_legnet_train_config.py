@@ -18,12 +18,17 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, help="Model output directory")
     parser.add_argument("--config-path", required=True, help="Generated train config path")
     parser.add_argument("--seed", type=int, help="Optional seed override")
+    parser.add_argument("--model", help="Optional registered model name override")
     args = parser.parse_args()
 
     config = json.loads(Path(args.base_config).read_text(encoding="utf-8"))
     config["dataset"] = str(Path(args.dataset))
     config["output_dir"] = str(Path(args.output_dir))
     config.setdefault("model", {"name": "legnet", "params": {}})
+    if args.model:
+        model = config.get("model")
+        params = dict(model.get("params", {}) or {}) if isinstance(model, dict) else {}
+        config["model"] = {"name": str(args.model).strip(), "params": params}
     config.setdefault("mmap_mode", "r")
     if args.seed is not None:
         config["seed"] = int(args.seed)

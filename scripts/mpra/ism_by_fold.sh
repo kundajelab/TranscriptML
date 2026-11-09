@@ -20,9 +20,11 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/mpra_config.sh"
+parse_workflow_args "$@"
+set -- "${WORKFLOW_POSITIONAL_ARGS[@]+"${WORKFLOW_POSITIONAL_ARGS[@]}"}"
 setup_transcriptml_env
 
-FOLD="${SLURM_ARRAY_TASK_ID}"
+FOLD="${SLURM_ARRAY_TASK_ID:-${FOLD:-${1:-}}}"
 CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
 OUT_DIR="${INTERPRET_ROOT}/ism/fold${FOLD}"
 

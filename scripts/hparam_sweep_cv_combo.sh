@@ -20,9 +20,11 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/sherlock_config.sh"
+parse_workflow_args "$@"
+set -- "${WORKFLOW_POSITIONAL_ARGS[@]+"${WORKFLOW_POSITIONAL_ARGS[@]}"}"
 setup_transcriptml_env
 
-COMBO_INDEX="${COMBO_INDEX:-${SLURM_ARRAY_TASK_ID:?Set COMBO_INDEX or run through submit_hparam_sweep_cv.sh}}"
+COMBO_INDEX="${COMBO_INDEX:-${SLURM_ARRAY_TASK_ID:-${1:?Set COMBO_INDEX or run through submit_hparam_sweep_cv.sh}}}"
 COMBO_DIR="$(printf "%s/combo_%04d" "${SWEEP_ROOT}" "${COMBO_INDEX}")"
 mkdir -p "${COMBO_DIR}"
 

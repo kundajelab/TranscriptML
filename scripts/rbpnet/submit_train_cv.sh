@@ -11,11 +11,15 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/rbpnet_config.sh"
+parse_workflow_args "$@"
+require_no_positional_args
 
 if [[ ! -f "${CV_PLAN}" ]]; then
   echo "Missing chromosome CV plan ${CV_PLAN}; run create_chromosome_cv_plan.sh first." >&2
   exit 1
 fi
+
+prepare_train_submission "${CV_ROOT}"
 
 mkdir -p "${CV_ROOT}" slurm_output
 sbatch --array="0-$((N_FOLDS - 1))" "${SCRIPT_DIR}/train_cv_fold.sh"

@@ -10,5 +10,8 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/mpra_config.sh"
+parse_workflow_args "$@"
+require_no_positional_args
+export_workflow_env
 
 sbatch --array=0-$((N_FOLDS - 1)) "${SCRIPT_DIR}/ism_by_fold.sh"

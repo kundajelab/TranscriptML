@@ -181,6 +181,28 @@ The CV workflow ignores any `SPLIT_COL` from the source MPRA table. If you want
 to train/evaluate a single predefined split instead, use the optional
 `train_legnet.sh` helper below.
 
+## Running Multiple Models In Parallel On One MPRA Dataset
+
+All `scripts/mpra/*.sh` scripts accept CLI flags so you can keep `mpra_config.sh` as a dataset-level base config and train/interpret multiple models in parallel under `${RUN_ROOT}/experiments/<name>`:
+
+```bash
+# Train multiple configs in parallel on the same built MPRA dataset
+bash scripts/mpra/submit_train_eval_cv.sh --exp legnet_small --train-config configs/legnet_small.json
+bash scripts/mpra/submit_train_eval_cv.sh --exp legnet_large --train-config configs/legnet_large.json
+
+# Run ISM and DeepSHAP per experiment
+bash scripts/mpra/submit_ism_by_fold.sh --exp legnet_large
+bash scripts/mpra/submit_deep_shap.sh   --exp legnet_large --deep-shap-strategy full-dinuc
+```
+
+Common flags (run any script with `--help` for the full list):
+
+- `-e, --exp NAME`: Scope `EXP_ROOT` to `${RUN_ROOT}/experiments/NAME` (`CV_ROOT`, `TRAIN_OUTPUT_ROOT`, `SWEEP_ROOT`, and `INTERPRET_ROOT` derive from `EXP_ROOT`). Omit `--exp` to keep the legacy single-model layout directly under `${RUN_ROOT}`.
+- `-c, --train-config FILE`: Base JSON training config (snapshotted into `config_snapshot/base_train_config.json` at submit time; `CV_MODEL` defaults to `model.name` in this file).
+- `-m, --model NAME`: Override model name.
+- `-d, --dataset-dir DIR`, `--interpret-dataset-dir DIR`, `--cv-root DIR`, `--interpret-root DIR`: Directory overrides.
+- `-s, --set KEY=VALUE`: Override any `mpra_config.sh` variable inline.
+
 ## Hyperparameter Sweep CV
 
 Use this when you want one SLURM job per LegNet hyperparameter combo, with all

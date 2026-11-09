@@ -18,6 +18,8 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/rbpnet_config.sh"
+parse_workflow_args "$@"
+require_no_positional_args
 setup_transcriptml_env
 
 if [[ -z "${GENOME_FASTA}" || -z "${GTF}" || -z "${SMINPUT_BAM}" || ${#IP_BAMS[@]} -eq 0 ]]; then

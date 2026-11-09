@@ -20,6 +20,8 @@ if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   fi
 fi
 source "${SCRIPT_DIR}/sherlock_config.sh"
+parse_workflow_args "$@"
+require_no_positional_args
 setup_transcriptml_env
 
 mkdir -p "${TRAIN_OUTPUT_ROOT}" "${MODEL_DIR}" "${EVAL_DIR}"
@@ -39,6 +41,9 @@ writer_args=(
 )
 if [[ -n "${TRAIN_SEED}" ]]; then
   writer_args+=(--seed "${TRAIN_SEED}")
+fi
+if [[ -n "${TRAIN_MODEL_OVERRIDE:-}" ]]; then
+  writer_args+=(--model "${TRAIN_MODEL_OVERRIDE}")
 fi
 
 CONFIG_PATH="$(python "${SCRIPT_DIR}/write_train_config.py" "${writer_args[@]}")"

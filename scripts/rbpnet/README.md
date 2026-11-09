@@ -41,6 +41,18 @@ bash scripts/rbpnet/submit_train_cv.sh
 bash scripts/rbpnet/submit_eval_cv.sh
 ```
 
+To train and evaluate multiple RBPNet configurations in parallel on the same preprocessed bundle and chromosome CV plan, pass `--exp <name>` and `--train-config <file>` (run any script with `--help` for all CLI flags):
+
+```bash
+bash scripts/rbpnet/submit_train_cv.sh --exp rbpnet_enrichment --train-config configs/enrichment.json
+bash scripts/rbpnet/submit_train_cv.sh --exp rbpnet_profile    --train-config configs/profile_only.json
+
+bash scripts/rbpnet/submit_eval_cv.sh  --exp rbpnet_enrichment
+bash scripts/rbpnet/submit_eval_cv.sh  --exp rbpnet_profile
+```
+
+When `--exp <name>` is provided, `CV_ROOT` and `EVAL_ROOT` are scoped under `${RUN_ROOT}/experiments/<name>/cv` while `PROCESSED_DIR`, `BUNDLE_DIR`, and `CV_PLAN` remain shared under `${RUN_ROOT}`. Omit `--exp` to keep the single-model layout under `${RUN_ROOT}/cv`.
+
 The data-construction script chooses stride 1 automatically for
 `original_rbpnet` and stride 50 for the other selectors unless
 `WINDOW_STRIDE` is explicitly set. Its default selector is
