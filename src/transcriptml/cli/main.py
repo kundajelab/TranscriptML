@@ -445,6 +445,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target-id-col", default="transcript_id")
     p.add_argument("--length", type=int, default=DEFAULT_SALUKI_LENGTH)
     p.add_argument("--truncate-from", choices=["5prime", "3prime"], default="5prime")
+    p.add_argument(
+        "--mrna-only",
+        action="store_true",
+        help="Restrict to transcripts with annotated coding sequences (CDS)",
+    )
     p.add_argument("--metadata-cols")
     p.add_argument("--split-col")
     p.add_argument("--delimiter")
@@ -1141,6 +1146,7 @@ def main(argv: list[str] | None = None) -> None:
             target_id_col=args.target_id_col,
             length=args.length,
             truncate_from=args.truncate_from,
+            mrna_only=args.mrna_only,
             metadata_cols=_csv_list(args.metadata_cols),
             split_col=args.split_col,
             delimiter=args.delimiter,

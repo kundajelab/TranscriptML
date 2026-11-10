@@ -101,7 +101,18 @@ Shorter transcripts are padded at the 3-prime end under either truncation mode.
 Only transcript IDs present in both the GTF and the target table are kept.
 Transcripts without `CDS` rows receive an all-zero CDS channel, which means they
 can still be used for ordinary training and prediction, but CDS-specific
-analyses will not find codons in those transcripts.
+analyses will not find codons in those transcripts. When `--targets` is omitted
+(or to filter out non-coding transcripts), pass `--mrna-only` to encode only
+transcripts with annotated coding sequences:
+
+```bash
+transcriptml build-saluki-gtf \
+  --gtf annotations.gtf \
+  --fasta genome.fa \
+  --out-dir data/saluki_mrna \
+  --length 12288 \
+  --mrna-only
+```
 
 The output directory contains files such as:
 

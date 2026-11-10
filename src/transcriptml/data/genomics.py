@@ -54,6 +54,12 @@ class TranscriptFeature:
 
         return int(sum(r.end - r.start for r in self.exons))
 
+    @property
+    def has_cds(self) -> bool:
+        """Return whether the transcript has an annotated exonic coding sequence."""
+
+        return bool(self.cds) and _cds_transcript_bounds(self, _build_exon_map(self)) is not None
+
 
 @dataclass(frozen=True)
 class TranscriptRecord:
@@ -299,6 +305,7 @@ def load_transcript_features(
     gtf_path: str | Path,
     *,
     transcript_ids: set[str] | Sequence[str] | None = None,
+    mrna_only: bool = False,
     progress: bool = True,
 ) -> dict[str, TranscriptFeature]:
     """Load exon/CDS structures from a GTF without using pyranges.
@@ -307,6 +314,8 @@ def load_transcript_features(
         gtf_path: GTF/GFF-like annotation file containing exon and CDS records.
         transcript_ids: Optional transcript identifiers to retain. When
             omitted, all transcripts with exon records are loaded.
+        mrna_only: Whether to retain only transcripts with annotated exonic CDS
+            intervals.
         progress: Whether to emit progress messages while parsing.
     """
 
@@ -341,7 +350,7 @@ def load_transcript_features(
     for tid, item in grouped.items():
         if not item.exons:
             continue
-        out[tid] = TranscriptFeature(
+        feature = TranscriptFeature(
             transcript_id=tid,
             chrom=item.chrom,
             strand=item.strand,
@@ -349,7 +358,16 @@ def load_transcript_features(
             cds=tuple(item.cds),
             attributes=dict(item.attrs),
         )
-    reporter.close(extra=f"{len(out)} transcripts with exons")
+        if mrna_only and not feature.has_cds:
+            continue
+        out[tid] = feature
+    reporter.close(
+        extra=(
+            f"{len(out)} mRNA transcripts with exons and CDS"
+            if mrna_only
+            else f"{len(out)} transcripts with exons"
+        )
+    )
     return out
 
 
@@ -501,6 +519,7 @@ def extract_transcript_records(
     fasta_path: str | Path,
     *,
     transcript_ids: set[str] | Sequence[str] | None = None,
+    mrna_only: bool = False,
     progress: bool = True,
 ) -> list[TranscriptRecord]:
     """Extract transcript sequences and Saluki annotation positions from GTF/FASTA.
@@ -510,10 +529,17 @@ def extract_transcript_records(
         fasta_path: Genome FASTA file used to assemble transcript sequences.
         transcript_ids: Optional transcript identifiers to extract. When
             omitted, all annotated transcripts with exons are extracted.
+        mrna_only: Whether to retain only transcripts with annotated exonic CDS
+            intervals.
         progress: Whether to emit progress messages while extracting records.
     """
 
-    features = load_transcript_features(gtf_path, transcript_ids=transcript_ids, progress=progress)
+    features = load_transcript_features(
+        gtf_path,
+        transcript_ids=transcript_ids,
+        mrna_only=mrna_only,
+        progress=progress,
+    )
     log_progress(f"opening FASTA {fasta_path}", enabled=progress)
     fasta = _FastaAccessor(fasta_path)
     try:

@@ -343,6 +343,7 @@ def build_saluki_dataset_from_gtf(
     target_id_col: str = "transcript_id",
     length: int = DEFAULT_SALUKI_LENGTH,
     truncate_from: str = "5prime",
+    mrna_only: bool = False,
     metadata_cols: Sequence[str] | None = None,
     split_col: str | None = None,
     delimiter: str | None = None,
@@ -369,6 +370,8 @@ def build_saluki_dataset_from_gtf(
         length: Fixed Saluki input length to encode for every transcript.
         truncate_from: Side to truncate for transcripts longer than ``length``.
             Accepts ``"5prime"``/``"left"`` or ``"3prime"``/``"right"``.
+        mrna_only: Whether to restrict the dataset to transcripts with
+            annotated exonic coding sequences (CDS).
         metadata_cols: Optional target-table columns to copy into bundle
             metadata.
         split_col: Optional target-table column with train/validation/test split
@@ -423,6 +426,21 @@ def build_saluki_dataset_from_gtf(
     if not selected_ids:
         raise ValueError("No transcripts with exon annotations were found for the requested inputs")
     n_missing_gtf_transcripts = len(target_rows) - len(selected_ids) if target_rows is not None else None
+
+    n_skipped_non_mrna = 0
+    if mrna_only:
+        mrna_indices = [i for i, tid in enumerate(selected_ids) if features_by_id[tid].has_cds]
+        n_skipped_non_mrna = len(selected_ids) - len(mrna_indices)
+        selected_ids = [selected_ids[i] for i in mrna_indices]
+        if selected_target_rows is not None:
+            selected_target_rows = [selected_target_rows[i] for i in mrna_indices]
+        log_progress(
+            f"build-saluki-gtf: restricted to mRNA transcripts with coding sequences "
+            f"({len(selected_ids)} kept, {n_skipped_non_mrna} non-coding skipped)",
+            enabled=progress,
+        )
+        if not selected_ids:
+            raise ValueError("No transcripts with coding sequences were found for the requested inputs")
 
     # Make the sequence/CDS/splice-site tensor
     log_progress(f"build-saluki-gtf: opening FASTA {fasta_path}", enabled=progress)
@@ -541,9 +559,11 @@ def build_saluki_dataset_from_gtf(
             "split_col": split_col,
             "length": int(length),
             "truncate_from": truncate_from,
+            "mrna_only": bool(mrna_only),
             "n_requested_targets": len(target_rows) if target_rows is not None else None,
             "n_missing_transcripts": n_missing_gtf_transcripts,
             "n_missing_gtf_transcripts": n_missing_gtf_transcripts,
+            "n_skipped_non_mrna_transcripts": int(n_skipped_non_mrna),
             "n_skipped_missing_fasta_chromosome": int(sum(skipped_fasta_chromosomes.values())),
             "skipped_missing_fasta_chromosomes": dict(sorted(skipped_fasta_chromosomes.items())),
         },

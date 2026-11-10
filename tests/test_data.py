@@ -285,3 +285,72 @@ def test_gtf_fasta_extraction_and_saluki_builder(tmp_path):
     assert three_prime.metadata[0]["represented_length"] == 4
     assert three_prime.metadata[0]["encoded_offset"] == 0
     assert three_prime.config["truncate_from"] == "3prime"
+
+
+def test_saluki_gtf_builder_mrna_only_without_targets(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nAAACCCGGGTTT\n", encoding="utf-8")
+    gtf = tmp_path / "tx.gtf"
+    gtf.write_text(
+        "\n".join(
+            [
+                'chr1\ttest\texon\t1\t3\t.\t+\t.\tgene_id "G1"; transcript_id "tx_coding";',
+                'chr1\ttest\texon\t7\t9\t.\t+\t.\tgene_id "G1"; transcript_id "tx_coding";',
+                'chr1\ttest\tCDS\t1\t3\t.\t+\t0\tgene_id "G1"; transcript_id "tx_coding";',
+                'chr1\ttest\tCDS\t7\t9\t.\t+\t0\tgene_id "G1"; transcript_id "tx_coding";',
+                'chr1\ttest\texon\t4\t9\t.\t+\t.\tgene_id "G2"; transcript_id "tx_lncrna";',
+                'chr1\ttest\texon\t1\t3\t.\t+\t.\tgene_id "G3"; transcript_id "tx_nonexonic_cds";',
+                'chr1\ttest\tCDS\t4\t6\t.\t+\t0\tgene_id "G3"; transcript_id "tx_nonexonic_cds";',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    all_tx = build_saluki_dataset_from_gtf(
+        gtf_path=gtf,
+        fasta_path=fasta,
+        out_dir=tmp_path / "bundle_all",
+        length=8,
+        progress=False,
+    )
+    assert all_tx.ids == ["tx_coding", "tx_lncrna", "tx_nonexonic_cds"]
+    assert all_tx.y is None
+    assert all_tx.config["mrna_only"] is False
+    assert all_tx.config["n_skipped_non_mrna_transcripts"] == 0
+
+    mrna_records = extract_transcript_records(gtf, fasta, mrna_only=True, progress=False)
+    assert [r.transcript_id for r in mrna_records] == ["tx_coding"]
+
+    mrna_bundle = build_saluki_dataset_from_gtf(
+        gtf_path=gtf,
+        fasta_path=fasta,
+        out_dir=tmp_path / "bundle_mrna",
+        length=8,
+        mrna_only=True,
+        progress=False,
+    )
+    assert mrna_bundle.ids == ["tx_coding"]
+    assert mrna_bundle.y is None
+    assert mrna_bundle.X.shape == (1, 6, 8)
+    assert decode_rna_one_hot(mrna_bundle.X[0, :4]) == "AAAGGGNN"
+    assert mrna_bundle.X[0, 4].tolist() == [1, 0, 0, 1, 0, 0, 0, 0]
+    assert mrna_bundle.X[0, 5].tolist() == [0, 0, 1, 0, 0, 0, 0, 0]
+    assert mrna_bundle.metadata[0]["cds_length"] == 6
+    assert mrna_bundle.config["mrna_only"] is True
+    assert mrna_bundle.config["n_skipped_non_mrna_transcripts"] == 2
+
+    nc_only_gtf = tmp_path / "nc.gtf"
+    nc_only_gtf.write_text(
+        'chr1\ttest\texon\t1\t6\t.\t+\t.\tgene_id "G2"; transcript_id "tx_lncrna";\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="No transcripts with coding sequences"):
+        build_saluki_dataset_from_gtf(
+            gtf_path=nc_only_gtf,
+            fasta_path=fasta,
+            out_dir=tmp_path / "bundle_nc_fail",
+            length=8,
+            mrna_only=True,
+            progress=False,
+        )

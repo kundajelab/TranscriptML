@@ -67,6 +67,7 @@ TARGET_ID_COL="transcript_id"
 TARGET_COL="log_kdeg"
 SPLIT_COL=""
 SALUKI_TRUNCATE_FROM="5prime"
+SALUKI_MRNA_ONLY="0"
 
 # 3. Output directories for this run.
 RUN_NAME="human_kdeg_saluki_exact"
@@ -95,7 +96,7 @@ What each group means:
 | `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Set these to the conda environment and conda install used on Sherlock. The job setup loads `gcc/10.1.0` and `openblas/0.3.10` before activating conda. |
 | `GTF`, `FASTA`, `TARGETS` | Set these to your annotation GTF, genome FASTA, and target table. |
 | `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
-| `SALUKI_LENGTH`, `SALUKI_TRUNCATE_FROM` | Set the encoded width and which end is removed from overlength transcripts. Use `5prime` for the legacy behavior or `3prime` to retain the 5-prime end; short transcripts are always padded on the right. |
+| `SALUKI_LENGTH`, `SALUKI_TRUNCATE_FROM`, `SALUKI_MRNA_ONLY` | Set the encoded width, which end is removed from overlength transcripts (`5prime` for legacy behavior or `3prime` to retain the 5-prime end; short transcripts are always padded on the right), and whether `build_saluki_gtf.sh` passes `--mrna-only` (`0/1`, `false/true`, or `no/yes`). |
 | `RUN_NAME`, `RUN_ROOT` | Pick a dataset/project run name and scratch/OAK location where outputs should be written. |
 | `EXP_NAME`, `EXPERIMENTS_DIR`, `EXP_ROOT` | Optional experiment namespace for training and interpreting multiple models on the same dataset in parallel. When `EXP_NAME` is set (or `--exp NAME` is passed on the CLI), `EXP_ROOT` becomes `${RUN_ROOT}/experiments/${EXP_NAME}`. When `EXP_NAME` is empty, `EXP_ROOT` defaults to `${RUN_ROOT}` (the legacy single-model layout). |
 | `DATASET_DIR`, `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `INTERPRET_ROOT` | `DATASET_DIR` defaults to `${RUN_ROOT}/data/saluki` (shared across experiments). `TRAIN_OUTPUT_ROOT`, `CV_ROOT`, `SWEEP_ROOT`, and `INTERPRET_ROOT` default to subdirectories under `${EXP_ROOT}`. |

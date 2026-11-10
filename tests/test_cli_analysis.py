@@ -188,6 +188,19 @@ def test_saluki_build_cli_truncation_defaults_choices_and_forwarding(monkeypatch
         ]
     )
     assert default_args.truncate_from == "5prime"
+    gtf_default_args = parser.parse_args(
+        [
+            "build-saluki-gtf",
+            "--gtf",
+            "annotations.gtf",
+            "--fasta",
+            "genome.fa",
+            "--out-dir",
+            "bundle",
+        ]
+    )
+    assert gtf_default_args.truncate_from == "5prime"
+    assert gtf_default_args.mrna_only is False
 
     calls = {}
     monkeypatch.setattr(builders, "build_saluki_dataset", lambda **kwargs: calls.setdefault("table", kwargs))
@@ -223,11 +236,13 @@ def test_saluki_build_cli_truncation_defaults_choices_and_forwarding(monkeypatch
             "bundle",
             "--truncate-from",
             "3prime",
+            "--mrna-only",
         ]
     )
 
     assert calls["table"]["truncate_from"] == "3prime"
     assert calls["gtf"]["truncate_from"] == "3prime"
+    assert calls["gtf"]["mrna_only"] is True
     with pytest.raises(SystemExit):
         parser.parse_args(
             [

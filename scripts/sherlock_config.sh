@@ -54,6 +54,7 @@ SPLIT_COL="${SPLIT_COL:-}"
 METADATA_COLS="${METADATA_COLS:-}"
 SALUKI_LENGTH="${SALUKI_LENGTH:-12288}"
 SALUKI_TRUNCATE_FROM="${SALUKI_TRUNCATE_FROM:-5prime}"
+SALUKI_MRNA_ONLY="${SALUKI_MRNA_ONLY:-0}"
 
 # ---------------------------------------------------------------------------
 # User settings: output locations.
@@ -649,6 +650,10 @@ parse_workflow_args() {
         METADATA_COLS="$1"; shift
         _CLI_CHANGED=1
         ;;
+      --mrna-only)
+        SALUKI_MRNA_ONLY="1"
+        _CLI_CHANGED=1
+        ;;
       --config|--run-config)
         if (( $# == 0 )); then echo "Missing value for ${arg}" >&2; return 2; fi
         TRANSCRIPTML_RUN_CONFIG="$(_workflow_abspath "$1")"; shift
@@ -714,7 +719,7 @@ require_no_positional_args() {
 
 export_workflow_env() {
   export CONDA_ENV SHERLOCK_CONDA_ROOT TRANSCRIPTML_REPO TRANSCRIPTML_RUN_CONFIG
-  export GTF FASTA TARGETS TARGET_ID_COL TARGET_COL SPLIT_COL METADATA_COLS SALUKI_LENGTH SALUKI_TRUNCATE_FROM
+  export GTF FASTA TARGETS TARGET_ID_COL TARGET_COL SPLIT_COL METADATA_COLS SALUKI_LENGTH SALUKI_TRUNCATE_FROM SALUKI_MRNA_ONLY
   export RUN_NAME RUN_ROOT DATASET_DIR EXP_NAME EXPERIMENTS_DIR EXP_ROOT
   export CV_ROOT SWEEP_ROOT SWEEP_TABLE INTERPRET_ROOT INTERPRET_DATASET_DIR
   export TRAIN_OUTPUT_ROOT MODEL_DIR EVAL_DIR GENERATED_TRAIN_CONFIG

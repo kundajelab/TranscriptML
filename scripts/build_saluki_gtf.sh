@@ -46,5 +46,13 @@ fi
 if [[ -n "${METADATA_COLS}" ]]; then
   args+=(--metadata-cols "${METADATA_COLS}")
 fi
+case "${SALUKI_MRNA_ONLY,,}" in
+  1|true|yes) args+=(--mrna-only) ;;
+  0|false|no|"") ;;
+  *)
+    echo "--mrna-only config value must be 0/1, false/true, or no/yes; got ${SALUKI_MRNA_ONLY}" >&2
+    exit 2
+    ;;
+esac
 
 transcriptml "${args[@]}"
