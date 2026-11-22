@@ -17,6 +17,7 @@ from transcriptml.interpret.deep_shap import (
     ReferenceDiagnostic,
     ReferenceEvaluation,
     ReferenceGenerator,
+    _AdaptiveGlobalPool,
     _AdaptiveMaxPool1d,
     _LegNetAttributionModel,
     _RecurrentSummary,
@@ -1155,4 +1156,73 @@ def test_pairwise_threshold_scaling_and_non_local_ig_no_retry(monkeypatch):
     assert diagnostic.convergence_pairwise_warning is False
     assert diagnostic.convergence_warning_count == 0
     assert diagnostic.ig_points_used == 8
+
+
+@pytest.mark.parametrize("pool_size", [1, 4, 5])
+def test_adaptive_global_pool_channels_last_long_sequence_and_convergence(pool_size):
+    devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+    for device in devices:
+        pool = _AdaptiveGlobalPool("avgmax", pool_size).to(device)
+        base = torch.randn(2, 12288, 64, device=device, requires_grad=True)
+        channels_last_view = base.transpose(1, 2)
+        ref_base = base.detach().clone().requires_grad_(True)
+        ref_contig = ref_base.transpose(1, 2).contiguous()
+
+        weights = torch.randn(2, 2 * 64 * pool_size, device=device)
+        out = pool(channels_last_view)
+        ref_out = torch.cat(
+            [
+                torch.nn.functional.adaptive_avg_pool1d(ref_contig, pool_size).flatten(1),
+                torch.nn.functional.adaptive_max_pool1d(ref_contig, pool_size).flatten(1),
+            ],
+            dim=1,
+        )
+        torch.testing.assert_close(out, ref_out, atol=1e-6, rtol=1e-5)
+
+        (out * weights).sum().backward()
+        (ref_out * weights).sum().backward()
+        assert base.grad is not None and ref_base.grad is not None
+        torch.testing.assert_close(base.grad, ref_base.grad, atol=1e-6, rtol=1e-5)
+
+    if pool_size == 4:
+        torch.manual_seed(77)
+        model = ConvolutionUniverse(
+            in_ch=6,
+            filters=8,
+            num_layers=2,
+            stem_kernel_size=3,
+            kernel_size=3,
+            dilations=(1, 2),
+            norm="layer",
+            norm_position="pre",
+            activation="gelu",
+            use_residual=True,
+            pooling="none",
+            dropout=0.0,
+            rnn_type="none",
+            global_pool="avgmax",
+            global_pool_size=4,
+            head_hidden=8,
+            head_norm="layer",
+            head_norm_position="optimal",
+            head_activation="gelu",
+            head_dropout=0.0,
+        ).eval()
+        X = np.concatenate(
+            (_random_ohe(1, 32, seed=78), np.zeros((1, 2, 32), dtype=np.float32)),
+            axis=1,
+        )
+        predictor = Predictor(model, device="cpu", batch_size=4)
+        generator = ReferenceGenerator(
+            ReferenceConfig(strategy="full-mono", n_references=3, seed=79), schema="saluki6"
+        )
+        evaluation = evaluate_references(X, predictor, generator)
+        result = compute_deep_shap_attributions(
+            X, predictor, generator, evaluation, progress=False
+        )
+        diagnostic = evaluation.diagnostics[0]
+        assert diagnostic.convergence_pass is True
+        assert diagnostic.convergence_absolute_error is not None
+        assert diagnostic.convergence_absolute_error < 1e-5
+        assert result.unresolved_convergence_indices.size == 0
 

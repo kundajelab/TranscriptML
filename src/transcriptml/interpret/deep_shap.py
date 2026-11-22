@@ -868,7 +868,7 @@ class _AdaptiveMaxPool1d(torch.nn.Module):
         self.output_size = int(output_size)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.adaptive_max_pool1d(X, self.output_size)
+        return torch.nn.functional.adaptive_max_pool1d(X.contiguous(), self.output_size)
 
 
 def _adaptive_max_pool_rescale(
@@ -934,23 +934,29 @@ class _AdaptiveGlobalPool(torch.nn.Module):
             else None
         )
 
+    @staticmethod
+    def _avg_pool(X: torch.Tensor, output_size: int) -> torch.Tensor:
+        if output_size == 1:
+            return X.mean(dim=-1, keepdim=True)
+        length = X.shape[-1]
+        if length % output_size == 0:
+            return X.unflatten(-1, (output_size, length // output_size)).mean(dim=-1)
+        return torch.nn.functional.adaptive_avg_pool1d(X.contiguous(), output_size)
+
     def forward(self, X: torch.Tensor) -> torch.Tensor:
+        X = X.contiguous()
         features: list[torch.Tensor] = []
         if self.mode == "maxavg":
             assert self.max_pool is not None
             return torch.cat(
                 (
                     self.max_pool(X).flatten(1),
-                    torch.nn.functional.adaptive_avg_pool1d(
-                        X, self.output_size
-                    ).flatten(1),
+                    self._avg_pool(X, self.output_size).flatten(1),
                 ),
                 dim=1,
             )
         if self.mode in {"avg", "avgmax"}:
-            features.append(
-                torch.nn.functional.adaptive_avg_pool1d(X, self.output_size).flatten(1)
-            )
+            features.append(self._avg_pool(X, self.output_size).flatten(1))
         if self.max_pool is not None:
             features.append(self.max_pool(X).flatten(1))
         return torch.cat(features, dim=1)

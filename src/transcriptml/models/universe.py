@@ -851,12 +851,25 @@ class ConvolutionUniverse(nn.Module):
 
         return self.tower.downsample_factor
 
+    @staticmethod
+    def _adaptive_avg_pool1d(x: torch.Tensor, output_size: int) -> torch.Tensor:
+        """Pool channel-first features without triggering PyTorch NHWC CUDA shmem bugs."""
+
+        if output_size == 1:
+            return x.mean(dim=-1, keepdim=True)
+        length = x.shape[-1]
+        if length % output_size == 0:
+            return x.unflatten(-1, (output_size, length // output_size)).mean(dim=-1)
+        return F.adaptive_avg_pool1d(x.contiguous(), output_size)
+
     def _pool_convolutional_features(self, x: torch.Tensor) -> torch.Tensor:
         features: list[torch.Tensor] = []
         if self.global_pool in {"avg", "avgmax"}:
-            features.append(F.adaptive_avg_pool1d(x, self.global_pool_size).flatten(1))
+            features.append(self._adaptive_avg_pool1d(x, self.global_pool_size).flatten(1))
         if self.global_pool in {"max", "avgmax"}:
-            features.append(F.adaptive_max_pool1d(x, self.global_pool_size).flatten(1))
+            features.append(
+                F.adaptive_max_pool1d(x.contiguous(), self.global_pool_size).flatten(1)
+            )
         return torch.cat(features, dim=1)
 
     def _summarize_rnn(

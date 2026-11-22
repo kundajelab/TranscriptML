@@ -347,3 +347,49 @@ def test_pre_norm_without_rnn_applies_post_tower_norm_and_activation(tmp_path):
     save_checkpoint(ckpt_path, model, config)
     loaded, _ = load_checkpoint(ckpt_path)
     assert torch.allclose(model(x), loaded(x), atol=1e-6)
+
+
+@pytest.mark.parametrize("pool_size", [1, 4, 5])
+def test_global_pooling_channels_last_long_sequence_forward_and_backward(pool_size):
+    devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+    for device in devices:
+        model = ConvolutionUniverse(
+            **_small_params(
+                filters=64,
+                num_layers=1,
+                dilations=[1],
+                norm="layer",
+                norm_position="pre",
+                activation="gelu",
+                use_residual=True,
+                pooling="none",
+                rnn_type="none",
+                global_pool="avgmax",
+                global_pool_size=pool_size,
+            )
+        ).to(device)
+
+        # Construct a channels-last (B, C, L) view matching ChannelLayerNorm's output strides.
+        base = torch.randn(2, 12288, 64, device=device, requires_grad=True)
+        channels_last_view = base.transpose(1, 2)
+        assert not channels_last_view.is_contiguous()
+
+        ref_base = base.detach().clone().requires_grad_(True)
+        ref_contig = ref_base.transpose(1, 2).contiguous()
+
+        weights = torch.randn(2, 2 * 64 * pool_size, device=device)
+        pooled = model._pool_convolutional_features(channels_last_view)
+        ref_pooled = torch.cat(
+            [
+                torch.nn.functional.adaptive_avg_pool1d(ref_contig, pool_size).flatten(1),
+                torch.nn.functional.adaptive_max_pool1d(ref_contig, pool_size).flatten(1),
+            ],
+            dim=1,
+        )
+        assert torch.allclose(pooled, ref_pooled, atol=1e-6)
+
+        (pooled * weights).sum().backward()
+        (ref_pooled * weights).sum().backward()
+        assert base.grad is not None and ref_base.grad is not None
+        assert torch.isfinite(base.grad).all()
+        assert torch.allclose(base.grad, ref_base.grad, atol=1e-6)
