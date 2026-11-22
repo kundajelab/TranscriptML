@@ -1156,11 +1156,12 @@ class _ConvolutionUniverseAttributionModel(torch.nn.Module):
         z = source.shift(source._to_bcl(X))
         source.output_length(z.shape[-1])
         z = source.tower(z)
+        z = source.pre_rnn_activation(source.pre_rnn_norm(z))
         if self.recurrent is None:
             assert self.pool is not None
             prediction = source.head(self.pool(z))
             return prediction[:, 0] if source.output_dim == 1 else prediction
-        z = source.pre_rnn_activation(source.pre_rnn_norm(z)).transpose(1, 2)
+        z = z.transpose(1, 2)
         if source.rnn_reverse:
             z = torch.flip(z, dims=[1])
         summary = self.recurrent(z)

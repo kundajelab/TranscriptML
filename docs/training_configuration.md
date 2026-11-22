@@ -612,15 +612,20 @@ them.
 | Prediction head | `head_type`, `head_hidden`, `head_norm`, `head_norm_position`, `head_activation`, `head_dropout`, `head_norm_eps`, `head_bn_momentum` |
 
 `block_type` accepts `conv` or `convnext`. Standard convolution blocks honor the
-tower normalization and activation fields (`norm_position` accepts `pre`, `post`,
-or `optimal`, which applies `StemConv → Norm → Act` on the stem and
+tower normalization and activation fields (`norm_position` accepts `pre`, which
+applies `Norm → Act → Conv → Dropout → (+ Residual) → Pool` in each stage with a
+closing post-tower `Norm → Act` before pooling or recurrence, or `optimal`,
+which applies `StemConv → Norm → Act` on the stem and
 `Conv → (+ Residual) → Pool → Norm → Act → Dropout` in each stage; `spatial_dropout`
-selects `nn.Dropout1d` instead of `nn.Dropout`). ConvNeXt blocks use their defining
+selects `nn.Dropout1d` instead of `nn.Dropout`). When `rnn_type` is `none`,
+`block_type` is `conv`, and `norm_position` is `pre`, `pre_rnn_norm` and
+`pre_rnn_activation` default to the tower `norm` and `activation` when left as
+`none`. ConvNeXt blocks use their defining
 depthwise convolution, channel-last LayerNorm, GELU pointwise MLP, optional
 LayerScale, and stochastic depth. `rnn_type` accepts `none`, `gru`, or `lstm`;
 `rnn_summary` accepts `last`, `mean`, or `max`; `global_pool` accepts `avg`,
-`max`, or `avgmax`; and `head_norm_position` accepts `pre` (`Norm → Act → Linear → Dropout`),
-`post` (`Linear → Norm → Act → Dropout`), or `optimal` (`Linear → Act → Norm → Dropout`
+`max`, or `avgmax`; and `head_norm_position` accepts `pre` (`Norm → Act → Linear → Dropout`)
+or `optimal` (`Linear → Act → Norm → Dropout`
 per hidden layer before the final readout `Linear`).
 
 This first implementation intentionally treats the complete fixed-width tensor

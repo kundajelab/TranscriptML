@@ -421,8 +421,9 @@ def test_small_cnn_attribution_adapter_preserves_predictions(in_ch, output_dim):
 @pytest.mark.parametrize("global_pool", ["avg", "max", "avgmax"])
 @pytest.mark.parametrize("global_pool_size", [1, 2])
 @pytest.mark.parametrize("block_type", ["conv", "convnext"])
+@pytest.mark.parametrize("norm_position", ["optimal", "pre"])
 def test_pure_universe_attribution_adapter_preserves_predictions(
-    global_pool, global_pool_size, block_type
+    global_pool, global_pool_size, block_type, norm_position
 ):
     torch.manual_seed(35)
     X = torch.tensor(
@@ -440,6 +441,7 @@ def test_pure_universe_attribution_adapter_preserves_predictions(
         block_type=block_type,
         kernel_size=3,
         dilations=(1, 2),
+        norm_position=norm_position,
         use_residual=True,
         pooling=("max", "avg"),
         pool_size=2,

@@ -746,6 +746,11 @@ class ConvolutionUniverse(nn.Module):
         if norm_position == "optimal" and block_type == "conv":
             self.pre_rnn_norm = nn.Identity()
             self.pre_rnn_activation = nn.Identity()
+        elif self.rnn_type == "none" and norm_position == "pre" and block_type == "conv":
+            effective_post_norm = norm if pre_rnn_norm == "none" else pre_rnn_norm
+            effective_post_act = activation if pre_rnn_activation == "none" else pre_rnn_activation
+            self.pre_rnn_norm = _channel_norm(effective_post_norm, self.tower.out_channels, norm_eps)
+            self.pre_rnn_activation = _activation(effective_post_act, allow_none=True)
         else:
             self.pre_rnn_norm = _channel_norm(pre_rnn_norm, self.tower.out_channels, norm_eps)
             self.pre_rnn_activation = _activation(pre_rnn_activation, allow_none=True)
@@ -875,9 +880,10 @@ class ConvolutionUniverse(nn.Module):
         z = self.shift(self._to_bcl(x))
         self.output_length(z.shape[-1])
         z = self.tower(z)
+        z = self.pre_rnn_activation(self.pre_rnn_norm(z))
         if self.rnn is None:
             return self._pool_convolutional_features(z)
-        z = self.pre_rnn_activation(self.pre_rnn_norm(z)).transpose(1, 2)
+        z = z.transpose(1, 2)
         if self.rnn_reverse:
             z = torch.flip(z, dims=[1])
         output, state = self.rnn(z)

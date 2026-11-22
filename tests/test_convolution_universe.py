@@ -301,3 +301,49 @@ def test_short_valid_sequence_fails_before_pytorch_convolution_error():
     model = ConvolutionUniverse(**ConvolutionUniverseConfig.saluki().to_kwargs()).eval()
     with pytest.raises(ValueError, match="sequence length collapses"):
         model(torch.randn(2, 6, 16))
+
+
+def test_pre_norm_without_rnn_applies_post_tower_norm_and_activation(tmp_path):
+    config = {
+        "name": "convolution_universe",
+        "params": _small_params(
+            norm="layer",
+            norm_position="pre",
+            activation="gelu",
+            use_residual=True,
+            pooling="none",
+            rnn_type="none",
+            global_pool="avgmax",
+            global_pool_size=2,
+        ),
+    }
+    model = build_model(config).eval()
+    assert not isinstance(model.pre_rnn_norm, torch.nn.Identity)
+    assert isinstance(model.pre_rnn_activation, torch.nn.GELU)
+    assert isinstance(model.tower.stem_norm, torch.nn.Identity)
+    assert isinstance(model.tower.stem_activation, torch.nn.Identity)
+
+    x = torch.randn(2, 6, 32)
+    with torch.no_grad():
+        tower_out = model.tower(x)
+        expected_features = model._pool_convolutional_features(
+            model.pre_rnn_activation(model.pre_rnn_norm(tower_out))
+        )
+        assert torch.allclose(model.forward_features(x), expected_features, atol=1e-6)
+
+        # Mutating post-tower norm bias must change CNN-only features.
+        baseline = model.forward_features(x).clone()
+        model.pre_rnn_norm.norm.bias.fill_(0.5)
+        shifted = model.forward_features(x)
+        assert not torch.allclose(baseline, shifted)
+
+        # Verify un-warped identity skip highway when residual conv weights/biases are zero.
+        for stage in model.tower.stages:
+            stage["block"].conv.weight.zero_()
+            stage["block"].conv.bias.zero_()
+        assert torch.allclose(model.tower(x), model.tower.stem(x), atol=1e-6)
+
+    ckpt_path = tmp_path / "pre_norm_cnn.pt"
+    save_checkpoint(ckpt_path, model, config)
+    loaded, _ = load_checkpoint(ckpt_path)
+    assert torch.allclose(model(x), loaded(x), atol=1e-6)
