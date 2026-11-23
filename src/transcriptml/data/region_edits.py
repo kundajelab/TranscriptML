@@ -235,3 +235,220 @@ def randomize_synonymous_codons_inplace(
         write_base_symbols(x, int(start), int(start) + 3, replacement, channels)
         n_replaced += 1
     return n_replaced
+
+
+def shuffle_nucleotides_batch(
+    x: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    base_channels: np.ndarray,
+    n_replicates: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return ``n_replicates`` copies with ``[start, end)`` base symbols permuted."""
+
+    arr = np.asarray(x)
+    count = int(n_replicates)
+    mutants = np.repeat(arr[None], count, axis=0)
+    if count <= 0 or int(end) <= int(start):
+        return mutants
+    s, e = int(start), int(end)
+    channels = np.asarray(base_channels, dtype=np.int64)
+    region = np.asarray(arr[channels, s:e])
+    called = np.count_nonzero(region, axis=0) == 1
+    clean = np.zeros_like(region)
+    if np.any(called):
+        clean[np.argmax(region[:, called], axis=0), called] = 1
+    reg_len = clean.shape[1]
+    if reg_len > 1:
+        perms = np.stack([rng.permutation(reg_len) for _ in range(count)], axis=0)
+        edited = np.transpose(clean[:, perms], (1, 0, 2))
+    else:
+        edited = np.broadcast_to(clean[None], (count, clean.shape[0], reg_len))
+    if channels.shape == (4,) and np.array_equal(channels, np.arange(4, dtype=np.int64)):
+        mutants[:, :4, s:e] = edited
+    else:
+        mutants[:, channels, s:e] = edited
+    return mutants
+
+
+def randomize_nucleotides_batch(
+    x: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    base_channels: np.ndarray,
+    n_replicates: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return ``n_replicates`` copies with ``[start, end)`` replaced by IID bases."""
+
+    arr = np.asarray(x)
+    count = int(n_replicates)
+    mutants = np.repeat(arr[None], count, axis=0)
+    s, e = int(start), int(end)
+    reg_len = max(0, e - s)
+    if count <= 0 or reg_len == 0:
+        return mutants
+    channels = np.asarray(base_channels, dtype=np.int64)
+    n_ch = int(channels.size)
+    choices = rng.integers(0, n_ch, size=(count, reg_len), dtype=np.int8)
+    edited = (choices[:, None, :] == np.arange(n_ch, dtype=np.int8)[None, :, None]).astype(
+        arr.dtype, copy=False
+    )
+    if channels.shape == (4,) and np.array_equal(channels, np.arange(4, dtype=np.int64)):
+        mutants[:, :4, s:e] = edited
+    else:
+        mutants[:, channels, s:e] = edited
+    return mutants
+
+
+def shuffle_codons_batch(
+    x: np.ndarray,
+    *,
+    cds: Any,
+    base_channels: np.ndarray,
+    n_replicates: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return ``n_replicates`` copies with complete annotated CDS codons permuted."""
+
+    arr = np.asarray(x)
+    count = int(n_replicates)
+    mutants = np.repeat(arr[None], count, axis=0)
+    if count <= 0:
+        return mutants
+    starts = np.asarray(cds.starts, dtype=np.int64)
+    starts = starts[(starts >= int(cds.cds_start)) & (starts + 2 <= int(cds.cds_end))]
+    if starts.size == 0:
+        return mutants
+    channels = np.asarray(base_channels, dtype=np.int64)
+    k = int(starts.size)
+    pos3 = starts[:, None] + np.arange(3, dtype=np.int64)[None, :]
+    raw = np.asarray(arr[channels[:, None, None], pos3[None, :, :]])
+    called = np.count_nonzero(raw, axis=0) == 1
+    clean = np.zeros_like(raw)
+    if np.any(called):
+        k_idx, b_idx = np.nonzero(called)
+        clean[np.argmax(raw[:, k_idx, b_idx], axis=0), k_idx, b_idx] = 1
+    codon_ohe = np.transpose(clean, (1, 0, 2))
+    if k > 1:
+        perms = np.stack([rng.permutation(k) for _ in range(count)], axis=0)
+        shuffled = codon_ohe[perms]
+    else:
+        shuffled = np.repeat(codon_ohe[None], count, axis=0)
+    flat_ohe = np.transpose(shuffled, (0, 2, 1, 3)).reshape(count, channels.size, 3 * k)
+
+    s0 = int(starts[0])
+    is_contiguous_codons = (
+        int(starts[-1]) - s0 == 3 * (k - 1)
+        and np.array_equal(starts, np.arange(s0, s0 + 3 * k, 3, dtype=np.int64))
+    )
+    if is_contiguous_codons:
+        if channels.shape == (4,) and np.array_equal(channels, np.arange(4, dtype=np.int64)):
+            mutants[:, :4, s0 : s0 + 3 * k] = flat_ohe
+        else:
+            mutants[:, channels, s0 : s0 + 3 * k] = flat_ohe
+    else:
+        pos_flat = pos3.reshape(-1)
+        mutants[:, channels[:, None], pos_flat[None, :]] = flat_ohe
+    return mutants
+
+
+def _build_synonymous_codon_tables(
+    letters: tuple[str, ...],
+    synonymous_alternates: Mapping[str, Sequence[str]],
+    dtype: np.dtype,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build compact 64-codon lookup tables for vectorized synonymous sampling."""
+
+    base_to_offset = {base: offset for offset, base in enumerate(letters)}
+    n_alts = np.zeros(64, dtype=np.int64)
+    alt_ids = np.zeros((64, 64), dtype=np.int64)
+    id_to_ohe = np.zeros((64, 4, 3), dtype=dtype)
+    for b0 in range(4):
+        for b1 in range(4):
+            for b2 in range(4):
+                cid = b0 * 16 + b1 * 4 + b2
+                id_to_ohe[cid, b0, 0] = 1
+                id_to_ohe[cid, b1, 1] = 1
+                id_to_ohe[cid, b2, 2] = 1
+                reference = f"{letters[b0]}{letters[b1]}{letters[b2]}"
+                raw_alts = synonymous_alternates.get(reference, ())
+                valid_alt_ids: list[int] = []
+                for raw_codon in raw_alts:
+                    alt = str(raw_codon).upper().replace("T", "U")
+                    if alt == reference:
+                        continue
+                    if len(alt) != 3:
+                        raise ValueError(f"Invalid synonymous codon {alt!r}")
+                    try:
+                        a0 = base_to_offset[alt[0]]
+                        a1 = base_to_offset[alt[1]]
+                        a2 = base_to_offset[alt[2]]
+                    except KeyError as exc:
+                        raise ValueError(f"Invalid synonymous codon {alt!r}") from exc
+                    valid_alt_ids.append(a0 * 16 + a1 * 4 + a2)
+                n_alts[cid] = len(valid_alt_ids)
+                if valid_alt_ids:
+                    alt_ids[cid, : len(valid_alt_ids)] = valid_alt_ids
+    return n_alts, alt_ids, id_to_ohe
+
+
+def randomize_synonymous_codons_batch(
+    x: np.ndarray,
+    *,
+    cds: Any,
+    base_channels: np.ndarray,
+    base_letters: Sequence[str],
+    synonymous_alternates: Mapping[str, Sequence[str]],
+    n_replicates: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return ``n_replicates`` copies with decodable CDS codons synonymously recoded."""
+
+    channels = np.asarray(base_channels, dtype=np.int64)
+    letters = tuple(str(letter).upper().replace("T", "U") for letter in base_letters)
+    if channels.size != 4 or len(letters) != 4 or set(letters) != {"A", "C", "G", "U"}:
+        raise ValueError("synonymous codon edits require aligned A/C/G/U base channels")
+
+    arr = np.asarray(x)
+    count = int(n_replicates)
+    mutants = np.repeat(arr[None], count, axis=0)
+    if count <= 0:
+        return mutants
+
+    starts = np.asarray(cds.starts, dtype=np.int64)
+    starts = starts[(starts >= int(cds.cds_start)) & (starts + 2 <= int(cds.cds_end))]
+    if starts.size == 0:
+        return mutants
+
+    n_alts, alt_ids, id_to_ohe = _build_synonymous_codon_tables(
+        letters, synonymous_alternates, arr.dtype
+    )
+    pos3 = starts[:, None] + np.arange(3, dtype=np.int64)[None, :]
+    raw = np.asarray(arr[channels[:, None, None], pos3[None, :, :]])
+    called = np.count_nonzero(raw, axis=0) == 1
+    valid_codon = np.all(called, axis=1)
+    if not np.any(valid_codon):
+        return mutants
+
+    valid_idx = np.flatnonzero(valid_codon)
+    offsets = np.argmax(raw[:, valid_idx, :], axis=0)
+    codon_ids = offsets[:, 0] * 16 + offsets[:, 1] * 4 + offsets[:, 2]
+    has_alt = n_alts[codon_ids] > 0
+    if not np.any(has_alt):
+        return mutants
+
+    mutable_idx = valid_idx[has_alt]
+    mutable_ids = codon_ids[has_alt]
+    mutable_counts = n_alts[mutable_ids]
+    m = int(mutable_idx.size)
+    choices = rng.integers(0, mutable_counts[None, :], size=(count, m))
+    new_ids = alt_ids[mutable_ids[None, :], choices]
+    new_ohe = id_to_ohe[new_ids]
+    flat_ohe = np.transpose(new_ohe, (0, 2, 1, 3)).reshape(count, 4, 3 * m)
+    m_pos = pos3[mutable_idx].reshape(-1)
+    mutants[:, channels[:, None], m_pos[None, :]] = flat_ohe
+    return mutants

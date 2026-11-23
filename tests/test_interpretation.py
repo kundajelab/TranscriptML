@@ -10,7 +10,7 @@ from transcriptml.interpret.context import motif_context_scan
 from transcriptml.interpret.codon_ism import NpzMutationTableWriter, compute_codon_ism, find_cds_codon_starts
 from transcriptml.interpret.epistasis import motif_epistasis
 from transcriptml.interpret.ism import compute_ism
-from transcriptml.interpret.predictor import Predictor
+from transcriptml.interpret.predictor import EnsemblePredictor, Predictor
 
 
 class BaseWeightModel(torch.nn.Module):
@@ -288,4 +288,86 @@ def test_codon_ism_sequence_shards_are_contiguous_and_exclusive():
             sequence_shard_index=0,
             sequence_shards=3,
             progress=False,
+        )
+
+
+def test_tangermeme_ism_preserves_eval_mode_and_matches_across_variable_lengths():
+    X = np.stack(
+        [
+            encode_saluki_transcript("ACGU", length=12, cds_positions=[0], splice_positions=[2]),
+            encode_saluki_transcript("ACGUACGUAC", length=12, cds_positions=[0, 3], splice_positions=[5]),
+            encode_saluki_transcript("AA", length=12),
+        ]
+    )
+
+    class EvalSensitiveAnnotatedModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.drop = torch.nn.Dropout(0.5)
+
+        def forward(self, x):
+            x = self.drop(x.float())
+            bases = (x[:, :4] * torch.tensor([1.0, 2.0, 4.0, 8.0], device=x.device).view(1, 4, 1)).sum((1, 2))
+            return bases + 10.0 * x[:, 4].sum(1) + 100.0 * x[:, 5].sum(1)
+
+    m1 = EvalSensitiveAnnotatedModel()
+    m2 = EvalSensitiveAnnotatedModel()
+    predictor = Predictor(m1, batch_size=4)
+    ensemble = EnsemblePredictor([Predictor(m1, batch_size=4), Predictor(m2, batch_size=4)])
+
+    res_default = compute_ism(X, predictor, mutation_batch_size=8, progress=False)
+    res_legacy = compute_ism(X, predictor, mutation_batch_size=8, backend="transcriptml", progress=False)
+    res_ens = compute_ism(X, ensemble, mutation_batch_size=8, fast=False, progress=False)
+
+    assert res_default.fast is True
+    assert res_legacy.fast is False
+    assert m1.training is False
+    assert m2.training is False
+    np.testing.assert_allclose(res_default.reference_predictions, res_legacy.reference_predictions)
+    np.testing.assert_allclose(res_default.deltas, res_legacy.deltas)
+    np.testing.assert_allclose(res_ens.deltas, res_legacy.deltas)
+
+
+@pytest.mark.parametrize("strategy", ["random", "shuffle", "dinuc_shuffle"])
+def test_motif_analyses_tangermeme_strategies_including_unique_eulerian_motif(strategy):
+    # GGACU has a unique Eulerian walk (G->G->A->C->U), exercising the dinuc_shuffle fallback.
+    X = np.stack(
+        [
+            encode_saluki_transcript("AAAGGACUUUUGGACUAAA", length=24, cds_positions=[0, 3]),
+            encode_saluki_transcript("CCGGACUAAACCC", length=24, cds_positions=[0]),
+        ]
+    )
+    predictor = Predictor(BaseWeightModel([1, 2, 4, 8]), batch_size=8)
+
+    ablation_res = motif_ablation(
+        X, predictor, motif="GGACU", n_scrambles=6, strategy=strategy, mutation_batch_size=5, backend="tangermeme", progress=False
+    )
+    assert len(ablation_res.instances) == 3
+    assert np.all(np.isfinite(ablation_res.effects))
+
+    epi_res = motif_epistasis(
+        X, predictor, motif="GGACU", n_scrambles=6, strategy=strategy, mutation_batch_size=5, backend="tangermeme", progress=False
+    )
+    assert len(epi_res.pairs) == 1
+    assert np.all(np.isfinite(epi_res.epistasis))
+
+    ctx_res = motif_context_scan(
+        X[:1],
+        predictor,
+        motif="GGACU",
+        window_size=3,
+        context_width=4,
+        n_motif_scrambles=4,
+        n_window_scrambles=3,
+        strategy=strategy,
+        mutation_batch_size=7,
+        backend="tangermeme",
+        progress=False,
+    )
+    assert ctx_res.context_mask.sum() > 0
+    assert np.all(np.isfinite(ctx_res.context_effects))
+    if strategy == "shuffle":
+        # Exact base-count preservation under additive per-base weights yields zero interaction.
+        np.testing.assert_allclose(
+            ctx_res.context_effects[ctx_res.context_mask.astype(bool)], 0.0, atol=1e-5
         )

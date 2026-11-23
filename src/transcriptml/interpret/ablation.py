@@ -12,7 +12,8 @@ from transcriptml.interpret.backends import normalize_backend
 from transcriptml.interpret.codon_ism import find_cds_codon_starts
 from transcriptml.interpret.edits import (
     effective_perturbation_backend,
-    scramble_motif_ablating_inplace,
+    extract_base_indices,
+    scramble_motif_ablating_batch,
 )
 from transcriptml.interpret.motifs import find_motif_starts, parse_motif
 from transcriptml.interpret.predictor import Predictor
@@ -188,6 +189,36 @@ def enumerate_motif_instances(
     return out
 
 
+def _build_motif_ablated_batch(
+    x_ref: np.ndarray,
+    *,
+    motif_start: int,
+    motif_sets: Sequence[set[int]],
+    n_scrambles: int,
+    strategy: str,
+    rng: np.random.Generator,
+    backend: str,
+) -> np.ndarray:
+    """Create ``(n_scrambles, C, L)`` copies with one motif site ablated."""
+
+    count = int(n_scrambles)
+    start = int(motif_start)
+    k = len(motif_sets)
+    orig = extract_base_indices(x_ref, start, start + k)
+    cands = scramble_motif_ablating_batch(
+        orig,
+        motif_sets=motif_sets,
+        n_scrambles=count,
+        strategy=strategy,
+        rng=rng,
+        backend=backend,
+    )
+    batch = np.repeat(np.asarray(x_ref)[None, :, :], count, axis=0)
+    batch[:, :4, start : start + k] = 0
+    batch[np.arange(count)[:, None], cands, start + np.arange(k, dtype=np.int64)[None, :]] = 1
+    return batch
+
+
 def mean_ablation_prediction(
     x_ref: np.ndarray,
     predictor: Predictor,
@@ -214,16 +245,15 @@ def mean_ablation_prediction(
 
     if n_scrambles <= 0:
         return float(predictor.predict(x_ref[None, :, :])[0])
-    batch = np.repeat(x_ref[None, :, :], int(n_scrambles), axis=0).copy()
-    for i in range(batch.shape[0]):
-        scramble_motif_ablating_inplace(
-            batch[i],
-            motif_start=motif_start,
-            motif_sets=motif_sets,
-            strategy=strategy,
-            rng=rng,
-            backend=backend,
-        )
+    batch = _build_motif_ablated_batch(
+        x_ref,
+        motif_start=motif_start,
+        motif_sets=motif_sets,
+        n_scrambles=int(n_scrambles),
+        strategy=strategy,
+        rng=rng,
+        backend=backend,
+    )
     return float(predictor.predict(batch).mean(dtype=np.float64))
 
 
@@ -239,6 +269,7 @@ def motif_ablation(
     region: str | None = None,
     schema: str | SequenceSchema = "saluki6",
     cds_channel: str | int | None = None,
+    mutation_batch_size: int = 512,
     backend: str = "tangermeme",
     progress: bool = True,
 ) -> MotifAblationResult:
@@ -259,12 +290,16 @@ def motif_ablation(
         schema: Sequence schema name or object used for region-aware scans.
         cds_channel: Optional CDS channel name or integer index for region
             filtering.
+        mutation_batch_size: Maximum number of mutant sequences queued per
+            prediction batch.
         backend: Perturbation backend. ``random_different`` is a
             TranscriptML-specific policy under either backend; shuffle-based
             strategies use Tangermeme by default.
         progress: Whether to emit progress messages while running the scan.
     """
 
+    if int(mutation_batch_size) <= 0:
+        raise ValueError("mutation_batch_size must be positive")
     arr = np.asarray(X)
     motif_sets = parse_motif(motif)
     selected_backend = normalize_backend(backend)
@@ -278,10 +313,32 @@ def motif_ablation(
         cds_channel=cds_channel,
         progress=progress,
     )
-    log_progress(f"motif-ablation: predicting {arr.shape[0]} reference sequences", enabled=progress)
-    ref_by_seq = predictor.predict(arr)
     R = np.zeros(len(instances), dtype=np.float32)
     A = np.zeros(len(instances), dtype=np.float32)
+    if instances:
+        unique_seqs = np.unique(np.asarray([inst.seq_index for inst in instances], dtype=np.int64))
+        log_progress(
+            f"motif-ablation: predicting {unique_seqs.size} reference sequences",
+            enabled=progress,
+        )
+        ref_preds = predictor.predict(arr[unique_seqs])
+        ref_by_seq = {int(si): float(p) for si, p in zip(unique_seqs.tolist(), ref_preds.tolist())}
+        for inst in instances:
+            R[inst.instance_index] = ref_by_seq[inst.seq_index]
+
+    count = int(n_scrambles)
+    if count <= 0:
+        A[:] = R
+        return MotifAblationResult(
+            instances=instances,
+            reference_predictions=R,
+            ablation_predictions=A,
+            effects=A - R,
+            region=normalized_region,
+            backend=selected_backend,
+            strategy=strategy,
+        )
+
     rng = np.random.default_rng(seed)
     reporter = ProgressReporter(
         "motif-ablation: ablate instances",
@@ -289,20 +346,49 @@ def motif_ablation(
         unit="instances",
         enabled=progress,
     )
+    batch_limit = int(mutation_batch_size)
+    sums = np.zeros(len(instances), dtype=np.float64)
+    chunks: list[np.ndarray] = []
+    slices: list[tuple[int, int]] = []
+    queued = 0
+
+    def flush() -> None:
+        nonlocal queued
+        if not chunks:
+            return
+        batch_arr = chunks[0] if len(chunks) == 1 else np.concatenate(chunks, axis=0)
+        preds = predictor.predict(batch_arr)
+        offset = 0
+        for inst_idx, take in slices:
+            sums[inst_idx] += float(preds[offset : offset + take].sum(dtype=np.float64))
+            offset += take
+        chunks.clear()
+        slices.clear()
+        queued = 0
+
     for inst in instances:
-        x_ref = arr[inst.seq_index]
-        R[inst.instance_index] = ref_by_seq[inst.seq_index]
-        A[inst.instance_index] = mean_ablation_prediction(
-            x_ref,
-            predictor,
+        muts = _build_motif_ablated_batch(
+            arr[inst.seq_index],
             motif_start=inst.start,
             motif_sets=motif_sets,
-            n_scrambles=n_scrambles,
+            n_scrambles=count,
             strategy=strategy,
             rng=rng,
             backend=selected_backend,
         )
+        cursor = 0
+        while cursor < count:
+            take = min(count - cursor, batch_limit - queued)
+            chunks.append(muts[cursor : cursor + take])
+            slices.append((inst.instance_index, take))
+            queued += take
+            cursor += take
+            if queued >= batch_limit:
+                flush()
         reporter.update()
+    flush()
+    if instances:
+        A[:] = (sums / count).astype(np.float32)
     reporter.close()
     return MotifAblationResult(
         instances=instances,

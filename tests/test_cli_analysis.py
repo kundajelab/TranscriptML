@@ -400,13 +400,18 @@ def test_interpret_cli_resolves_named_and_legacy_positional_args():
         assert _resolve_interpret_args(mixed, parser)["out_dir"] == f"interpret/{command}"
 
 
-def test_interpret_backend_defaults_and_fast_ism_opt_in():
+def test_interpret_backend_defaults_and_fast_ism_flags():
     parser = build_parser()
     ism = parser.parse_args(
         ["ism", "--checkpoint", "m.pt", "--dataset", "data", "--out-dir", "out"]
     )
     assert ism.backend == "tangermeme"
-    assert ism.fast is False
+    assert ism.fast is True
+
+    no_fast = parser.parse_args(
+        ["ism", "--checkpoint", "m.pt", "--dataset", "data", "--out-dir", "out", "--no-fast"]
+    )
+    assert no_fast.fast is False
 
     fast = parser.parse_args(
         [

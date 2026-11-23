@@ -12,11 +12,15 @@ import numpy as np
 
 from transcriptml.data.region_edits import (
     base_channel_indices,
+    randomize_nucleotides_batch,
     randomize_nucleotides_inplace,
+    randomize_synonymous_codons_batch,
     randomize_synonymous_codons_inplace,
     region_bounds,
     resolve_cds_channel,
+    shuffle_codons_batch,
     shuffle_codons_inplace,
+    shuffle_nucleotides_batch,
     shuffle_nucleotides_inplace,
     valid_length_from_bases,
 )
@@ -28,7 +32,7 @@ from transcriptml.interpret.codon_ism import (
     find_cds_codon_starts,
     resolve_analysis_indices,
 )
-from transcriptml.interpret.edits import tangermeme_region_edit_inplace
+from transcriptml.interpret.edits import tangermeme_region_edit_inplace, tangermeme_region_edits_batch
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.interpret.results import save_table
 from transcriptml.progress import ProgressReporter, log_progress
@@ -419,6 +423,43 @@ def _reference_batch(arr: np.ndarray, indices: np.ndarray) -> np.ndarray:
     return arr[indices]
 
 
+def _instance_seed_sequence(
+    seed: int,
+    seq_index: int,
+    operation: str,
+    junction_count: int | None = None,
+) -> np.random.SeedSequence:
+    return np.random.SeedSequence(
+        [
+            int(seed),
+            int(seq_index),
+            int(_FAMILY_CODES[operation]),
+            0 if junction_count is None else int(junction_count),
+        ]
+    )
+
+
+def _instance_rng(
+    seed: int,
+    seq_index: int,
+    operation: str,
+    junction_count: int | None = None,
+) -> np.random.Generator:
+    return np.random.default_rng(
+        _instance_seed_sequence(seed, seq_index, operation, junction_count)
+    )
+
+
+def _instance_tangermeme_seed(
+    seed: int,
+    seq_index: int,
+    operation: str,
+) -> int:
+    return int(
+        _instance_seed_sequence(seed, seq_index, operation).generate_state(1, dtype=np.uint32)[0]
+    )
+
+
 def _replicate_rng(
     seed: int,
     seq_index: int,
@@ -750,27 +791,52 @@ def region_ablation(
     for instance in instances:
         reference_out[instance.instance_index] = reference_by_sequence[instance.seq_index]
 
-    mutant_batch: list[np.ndarray] = []
-    pending: list[tuple[int, int]] = []
+    mutant_chunks: list[np.ndarray] = []
+    pending_slices: list[tuple[int, int, int]] = []
+    queued_count = 0
 
     def flush_mutants() -> None:
-        if not mutant_batch:
+        nonlocal queued_count
+        if not mutant_chunks:
             return
+        batch_array = (
+            mutant_chunks[0]
+            if len(mutant_chunks) == 1
+            else np.concatenate(mutant_chunks, axis=0)
+        )
         predictions = _predict(
             predictor,
-            np.stack(mutant_batch, axis=0),
+            batch_array,
             batch_size=mutation_batch_size,
         )
-        if predictions.shape != (len(pending),):
+        if predictions.shape != (queued_count,):
             raise ValueError("predictor must return one scalar prediction per mutant sequence")
-        for prediction, (instance_index, replicate_index) in zip(predictions, pending):
-            value = np.float32(prediction)
-            ablation_out[instance_index, replicate_index] = value
-            effects_out[instance_index, replicate_index] = np.float32(
-                value - reference_out[instance_index]
-            )
-        mutant_batch.clear()
-        pending.clear()
+        offset = 0
+        for instance_index, rep_start, rep_end in pending_slices:
+            width = rep_end - rep_start
+            values = predictions[offset : offset + width].astype(np.float32, copy=False)
+            ablation_out[instance_index, rep_start:rep_end] = values
+            effects_out[instance_index, rep_start:rep_end] = (
+                values - reference_out[instance_index]
+            ).astype(np.float32, copy=False)
+            offset += width
+        mutant_chunks.clear()
+        pending_slices.clear()
+        queued_count = 0
+
+    if selected_backend == "tangermeme":
+        validated_sequences: set[int] = set()
+        for instance in instances:
+            if instance.seq_index in validated_sequences:
+                continue
+            if (
+                instance.operation != "cds_codon_shuffle"
+                and (instance.operation.endswith("_shuffle") or instance.operation.endswith("_random"))
+            ):
+                base_view = np.asarray(arr[instance.seq_index])[base_channels, :]
+                if not np.all((base_view == 0) | (base_view == 1)):
+                    raise ValueError("Tangermeme nucleotide edits require hard binary base channels")
+                validated_sequences.add(instance.seq_index)
 
     total_mutants = sum(instance.n_replicates for instance in instances)
     mutation_reporter = ProgressReporter(
@@ -779,21 +845,24 @@ def region_ablation(
         unit="mutants",
         enabled=progress,
     )
+    batch_limit = int(mutation_batch_size)
     for instance in instances:
-        for replicate_index in range(instance.n_replicates):
-            mutant = np.array(arr[instance.seq_index], copy=True)
-            rng = _replicate_rng(
-                cfg.seed,
-                instance.seq_index,
-                instance.operation,
-                instance.junction_count,
-                replicate_index,
-            )
-            if instance.operation in {"junction_scatter", "junction_density"}:
-                assert instance.junction_count is not None
-                assert instance.effective_min_spacing is not None
+        n_rep = int(instance.n_replicates)
+        seq_ref = np.asarray(arr[instance.seq_index])
+        if instance.operation in {"junction_scatter", "junction_density"}:
+            assert instance.junction_count is not None
+            assert instance.effective_min_spacing is not None
+            mutants = np.repeat(seq_ref[None], n_rep, axis=0)
+            for replicate_index in range(n_rep):
+                rng = _replicate_rng(
+                    cfg.seed,
+                    instance.seq_index,
+                    instance.operation,
+                    instance.junction_count,
+                    replicate_index,
+                )
                 scatter_junctions_inplace(
-                    mutant,
+                    mutants[replicate_index],
                     start=instance.region_start,
                     end=instance.region_end,
                     splice_channel=splice_channel_index,
@@ -801,65 +870,79 @@ def region_ablation(
                     min_spacing=instance.effective_min_spacing,
                     rng=rng,
                 )
-            elif instance.operation == "cds_codon_shuffle":
-                shuffle_codons_inplace(
-                    mutant,
-                    cds=cds_by_sequence[instance.seq_index],
+        elif instance.operation == "cds_codon_shuffle":
+            mutants = shuffle_codons_batch(
+                seq_ref,
+                cds=cds_by_sequence[instance.seq_index],
+                base_channels=base_channels,
+                n_replicates=n_rep,
+                rng=_instance_rng(cfg.seed, instance.seq_index, instance.operation),
+            )
+        elif instance.operation == "cds_synonymous":
+            mutants = randomize_synonymous_codons_batch(
+                seq_ref,
+                cds=cds_by_sequence[instance.seq_index],
+                base_channels=base_channels,
+                base_letters=base_letters,
+                synonymous_alternates=_SYNONYMOUS_ALTERNATES,
+                n_replicates=n_rep,
+                rng=_instance_rng(cfg.seed, instance.seq_index, instance.operation),
+            )
+        elif instance.operation.endswith("_shuffle"):
+            if selected_backend == "tangermeme":
+                mutants = tangermeme_region_edits_batch(
+                    seq_ref,
+                    start=instance.region_start,
+                    end=instance.region_end,
                     base_channels=base_channels,
-                    rng=rng,
+                    strategy="shuffle",
+                    n_edits=n_rep,
+                    seed=_instance_tangermeme_seed(cfg.seed, instance.seq_index, instance.operation),
+                    validate_binary=False,
                 )
-            elif instance.operation == "cds_synonymous":
-                randomize_synonymous_codons_inplace(
-                    mutant,
-                    cds=cds_by_sequence[instance.seq_index],
+            else:
+                mutants = shuffle_nucleotides_batch(
+                    seq_ref,
+                    start=instance.region_start,
+                    end=instance.region_end,
                     base_channels=base_channels,
-                    base_letters=base_letters,
-                    synonymous_alternates=_SYNONYMOUS_ALTERNATES,
-                    rng=rng,
+                    n_replicates=n_rep,
+                    rng=_instance_rng(cfg.seed, instance.seq_index, instance.operation),
                 )
-            elif instance.operation.endswith("_shuffle"):
-                if selected_backend == "tangermeme":
-                    tangermeme_region_edit_inplace(
-                        mutant,
-                        start=instance.region_start,
-                        end=instance.region_end,
-                        base_channels=base_channels,
-                        strategy="shuffle",
-                        rng=rng,
-                    )
-                else:
-                    shuffle_nucleotides_inplace(
-                        mutant,
-                        start=instance.region_start,
-                        end=instance.region_end,
-                        base_channels=base_channels,
-                        rng=rng,
-                    )
-            elif instance.operation.endswith("_random"):
-                if selected_backend == "tangermeme":
-                    tangermeme_region_edit_inplace(
-                        mutant,
-                        start=instance.region_start,
-                        end=instance.region_end,
-                        base_channels=base_channels,
-                        strategy="random",
-                        rng=rng,
-                    )
-                else:
-                    randomize_nucleotides_inplace(
-                        mutant,
-                        start=instance.region_start,
-                        end=instance.region_end,
-                        base_channels=base_channels,
-                        rng=rng,
-                    )
-            else:  # pragma: no cover - guarded by the fixed family table.
-                raise RuntimeError(f"Unsupported region-ablation operation {instance.operation!r}")
-            mutant_batch.append(mutant)
-            pending.append((instance.instance_index, replicate_index))
-            mutation_reporter.update()
-            if len(mutant_batch) >= int(mutation_batch_size):
+        elif instance.operation.endswith("_random"):
+            if selected_backend == "tangermeme":
+                mutants = tangermeme_region_edits_batch(
+                    seq_ref,
+                    start=instance.region_start,
+                    end=instance.region_end,
+                    base_channels=base_channels,
+                    strategy="random",
+                    n_edits=n_rep,
+                    seed=_instance_tangermeme_seed(cfg.seed, instance.seq_index, instance.operation),
+                    validate_binary=False,
+                )
+            else:
+                mutants = randomize_nucleotides_batch(
+                    seq_ref,
+                    start=instance.region_start,
+                    end=instance.region_end,
+                    base_channels=base_channels,
+                    n_replicates=n_rep,
+                    rng=_instance_rng(cfg.seed, instance.seq_index, instance.operation),
+                )
+        else:  # pragma: no cover - guarded by the fixed family table.
+            raise RuntimeError(f"Unsupported region-ablation operation {instance.operation!r}")
+
+        rep_cursor = 0
+        while rep_cursor < n_rep:
+            take = min(n_rep - rep_cursor, batch_limit - queued_count)
+            mutant_chunks.append(mutants[rep_cursor : rep_cursor + take])
+            pending_slices.append((instance.instance_index, rep_cursor, rep_cursor + take))
+            queued_count += take
+            rep_cursor += take
+            if queued_count >= batch_limit:
                 flush_mutants()
+        mutation_reporter.update(n_rep)
     flush_mutants()
     mutation_reporter.close(extra=f"{total_mutants} mutants")
 
@@ -976,7 +1059,10 @@ def save_region_ablation_result(
             "uniform random alternate within the standard-code synonymous family; "
             "stop, Met, Trp, and ambiguous codons unchanged"
         ),
-        "seed_policy": "SeedSequence(seed, seq_index, family_code, junction_count_or_0, replicate_index)",
+        "seed_policy": (
+            "SeedSequence(seed, seq_index, family_code, 0) per sequence-edit condition; "
+            "SeedSequence(seed, seq_index, family_code, junction_count, replicate_index) for junction layouts"
+        ),
         "config": result.config.to_dict(),
         "selected_families": [f for f in REGION_ABLATION_FAMILIES if result.config.replicates_for(f) > 0],
         "density_targets": result.density_targets,

@@ -7,10 +7,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from tangermeme.utils import random_one_hot
 
 from transcriptml.data.encoding import infer_valid_lengths
 from transcriptml.interpret.backends import normalize_backend
-from transcriptml.interpret.edits import scramble_window_inplace, valid_base_window
+from transcriptml.interpret.edits import (
+    extract_base_indices,
+    scramble_window_batch_ohe,
+    valid_base_window,
+)
 from transcriptml.interpret.predictor import Predictor
 from transcriptml.progress import ProgressReporter, log_progress
 
@@ -150,27 +155,39 @@ def compute_window_ism(
     abs_sums = np.zeros(mask.shape, dtype=np.float64)
     square_sums = np.zeros(mask.shape, dtype=np.float64)
     counts = np.zeros(mask.shape, dtype=np.int32)
-    mutant_batch: list[np.ndarray] = []
-    mutant_meta: list[tuple[int, int]] = []
+    mutant_chunks: list[np.ndarray] = []
+    mutant_slices: list[tuple[int, int, int]] = []
+    queued_count = 0
 
     def flush() -> None:
         """Predict queued mutants and update per-window moments."""
 
-        if not mutant_batch:
+        nonlocal queued_count
+        if not mutant_chunks:
             return
-        predictions = predictor.predict(np.stack(mutant_batch, axis=0))
-        if predictions.shape[0] != len(mutant_meta):
+        batch_array = (
+            mutant_chunks[0]
+            if len(mutant_chunks) == 1
+            else np.concatenate(mutant_chunks, axis=0)
+        )
+        predictions = predictor.predict(batch_array)
+        if predictions.shape[0] != queued_count:
             raise ValueError("predictor returned an unexpected number of mutant predictions")
-        for prediction, (seq_i, window_i) in zip(predictions, mutant_meta):
-            delta = float(prediction - reference[seq_i])
-            sums[seq_i, window_i] += delta
-            abs_sums[seq_i, window_i] += abs(delta)
-            square_sums[seq_i, window_i] += delta * delta
-            counts[seq_i, window_i] += 1
-        mutant_batch.clear()
-        mutant_meta.clear()
+        offset = 0
+        for seq_i, window_i, take in mutant_slices:
+            deltas = predictions[offset : offset + take].astype(np.float64) - float(reference[seq_i])
+            sums[seq_i, window_i] += float(deltas.sum())
+            abs_sums[seq_i, window_i] += float(np.abs(deltas).sum())
+            square_sums[seq_i, window_i] += float(np.dot(deltas, deltas))
+            counts[seq_i, window_i] += take
+            offset += take
+        mutant_chunks.clear()
+        mutant_slices.clear()
+        queued_count = 0
 
     n_scored_windows = int(mask.sum())
+    n_abl = int(n_ablations)
+    batch_limit = int(mutation_batch_size)
     reporter = ProgressReporter(
         "window-ism: scan windows",
         total=n_scored_windows,
@@ -178,22 +195,50 @@ def compute_window_ism(
         enabled=progress,
     )
     for seq_i in range(n_sequences):
-        for window_i in np.flatnonzero(mask[seq_i]).tolist():
+        win_indices = np.flatnonzero(mask[seq_i])
+        n_win = int(win_indices.size)
+        if n_win == 0:
+            continue
+        seq_ref = np.asarray(arr[seq_i])
+        if selected_backend == "tangermeme":
+            seq_seed = int(
+                np.random.SeedSequence([int(seed), seq_i]).generate_state(1, dtype=np.uint32)[0]
+            )
+            seq_rand_ohe = (
+                random_one_hot((n_win * n_abl, 4, width), dtype="int8", random_state=seq_seed)
+                .cpu()
+                .numpy()
+                .astype(arr.dtype, copy=False)
+            )
+        else:
+            seq_rand_ohe = None
+
+        for w_pos, window_i in enumerate(win_indices.tolist()):
             start = int(starts_out[seq_i, window_i])
-            rng = np.random.default_rng(np.random.SeedSequence([int(seed), seq_i, start]))
-            for _ in range(int(n_ablations)):
-                mutant = arr[seq_i].copy()
-                scramble_window_inplace(
-                    mutant,
-                    start=start,
-                    window_size=width,
-                    strategy="random" if selected_backend == "tangermeme" else "random_different",
+            if seq_rand_ohe is not None:
+                win_ohe = seq_rand_ohe[w_pos * n_abl : (w_pos + 1) * n_abl]
+            else:
+                rng = np.random.default_rng(np.random.SeedSequence([int(seed), seq_i, start]))
+                orig = extract_base_indices(seq_ref, start, start + width)
+                win_ohe = scramble_window_batch_ohe(
+                    orig,
+                    n_scrambles=n_abl,
+                    strategy="random_different",
                     rng=rng,
-                    backend=selected_backend,
+                    backend="transcriptml",
+                    dtype=arr.dtype,
                 )
-                mutant_batch.append(mutant)
-                mutant_meta.append((seq_i, window_i))
-                if len(mutant_batch) >= int(mutation_batch_size):
+
+            r_cursor = 0
+            while r_cursor < n_abl:
+                take = min(n_abl - r_cursor, batch_limit - queued_count)
+                muts = np.repeat(seq_ref[None], take, axis=0)
+                muts[:, :4, start : start + width] = win_ohe[r_cursor : r_cursor + take]
+                mutant_chunks.append(muts)
+                mutant_slices.append((seq_i, window_i, take))
+                queued_count += take
+                r_cursor += take
+                if queued_count >= batch_limit:
                     flush()
             reporter.update()
     flush()

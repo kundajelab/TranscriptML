@@ -21,7 +21,48 @@ class ISMResult:
     reference_predictions: np.ndarray
     valid_lengths: np.ndarray
     backend: str = "tangermeme"
-    fast: bool = False
+    fast: bool = True
+
+
+# Each extra fastISM bucket may trigger a ~45-50s torch.export capture, while
+# saving ~1M all-zero padding edits (~4 per position) recovers roughly 15-20s on
+# GPU. Splitting only above ~2.5M wasted padding edits keeps small runs in a
+# single capture while saving >85% of padding work on transcriptome-wide scans.
+_FAST_ISM_WASTED_EDITS_PER_BUCKET = 2_500_000
+_MAX_FAST_ISM_BUCKETS = 8
+_MAX_SLOW_ISM_BUCKETS = 32
+
+
+def _length_buckets(sorted_lengths: np.ndarray, *, fast: bool) -> list[slice]:
+    """Partition sorted positive valid lengths into contiguous index slices."""
+
+    m = int(sorted_lengths.size)
+    if m <= 1:
+        return [slice(0, m)]
+    max_len = int(sorted_lengths[-1])
+    wasted_edits = int(np.sum(4 * (max_len - sorted_lengths), dtype=np.int64))
+    if wasted_edits <= 0:
+        return [slice(0, m)]
+
+    if fast:
+        n_buckets = min(
+            m,
+            _MAX_FAST_ISM_BUCKETS,
+            max(1, wasted_edits // _FAST_ISM_WASTED_EDITS_PER_BUCKET + 1),
+        )
+    else:
+        n_buckets = min(m, _MAX_SLOW_ISM_BUCKETS)
+
+    edges = np.linspace(0, m, n_buckets + 1, dtype=np.int64)
+    buckets: list[slice] = []
+    for start, end in zip(edges[:-1].tolist(), edges[1:].tolist()):
+        if end <= start:
+            continue
+        if buckets and int(sorted_lengths[buckets[-1].stop - 1]) == int(sorted_lengths[end - 1]):
+            buckets[-1] = slice(buckets[-1].start, end)
+        else:
+            buckets.append(slice(start, end))
+    return buckets
 
 
 def _normalize_lengths(arr: np.ndarray, valid_lengths: np.ndarray | None) -> np.ndarray:
@@ -100,7 +141,7 @@ def compute_ism(
     valid_lengths: np.ndarray | None = None,
     mutation_batch_size: int = 512,
     backend: str = "tangermeme",
-    fast: bool = False,
+    fast: bool = True,
     progress: bool = True,
 ) -> ISMResult:
     """Single-nucleotide ISM with signed mutant-minus-reference effects.
@@ -119,10 +160,10 @@ def compute_ism(
             prediction batch.
         backend: Interpretation backend. ``tangermeme`` is the default;
             ``transcriptml`` selects the historical enumerator.
-        fast: Opt in to Tangermeme fastISM. Tangermeme verifies the fast path
-            and falls back when unsupported. Disabled by default because
-            capture provides little benefit for globally coupled models such
-            as Saluki and LegNet.
+        fast: Whether to enable Tangermeme verified fastISM when
+            ``backend='tangermeme'``. Enabled by default; Tangermeme skips
+            capture on short jobs, verifies accuracy on a sample batch, and
+            falls back automatically when unsupported or slower.
         progress: Whether to emit progress messages while scanning.
     """
 
@@ -135,8 +176,6 @@ def compute_ism(
     lengths = _normalize_lengths(arr, valid_lengths)
     selected_backend = normalize_backend(backend)
     if selected_backend == "transcriptml":
-        if fast:
-            raise ValueError("fast=True is available only with backend='tangermeme'")
         return _compute_transcriptml_ism(
             arr,
             predictor,
@@ -161,35 +200,61 @@ def compute_ism(
             fast=bool(fast),
         )
 
-    max_length = int(lengths.max(initial=0))
-    if max_length == 0:
-        reference = predictor.predict(arr).astype(np.float32, copy=False)
-    else:
-        prepared = prepare_tangermeme_input(
+    reference = np.zeros((N,), dtype=np.float32)
+    zero_idx = np.flatnonzero(lengths == 0)
+    if zero_idx.size > 0:
+        reference[zero_idx] = predictor.predict(arr[zero_idx]).astype(np.float32, copy=False)
+
+    active_idx = np.flatnonzero(lengths > 0)
+    if active_idx.size > 0:
+        # Probe differentiability once without copying X so non-Module callables
+        # use fine-grained slow buckets directly.
+        probe = prepare_tangermeme_input(
             predictor,
-            arr,
-            batch_size=int(mutation_batch_size),
+            arr[active_idx[:1]],
+            batch_size=None,
             separate_annotations=True,
         )
-        raw = saturation_mutagenesis(
-            prepared.model,
-            prepared.sequences,
-            args=prepared.args,
-            start=0,
-            end=max_length,
-            batch_size=prepared.batch_size,
-            raw_outputs=True,
-            dtype=torch.float32,
-            device=prepared.device,
-            verbose=progress,
-            func=squeeze_prediction,
-            fast=bool(fast),
+        use_fast = bool(fast) and probe.differentiable
+        eff_batch_size = (
+            int(mutation_batch_size)
+            if use_fast
+            else min(int(mutation_batch_size), probe.batch_size)
         )
-        if not isinstance(raw.y0, torch.Tensor) or not isinstance(raw.y_hat, torch.Tensor):
-            raise ValueError("predictor model must return one tensor")
-        reference = raw.y0.numpy().astype(np.float32, copy=False).reshape(-1)
-        values = raw.y_hat.numpy().astype(np.float32, copy=False)
-        deltas[:, :, :max_length] = values - reference[:, None, None]
+        active_lengths = lengths[active_idx]
+        order = np.argsort(active_lengths, kind="stable")
+        sorted_idx = active_idx[order]
+        sorted_lengths = active_lengths[order]
+
+        for sl in _length_buckets(sorted_lengths, fast=use_fast):
+            sub_idx = sorted_idx[sl]
+            bucket_max = int(sorted_lengths[sl.stop - 1])
+            prepared = prepare_tangermeme_input(
+                predictor,
+                arr[sub_idx],
+                batch_size=eff_batch_size,
+                separate_annotations=True,
+            )
+            raw = saturation_mutagenesis(
+                prepared.model,
+                prepared.sequences,
+                args=prepared.args,
+                start=0,
+                end=bucket_max,
+                batch_size=prepared.batch_size,
+                raw_outputs=True,
+                dtype=torch.float32,
+                device=prepared.device,
+                verbose=progress,
+                func=squeeze_prediction,
+                fast=use_fast,
+            )
+            if not isinstance(raw.y0, torch.Tensor) or not isinstance(raw.y_hat, torch.Tensor):
+                raise ValueError("predictor model must return one tensor")
+            ref_bucket = raw.y0.numpy().astype(np.float32, copy=False).reshape(-1)
+            values_bucket = raw.y_hat.numpy().astype(np.float32, copy=False)
+            reference[sub_idx] = ref_bucket
+            deltas[sub_idx, :, :bucket_max] = values_bucket - ref_bucket[:, None, None]
 
     positions = np.arange(L, dtype=np.int64)[None, :]
     valid = positions < lengths[:, None]

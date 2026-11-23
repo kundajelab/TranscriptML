@@ -4,7 +4,8 @@ from collections.abc import Sequence
 
 import numpy as np
 import torch
-from tangermeme.ersatz import dinucleotide_shuffle, randomize, shuffle
+from tangermeme.ersatz import dinucleotide_shuffle, shuffle
+from tangermeme.utils import random_one_hot
 
 from transcriptml.interpret.backends import normalize_backend
 from transcriptml.interpret.motifs import (
@@ -46,10 +47,11 @@ def write_bases_inplace(x: np.ndarray, start: int, bases: Sequence[int]) -> None
     """
 
     bases_arr = np.asarray(bases, dtype=np.int64)
-    end = int(start) + len(bases_arr)
-    x[:4, start:end] = 0
-    for j, base in enumerate(bases_arr):
-        x[int(base), int(start) + j] = 1
+    s = int(start)
+    end = s + len(bases_arr)
+    x[:4, s:end] = 0
+    if bases_arr.size:
+        x[bases_arr, s + np.arange(bases_arr.size, dtype=np.int64)] = 1
 
 
 def random_different_bases(orig: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -142,13 +144,14 @@ def _tangermeme_scramble(
     bases = np.asarray(orig, dtype=np.int64)
     if bases.size == 0:
         return bases.copy()
+    seed = _tangermeme_seed(rng)
+    if strategy == "random":
+        edited_ohe = random_one_hot((1, 4, int(bases.size)), dtype="int8", random_state=seed)
+        return edited_ohe[0].argmax(dim=0).cpu().numpy().astype(np.int64, copy=False)
     encoded = torch.nn.functional.one_hot(
         torch.as_tensor(bases), num_classes=4
     ).T.unsqueeze(0).to(torch.int8)
-    seed = _tangermeme_seed(rng)
-    if strategy == "random":
-        edited = randomize(encoded, 0, bases.size, n=1, random_state=seed)
-    elif strategy == "shuffle":
+    if strategy == "shuffle":
         edited = shuffle(encoded, 0, bases.size, n=1, random_state=seed)
     elif strategy == "dinuc_shuffle":
         if bases.size < 2:
@@ -163,6 +166,61 @@ def _tangermeme_scramble(
     else:  # pragma: no cover - caller validates the fixed strategy set.
         raise ValueError(f"Unknown Tangermeme scramble strategy '{strategy}'")
     return edited[0, 0].argmax(dim=0).cpu().numpy().astype(np.int64, copy=False)
+
+
+def tangermeme_region_edits_batch(
+    x: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    base_channels: Sequence[int],
+    strategy: str,
+    n_edits: int,
+    seed: int,
+    validate_binary: bool = True,
+) -> np.ndarray:
+    """Generate ``n_edits`` Tangermeme region perturbations while preserving annotations."""
+
+    channels = np.asarray(base_channels, dtype=np.int64)
+    if channels.shape != (4,):
+        raise ValueError("Tangermeme nucleotide edits require exactly four base channels")
+    if strategy not in {"random", "shuffle"}:
+        raise ValueError("strategy must be 'random' or 'shuffle'")
+
+    arr = np.asarray(x)
+    if validate_binary:
+        base_view = arr[channels, :]
+        if not np.all((base_view == 0) | (base_view == 1)):
+            raise ValueError("Tangermeme nucleotide edits require hard binary base channels")
+
+    count = int(n_edits)
+    mutants = np.repeat(arr[None], count, axis=0)
+    s, e = int(start), int(end)
+    reg_len = e - s
+    if count <= 0 or reg_len <= 0:
+        return mutants
+
+    if strategy == "random":
+        edited = (
+            random_one_hot((count, 4, reg_len), dtype="int8", random_state=int(seed))
+            .cpu()
+            .numpy()
+            .astype(arr.dtype, copy=False)
+        )
+    else:
+        reg = np.ascontiguousarray(arr[channels, s:e], dtype=np.int8)
+        edited = (
+            shuffle(torch.as_tensor(reg).unsqueeze(0), 0, reg_len, n=count, random_state=int(seed))[0]
+            .cpu()
+            .numpy()
+            .astype(arr.dtype, copy=False)
+        )
+
+    if np.array_equal(channels, np.arange(4, dtype=np.int64)):
+        mutants[:, :4, s:e] = edited
+    else:
+        mutants[:, channels, s:e] = edited
+    return mutants
 
 
 def tangermeme_region_edit_inplace(
@@ -184,18 +242,22 @@ def tangermeme_region_edit_inplace(
     channels = np.asarray(base_channels, dtype=np.int64)
     if channels.shape != (4,):
         raise ValueError("Tangermeme nucleotide edits require exactly four base channels")
+    if strategy not in {"random", "shuffle"}:
+        raise ValueError("strategy must be 'random' or 'shuffle'")
     encoded_array = np.asarray(x)[channels, :]
     if not np.all((encoded_array == 0) | (encoded_array == 1)):
         raise ValueError("Tangermeme nucleotide edits require hard binary base channels")
-    encoded = torch.as_tensor(encoded_array).unsqueeze(0)
+    s, e = int(start), int(end)
+    reg_len = e - s
+    if reg_len <= 0:
+        return
     seed = _tangermeme_seed(rng)
     if strategy == "random":
-        edited = randomize(encoded, int(start), int(end), n=1, random_state=seed)
-    elif strategy == "shuffle":
-        edited = shuffle(encoded, int(start), int(end), n=1, random_state=seed)
+        edited = random_one_hot((1, 4, reg_len), dtype="int8", random_state=seed)[0].cpu().numpy()
     else:
-        raise ValueError("strategy must be 'random' or 'shuffle'")
-    x[channels, :] = edited[0, 0].cpu().numpy()
+        reg = torch.as_tensor(np.ascontiguousarray(encoded_array[:, s:e], dtype=np.int8)).unsqueeze(0)
+        edited = shuffle(reg, 0, reg_len, n=1, random_state=seed)[0, 0].cpu().numpy()
+    x[channels, s:e] = edited
 
 
 def scramble_region_bases(
@@ -307,6 +369,193 @@ def scramble_motif_ablating_inplace(
             break
     else:
         raise ValueError("Motif cannot be ablated because every position allows every base")
+
+
+def _draw_scramble_candidates_batch(
+    orig: np.ndarray,
+    *,
+    n_draw: int,
+    strategy: str,
+    rng: np.random.Generator,
+    backend: str,
+) -> np.ndarray:
+    """Draw ``(n_draw, len(orig))`` base-index candidates in one vectorized batch."""
+
+    bases = np.asarray(orig, dtype=np.int64)
+    k = int(bases.size)
+    count = int(n_draw)
+    if count <= 0 or k == 0:
+        return np.empty((max(count, 0), k), dtype=np.int64)
+
+    selected_backend = normalize_backend(backend)
+    if strategy == "random_different":
+        r = rng.integers(0, 3, size=(count, k), dtype=np.int64)
+        return r + (r >= bases[None, :]).astype(np.int64)
+
+    if selected_backend == "tangermeme" and strategy in {"random", "shuffle", "dinuc_shuffle"}:
+        if strategy == "random":
+            seed = _tangermeme_seed(rng)
+            ohe = random_one_hot((count, 4, k), dtype="int8", random_state=seed)
+            return ohe.argmax(dim=1).cpu().numpy().astype(np.int64, copy=False)
+        enc = torch.nn.functional.one_hot(
+            torch.as_tensor(bases), num_classes=4
+        ).T.unsqueeze(0).to(torch.int8)
+        if strategy == "shuffle":
+            seed = _tangermeme_seed(rng)
+            edited = shuffle(enc, 0, k, n=count, random_state=seed)[0]
+            return edited.argmax(dim=1).cpu().numpy().astype(np.int64, copy=False)
+        if k < 2:
+            return np.repeat(bases[None, :], count, axis=0)
+        # Expand across batch axis with n=1 and per-row seeds so Tangermeme's
+        # Numba kernel runs once without raising ValueError on conserved paths.
+        seeds = rng.integers(0, 2**31 - 1, size=count, dtype=np.int32)
+        edited = dinucleotide_shuffle(enc.expand(count, -1, -1), 0, k, n=1, random_state=seeds)[:, 0]
+        return edited.argmax(dim=1).cpu().numpy().astype(np.int64, copy=False)
+
+    if strategy == "random":
+        return rng.integers(0, 4, size=(count, k), dtype=np.int64)
+    if strategy == "shuffle":
+        return np.stack([shuffle_bases(bases, rng) for _ in range(count)], axis=0)
+    if strategy == "dinuc_shuffle":
+        return np.stack([dinuc_shuffle_bases(bases, rng) for _ in range(count)], axis=0)
+    raise ValueError(f"Unknown scramble strategy '{strategy}'")
+
+
+def scramble_window_batch_ohe(
+    orig: np.ndarray,
+    *,
+    n_scrambles: int,
+    strategy: str,
+    rng: np.random.Generator,
+    backend: str = "tangermeme",
+    dtype: np.dtype | type = np.uint8,
+) -> np.ndarray:
+    """Return ``(n_scrambles, 4, len(orig))`` one-hot window scrambles."""
+
+    bases = np.asarray(orig, dtype=np.int64)
+    k = int(bases.size)
+    count = int(n_scrambles)
+    if count <= 0 or k == 0:
+        return np.zeros((max(count, 0), 4, k), dtype=dtype)
+
+    selected_backend = normalize_backend(backend)
+    if selected_backend == "tangermeme" and strategy == "random":
+        seed = _tangermeme_seed(rng)
+        return (
+            random_one_hot((count, 4, k), dtype="int8", random_state=seed)
+            .cpu()
+            .numpy()
+            .astype(dtype, copy=False)
+        )
+    if selected_backend == "tangermeme" and strategy == "shuffle":
+        seed = _tangermeme_seed(rng)
+        enc = torch.nn.functional.one_hot(
+            torch.as_tensor(bases), num_classes=4
+        ).T.unsqueeze(0).to(torch.int8)
+        return shuffle(enc, 0, k, n=count, random_state=seed)[0].cpu().numpy().astype(dtype, copy=False)
+    if selected_backend == "tangermeme" and strategy == "dinuc_shuffle" and k >= 2:
+        seeds = rng.integers(0, 2**31 - 1, size=count, dtype=np.int32)
+        enc = torch.nn.functional.one_hot(
+            torch.as_tensor(bases), num_classes=4
+        ).T.unsqueeze(0).to(torch.int8)
+        return (
+            dinucleotide_shuffle(enc.expand(count, -1, -1), 0, k, n=1, random_state=seeds)[:, 0]
+            .cpu()
+            .numpy()
+            .astype(dtype, copy=False)
+        )
+
+    cands = _draw_scramble_candidates_batch(
+        bases, n_draw=count, strategy=strategy, rng=rng, backend=selected_backend
+    )
+    return (cands[:, None, :] == np.arange(4, dtype=np.int64)[None, :, None]).astype(
+        dtype, copy=False
+    )
+
+
+def scramble_motif_ablating_batch(
+    orig: np.ndarray,
+    *,
+    motif_sets: Sequence[set[int]],
+    n_scrambles: int,
+    strategy: str,
+    rng: np.random.Generator,
+    max_tries: int = 25,
+    backend: str = "tangermeme",
+) -> np.ndarray:
+    """Generate ``(n_scrambles, len(motif_sets))`` motif-disrupting base-index rows."""
+
+    if all(len(allowed) >= 4 for allowed in motif_sets):
+        raise ValueError("Motif cannot be ablated because every position allows every base")
+
+    bases = np.asarray(orig, dtype=np.int64)
+    k = len(motif_sets)
+    count = int(n_scrambles)
+    if count <= 0:
+        return np.empty((0, k), dtype=np.int64)
+
+    allowed_mask = np.zeros((k, 4), dtype=bool)
+    for j, allowed in enumerate(motif_sets):
+        for base in allowed:
+            if 0 <= int(base) < 4:
+                allowed_mask[j, int(base)] = True
+
+    def valid_rows(cands: np.ndarray) -> np.ndarray:
+        differs = np.any(cands != bases[None, :], axis=1)
+        matches = np.all(allowed_mask[np.arange(k)[None, :], cands], axis=1)
+        return cands[differs & ~matches]
+
+    out = np.empty((count, k), dtype=np.int64)
+    filled = 0
+    total_budget = max(count * int(max_tries), count)
+    drawn = 0
+    while filled < count and drawn < total_budget:
+        step = min(total_budget - drawn, max((count - filled) * 4, 32))
+        cands = _draw_scramble_candidates_batch(
+            bases, n_draw=step, strategy=strategy, rng=rng, backend=backend
+        )
+        drawn += step
+        accepted = valid_rows(cands)
+        if accepted.shape[0] > 0:
+            take = min(count - filled, int(accepted.shape[0]))
+            out[filled : filled + take] = accepted[:take]
+            filled += take
+        elif strategy == "dinuc_shuffle" and np.all(cands == bases[None, :]):
+            # Unique Eulerian path (or homopolymer): dinuc_shuffle can never alter
+            # orig, so skip remaining doomed retries and fall through immediately.
+            break
+
+    if filled < count:
+        need = count - filled
+        fallback_cands = _draw_scramble_candidates_batch(
+            bases,
+            n_draw=max(need * int(max_tries), 32),
+            strategy="random_different",
+            rng=rng,
+            backend="transcriptml",
+        )
+        accepted = valid_rows(fallback_cands)
+        if accepted.shape[0] > 0:
+            take = min(need, int(accepted.shape[0]))
+            out[filled : filled + take] = accepted[:take]
+            filled += take
+
+    if filled < count:
+        disallowed_by_pos = [
+            (j, sorted(ALL_BASES - set(allowed)))
+            for j, allowed in enumerate(motif_sets)
+            if ALL_BASES - set(allowed)
+        ]
+        if not disallowed_by_pos:
+            raise ValueError("Motif cannot be ablated because every position allows every base")
+        pos_j, disallowed = disallowed_by_pos[0]
+        while filled < count:
+            cand = random_different_bases(bases, rng)
+            cand[pos_j] = int(rng.choice(disallowed))
+            out[filled] = cand
+            filled += 1
+
+    return out
 
 
 def valid_base_window(x: np.ndarray, start: int, end: int) -> bool:

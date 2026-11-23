@@ -9,7 +9,7 @@ import numpy as np
 from transcriptml.data.encoding import infer_valid_lengths
 from transcriptml.data.schemas import SequenceSchema
 from transcriptml.interpret.ablation import (
-    mean_ablation_prediction,
+    _build_motif_ablated_batch,
     motif_region_bounds,
     motif_site_in_region,
     normalize_motif_region,
@@ -17,7 +17,8 @@ from transcriptml.interpret.ablation import (
 from transcriptml.interpret.backends import normalize_backend
 from transcriptml.interpret.edits import (
     effective_perturbation_backend,
-    scramble_motif_ablating_inplace,
+    extract_base_indices,
+    scramble_motif_ablating_batch,
 )
 from transcriptml.interpret.motifs import (
     find_motif_starts,
@@ -130,6 +131,39 @@ def _enumerate_pairs_for_sequence(
     return pairs
 
 
+def _build_multi_ablated_batch(
+    x_ref: np.ndarray,
+    *,
+    edits: Sequence[tuple[int, Sequence[set[int]]]],
+    n_scrambles: int,
+    strategy: str,
+    rng: np.random.Generator,
+    backend: str,
+) -> np.ndarray:
+    """Create ``(n_scrambles, C, L)`` copies with multiple motif sites ablated."""
+
+    count = int(n_scrambles)
+    batch = np.repeat(np.asarray(x_ref)[None, :, :], count, axis=0)
+    rows = np.arange(count)[:, None]
+    for start_raw, motif_sets in edits:
+        start = int(start_raw)
+        k = len(motif_sets)
+        # Read from batch[0] before writing when sites are disjoint, or per-row
+        # if overlapping sites were explicitly requested.
+        orig = extract_base_indices(x_ref, start, start + k)
+        cands = scramble_motif_ablating_batch(
+            orig,
+            motif_sets=motif_sets,
+            n_scrambles=count,
+            strategy=strategy,
+            rng=rng,
+            backend=backend,
+        )
+        batch[:, :4, start : start + k] = 0
+        batch[rows, cands, start + np.arange(k, dtype=np.int64)[None, :]] = 1
+    return batch
+
+
 def _mean_multi_ablation_prediction(
     x_ref: np.ndarray,
     predictor: Predictor,
@@ -156,17 +190,14 @@ def _mean_multi_ablation_prediction(
 
     if n_scrambles <= 0:
         return float(predictor.predict(x_ref[None, :, :])[0])
-    batch = np.repeat(x_ref[None, :, :], int(n_scrambles), axis=0).copy()
-    for b in range(batch.shape[0]):
-        for start, motif_sets in edits:
-            scramble_motif_ablating_inplace(
-                batch[b],
-                motif_start=start,
-                motif_sets=motif_sets,
-                strategy=strategy,
-                rng=rng,
-                backend=backend,
-            )
+    batch = _build_multi_ablated_batch(
+        x_ref,
+        edits=edits,
+        n_scrambles=int(n_scrambles),
+        strategy=strategy,
+        rng=rng,
+        backend=backend,
+    )
     return float(predictor.predict(batch).mean(dtype=np.float64))
 
 
@@ -185,6 +216,7 @@ def motif_epistasis(
     region: str | None = None,
     schema: str | SequenceSchema = "saluki6",
     cds_channel: str | int | None = None,
+    mutation_batch_size: int = 512,
     backend: str = "tangermeme",
     progress: bool = True,
 ) -> EpistasisResult:
@@ -209,18 +241,20 @@ def motif_epistasis(
         schema: Sequence schema name or object used for region-aware scans.
         cds_channel: Optional CDS channel name or integer index for region
             filtering.
+        mutation_batch_size: Maximum number of mutant sequences queued per
+            prediction batch.
         backend: Perturbation backend.
         progress: Whether to emit progress messages while running the analysis.
     """
 
+    if int(mutation_batch_size) <= 0:
+        raise ValueError("mutation_batch_size must be positive")
     arr = np.asarray(X)
     selected_backend = normalize_backend(backend)
     motif_sets = parse_motif(motif)
     motif2_sets = parse_motif(motif2) if motif2 is not None else None
     lengths = infer_valid_lengths(arr) if valid_lengths is None else np.asarray(valid_lengths, dtype=np.int64)
     normalized_region = normalize_motif_region(region)
-    log_progress(f"epistasis: predicting {arr.shape[0]} reference sequences", enabled=progress)
-    ref_by_seq = predictor.predict(arr)
     rng = np.random.default_rng(seed)
     records: list[PairRecord] = []
     site_sets: dict[tuple[int, str, int, int], Sequence[set[int]]] = {}
@@ -273,8 +307,19 @@ def motif_epistasis(
     R = np.zeros(P, dtype=np.float32)
     singles = np.zeros((P, 2), dtype=np.float32)
     paired = np.zeros(P, dtype=np.float32)
-    single_cache: dict[tuple[int, str, int, int], float] = {}
-    pair_reporter = ProgressReporter("epistasis: score pairs", total=P, unit="pairs", enabled=progress)
+
+    ref_by_seq: dict[int, float] = {}
+    if P > 0:
+        unique_seqs = np.unique(np.asarray([seq_i for seq_i, _, _ in raw_pairs], dtype=np.int64))
+        log_progress(
+            f"epistasis: predicting {unique_seqs.size} reference sequences",
+            enabled=progress,
+        )
+        ref_preds = predictor.predict(arr[unique_seqs])
+        ref_by_seq = {int(si): float(p) for si, p in zip(unique_seqs.tolist(), ref_preds.tolist())}
+
+    unique_keys: list[tuple[int, str, int, int]] = []
+    seen_keys: set[tuple[int, str, int, int]] = set()
     for pair_i, (seq_i, site1, site2) in enumerate(raw_pairs):
         valid_len = min(int(lengths[seq_i]), int(arr.shape[-1]))
         records.append(
@@ -291,39 +336,101 @@ def motif_epistasis(
                 region=normalized_region,
             )
         )
-        x_ref = arr[seq_i]
         R[pair_i] = ref_by_seq[seq_i]
-        for col, site in enumerate((site1, site2)):
+        for site in (site1, site2):
             key = (seq_i, site.motif, site.start, site.end)
-            if key not in single_cache:
-                sets = site_sets[key]
-                if sets is None:
-                    raise ValueError("Missing motif sets for site")
-                single_cache[key] = mean_ablation_prediction(
-                    x_ref,
-                    predictor,
-                    motif_start=site.start,
-                    motif_sets=sets,
-                    n_scrambles=n_scrambles,
-                    strategy=strategy,
-                    rng=rng,
-                    backend=selected_backend,
-                )
-            singles[pair_i, col] = single_cache[key]
-        edits = [
-            (site1.start, site_sets[(seq_i, site1.motif, site1.start, site1.end)]),
-            (site2.start, site_sets[(seq_i, site2.motif, site2.start, site2.end)]),
-        ]
-        paired[pair_i] = _mean_multi_ablation_prediction(
-            x_ref,
-            predictor,
-            edits=edits,
-            n_scrambles=n_scrambles,
-            strategy=strategy,
-            rng=rng,
-            backend=selected_backend,
-        )
-        pair_reporter.update()
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_keys.append(key)
+
+    count = int(n_scrambles)
+    batch_limit = int(mutation_batch_size)
+    single_cache: dict[tuple[int, str, int, int], float] = {}
+    pair_reporter = ProgressReporter("epistasis: score pairs", total=P, unit="pairs", enabled=progress)
+
+    if count <= 0:
+        for key in unique_keys:
+            single_cache[key] = ref_by_seq[key[0]]
+        for pair_i, (seq_i, site1, site2) in enumerate(raw_pairs):
+            singles[pair_i, 0] = single_cache[(seq_i, site1.motif, site1.start, site1.end)]
+            singles[pair_i, 1] = single_cache[(seq_i, site2.motif, site2.start, site2.end)]
+            paired[pair_i] = R[pair_i]
+            pair_reporter.update()
+    elif P > 0:
+        single_sums = np.zeros(len(unique_keys), dtype=np.float64)
+        chunks: list[np.ndarray] = []
+        slices: list[tuple[int, int]] = []
+        queued = 0
+
+        def flush_into(target_sums: np.ndarray) -> None:
+            nonlocal queued
+            if not chunks:
+                return
+            batch_arr = chunks[0] if len(chunks) == 1 else np.concatenate(chunks, axis=0)
+            preds = predictor.predict(batch_arr)
+            off = 0
+            for idx, take in slices:
+                target_sums[idx] += float(preds[off : off + take].sum(dtype=np.float64))
+                off += take
+            chunks.clear()
+            slices.clear()
+            queued = 0
+
+        for site_idx, key in enumerate(unique_keys):
+            sets = site_sets[key]
+            if sets is None:
+                raise ValueError("Missing motif sets for site")
+            muts = _build_motif_ablated_batch(
+                arr[key[0]],
+                motif_start=key[2],
+                motif_sets=sets,
+                n_scrambles=count,
+                strategy=strategy,
+                rng=rng,
+                backend=selected_backend,
+            )
+            cur = 0
+            while cur < count:
+                take = min(count - cur, batch_limit - queued)
+                chunks.append(muts[cur : cur + take])
+                slices.append((site_idx, take))
+                queued += take
+                cur += take
+                if queued >= batch_limit:
+                    flush_into(single_sums)
+        flush_into(single_sums)
+        for site_idx, key in enumerate(unique_keys):
+            single_cache[key] = float(single_sums[site_idx] / count)
+
+        paired_sums = np.zeros(P, dtype=np.float64)
+        for pair_i, (seq_i, site1, site2) in enumerate(raw_pairs):
+            singles[pair_i, 0] = single_cache[(seq_i, site1.motif, site1.start, site1.end)]
+            singles[pair_i, 1] = single_cache[(seq_i, site2.motif, site2.start, site2.end)]
+            edits = [
+                (site1.start, site_sets[(seq_i, site1.motif, site1.start, site1.end)]),
+                (site2.start, site_sets[(seq_i, site2.motif, site2.start, site2.end)]),
+            ]
+            muts_pair = _build_multi_ablated_batch(
+                arr[seq_i],
+                edits=edits,
+                n_scrambles=count,
+                strategy=strategy,
+                rng=rng,
+                backend=selected_backend,
+            )
+            cur = 0
+            while cur < count:
+                take = min(count - cur, batch_limit - queued)
+                chunks.append(muts_pair[cur : cur + take])
+                slices.append((pair_i, take))
+                queued += take
+                cur += take
+                if queued >= batch_limit:
+                    flush_into(paired_sums)
+            pair_reporter.update()
+        flush_into(paired_sums)
+        paired[:] = (paired_sums / count).astype(np.float32)
+
     pair_reporter.close(extra=f"{len(single_cache)} unique single sites")
     single_effects = singles - R[:, None]
     paired_effects = paired - R

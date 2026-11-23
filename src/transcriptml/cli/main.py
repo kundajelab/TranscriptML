@@ -523,10 +523,11 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "ism":
             p.add_argument(
                 "--fast",
-                action="store_true",
+                action=argparse.BooleanOptionalAction,
+                default=True,
                 help=(
-                    "Opt in to verified fastISM; disabled by default because "
-                    "globally coupled Saluki/LegNet layers rarely benefit"
+                    "Enable verified Tangermeme fastISM (default: enabled; "
+                    "pass --no-fast to force full forward passes)"
                 ),
             )
         if name == "deep-shap":
@@ -575,7 +576,15 @@ def build_parser() -> argparse.ArgumentParser:
                 choices=["random_different", "shuffle", "dinuc_shuffle"],
             )
             p.add_argument("--seed", type=int, default=123)
-        if name in {"ism", "window-ism", "codon-ism", "region-ablation"}:
+        if name in {
+            "ism",
+            "window-ism",
+            "codon-ism",
+            "region-ablation",
+            "motif-ablation",
+            "motif-context",
+            "epistasis",
+        }:
             p.add_argument("--mutation-batch-size", type=int, default=512)
         if name == "window-ism":
             p.add_argument("--window-size", type=int, required=True)
@@ -1406,6 +1415,7 @@ def main(argv: list[str] | None = None) -> None:
             region=args.region,
             schema=bundle.schema,
             cds_channel=cds_channel,
+            mutation_batch_size=args.mutation_batch_size,
             backend=args.backend,
         )
         save_motif_ablation_result(result, out_dir)
@@ -1425,6 +1435,7 @@ def main(argv: list[str] | None = None) -> None:
             region=args.region,
             schema=bundle.schema,
             cds_channel=cds_channel,
+            mutation_batch_size=args.mutation_batch_size,
             backend=args.backend,
         )
         save_motif_context_result(result, out_dir)
@@ -1444,6 +1455,7 @@ def main(argv: list[str] | None = None) -> None:
             region=args.region,
             schema=bundle.schema,
             cds_channel=cds_channel,
+            mutation_batch_size=args.mutation_batch_size,
             backend=args.backend,
         )
         save_epistasis_result(result, out_dir)

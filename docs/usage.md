@@ -341,12 +341,10 @@ Tangermeme is the default ISM backend. TranscriptML passes only the four
 nucleotide channels to Tangermeme for mutation and holds Saluki CDS and splice
 channels fixed as auxiliary model inputs. Use `--backend transcriptml` to
 reproduce the historical enumerator (or to interpret soft, non-binary sequence
-encodings). Tangermeme's verified fastISM path is available with `--fast`, but
-is deliberately off by default: Saluki and LegNet contain globally coupled
-normalization or pooling operations, so capture and verification usually add
-work without accelerating these models. If requested, Tangermeme checks the
-fast path and falls back to ordinary ISM when it is unsupported, slower, or
-numerically inconsistent.
+encodings). Tangermeme's verified fastISM path is enabled by default (and can be
+disabled with `--no-fast`): Tangermeme automatically skips capture on very short
+runs, checks numerical agreement against full forward passes, and falls back to
+ordinary ISM when a model is unsupported or slower.
 
 The gold-standard downstream workflow is to average the fold-level ISM arrays
 and mean-center them across nucleotide channels. The averaged deltas preserve
