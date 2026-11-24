@@ -27,6 +27,7 @@ RUNTIME_BACKEND="${RUNTIME_BACKEND:-apptainer}"
 APPTAINER_IMAGE="${APPTAINER_IMAGE:-${OAK:+${OAK}/isvock/containers/transcriptml-deps_v1.sif}}"
 TRANSCRIPTML_SRC_TAR="${TRANSCRIPTML_SRC_TAR:-}"
 CODE_SNAPSHOT_ENABLED="${CODE_SNAPSHOT_ENABLED:-1}"
+REQUIRE_CODE_SNAPSHOT="${REQUIRE_CODE_SNAPSHOT:-0}"
 STAGE_SIF_TO_LSCRATCH="${STAGE_SIF_TO_LSCRATCH:-1}"
 STAGE_DATASET_TO_LSCRATCH="${STAGE_DATASET_TO_LSCRATCH:-1}"
 JOB_START_JITTER_MAX="${JOB_START_JITTER_MAX:-15}"
@@ -490,7 +491,7 @@ prepare_code_snapshot() {
 
 export_workflow_env() {
   prepare_code_snapshot
-  export RUNTIME_BACKEND APPTAINER_IMAGE TRANSCRIPTML_SRC_TAR CODE_SNAPSHOT_ENABLED
+  export RUNTIME_BACKEND APPTAINER_IMAGE TRANSCRIPTML_SRC_TAR CODE_SNAPSHOT_ENABLED REQUIRE_CODE_SNAPSHOT
   export STAGE_SIF_TO_LSCRATCH STAGE_DATASET_TO_LSCRATCH JOB_START_JITTER_MAX
   export CONDA_ENV SHERLOCK_CONDA_ROOT TRANSCRIPTML_REPO TRANSCRIPTML_RUN_CONFIG
   export GENOME_FASTA GTF SMINPUT_BAM
@@ -539,8 +540,8 @@ stage_dataset_bundle() {
     return 0
   fi
   if [[ ! -d "${src_dir}" ]]; then
-    printf '%s\n' "${overlay_dir:-${src_dir}}"
-    return 0
+    echo "[runtime] ERROR: dataset directory does not exist: ${src_dir}" >&2
+    return 1
   fi
   if [[ "${src_dir}" == "${L_SCRATCH_JOB}"/* && -z "${overlay_dir}" ]]; then
     printf '%s\n' "${src_dir}"
@@ -548,14 +549,18 @@ stage_dataset_bundle() {
   fi
 
   local canonical_src
-  canonical_src="$(cd "${src_dir}" && pwd -P)"
+  canonical_src="$(cd "${src_dir}" && pwd -P)" || {
+    echo "[runtime] ERROR: unable to resolve dataset directory: ${src_dir}" >&2
+    return 1
+  }
   local base_key
   if command -v sha256sum >/dev/null 2>&1; then
     base_key="$(printf '%s' "${canonical_src}" | sha256sum | awk '{print substr($1, 1, 16)}')"
   else
     base_key="$(printf '%s' "${canonical_src}" | tr '/ ' '__')"
   fi
-  local base_dst="${L_SCRATCH_JOB}/datasets/base_${base_key}"
+  local datasets_root="${L_SCRATCH_JOB}/datasets"
+  local base_dst="${datasets_root}/base_${base_key}"
 
   if [[ ! -f "${base_dst}/.staged_ok" ]]; then
     local req_kb avail_kb margin_kb
@@ -567,11 +572,39 @@ stage_dataset_bundle() {
       printf '%s\n' "${overlay_dir:-${src_dir}}"
       return 0
     fi
-    local t0 t1
+    local t0 t1 tmp_base="${datasets_root}/.base_${base_key}.tmp.$$"
     t0="$(date +%s)"
-    mkdir -p "${base_dst}"
-    cp -aL "${canonical_src}/." "${base_dst}/"
-    touch "${base_dst}/.staged_ok"
+    rm -rf "${tmp_base}"
+    if ! mkdir -p "${tmp_base}"; then
+      echo "[runtime] ERROR: failed to create staging directory ${tmp_base}" >&2
+      return 1
+    fi
+    if ! cp -aL "${canonical_src}/." "${tmp_base}/"; then
+      rm -rf "${tmp_base}"
+      echo "[runtime] ERROR: failed to copy dataset ${canonical_src} -> ${tmp_base}" >&2
+      return 1
+    fi
+    if [[ -f "${canonical_src}/X.npy" && ! -s "${tmp_base}/X.npy" ]]; then
+      rm -rf "${tmp_base}"
+      echo "[runtime] ERROR: staged X.npy is missing or empty under ${tmp_base}" >&2
+      return 1
+    fi
+    if [[ -f "${canonical_src}/config.json" && ! -s "${tmp_base}/config.json" ]]; then
+      rm -rf "${tmp_base}"
+      echo "[runtime] ERROR: staged config.json is missing or empty under ${tmp_base}" >&2
+      return 1
+    fi
+    if ! touch "${tmp_base}/.staged_ok"; then
+      rm -rf "${tmp_base}"
+      echo "[runtime] ERROR: failed to write staging marker under ${tmp_base}" >&2
+      return 1
+    fi
+    rm -rf "${base_dst}"
+    if ! mv -f "${tmp_base}" "${base_dst}"; then
+      rm -rf "${tmp_base}"
+      echo "[runtime] ERROR: failed to finalize staged dataset ${base_dst}" >&2
+      return 1
+    fi
     t1="$(date +%s)"
     echo "[runtime] Staged dataset ${canonical_src} -> ${base_dst} ($((req_kb / 1024)) MB) in $((t1 - t0))s" >&2
   fi
@@ -653,7 +686,12 @@ _setup_apptainer_env() {
   if [[ "${STAGE_SIF_TO_LSCRATCH:-1}" == "1" && -n "${L_SCRATCH_JOB:-}" && -d "${L_SCRATCH_JOB}" ]]; then
     _TML_STAGED_SIF="${_TML_RUNTIME_ROOT}/$(basename "${APPTAINER_IMAGE}")"
     if [[ ! -f "${_TML_STAGED_SIF}" ]]; then
-      cp -f "${APPTAINER_IMAGE}" "${_TML_STAGED_SIF}"
+      local tmp_sif="${_TML_STAGED_SIF}.tmp.$$"
+      if ! cp -f "${APPTAINER_IMAGE}" "${tmp_sif}" || ! mv -f "${tmp_sif}" "${_TML_STAGED_SIF}"; then
+        rm -f "${tmp_sif}"
+        echo "ERROR: failed to stage APPTAINER_IMAGE ${APPTAINER_IMAGE} -> ${_TML_STAGED_SIF}" >&2
+        return 1
+      fi
     fi
   else
     _TML_STAGED_SIF="${APPTAINER_IMAGE}"
@@ -662,19 +700,43 @@ _setup_apptainer_env() {
 
   local code_root="${_TML_RUNTIME_ROOT}/transcriptml_src"
   if [[ ! -d "${code_root}/src/transcriptml" ]]; then
-    rm -rf "${code_root}"
-    mkdir -p "${code_root}"
-    if [[ -n "${TRANSCRIPTML_SRC_TAR}" && -f "${TRANSCRIPTML_SRC_TAR}" ]]; then
-      tar -C "${code_root}" -xzf "${TRANSCRIPTML_SRC_TAR}"
+    local tmp_code="${code_root}.tmp.$$"
+    rm -rf "${tmp_code}" "${code_root}"
+    mkdir -p "${tmp_code}" || return 1
+    if [[ -n "${TRANSCRIPTML_SRC_TAR}" ]]; then
+      if [[ ! -f "${TRANSCRIPTML_SRC_TAR}" ]]; then
+        rm -rf "${tmp_code}"
+        echo "ERROR: TRANSCRIPTML_SRC_TAR was explicitly set but does not exist: ${TRANSCRIPTML_SRC_TAR}" >&2
+        return 1
+      fi
+      if ! tar -C "${tmp_code}" -xzf "${TRANSCRIPTML_SRC_TAR}"; then
+        rm -rf "${tmp_code}"
+        echo "ERROR: failed to extract TRANSCRIPTML_SRC_TAR: ${TRANSCRIPTML_SRC_TAR}" >&2
+        return 1
+      fi
+    elif [[ "${REQUIRE_CODE_SNAPSHOT:-0}" == "1" ]]; then
+      rm -rf "${tmp_code}"
+      echo "ERROR: REQUIRE_CODE_SNAPSHOT=1 but TRANSCRIPTML_SRC_TAR is unset. Submit via a submit_*.sh wrapper or export TRANSCRIPTML_SRC_TAR." >&2
+      return 1
     elif [[ -n "${TRANSCRIPTML_REPO}" && -d "${TRANSCRIPTML_REPO}/src/transcriptml" ]]; then
-      tar -C "${TRANSCRIPTML_REPO}" \
-        --exclude='__pycache__' \
-        --exclude='*.pyc' \
-        --exclude='*.pyo' \
-        --exclude='*.egg-info' \
-        -cf - src pyproject.toml | tar -C "${code_root}" -xf -
+      if ! tar -C "${TRANSCRIPTML_REPO}" \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          --exclude='*.pyo' \
+          --exclude='*.egg-info' \
+          -cf - src pyproject.toml | tar -C "${tmp_code}" -xf -; then
+        rm -rf "${tmp_code}"
+        echo "ERROR: failed to stage TranscriptML source from ${TRANSCRIPTML_REPO}" >&2
+        return 1
+      fi
     else
+      rm -rf "${tmp_code}"
       echo "Could not locate TranscriptML source (TRANSCRIPTML_SRC_TAR and TRANSCRIPTML_REPO are unset or invalid)." >&2
+      return 1
+    fi
+    if [[ ! -d "${tmp_code}/src/transcriptml" ]] || ! mv -f "${tmp_code}" "${code_root}"; then
+      rm -rf "${tmp_code}"
+      echo "ERROR: staged TranscriptML source is invalid under ${code_root}" >&2
       return 1
     fi
   fi

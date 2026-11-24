@@ -237,3 +237,107 @@ def test_unified_codon_ism_shard_submit_and_worker(tmp_path: Path):
     assert wargs[wargs.index("--out-dir") + 1] == "/out/all_codon_ism/fold2/shard3"
     assert wargs[wargs.index("--sequence-shard-index") + 1] == "3"
     assert wargs[wargs.index("--sequence-shards") + 1] == "5"
+
+
+def test_extract_model_name_uses_system_python_not_path_conda(tmp_path: Path):
+    if not Path("/usr/bin/python3").is_file():
+        pytest.skip("Requires /usr/bin/python3")
+    fake_bin = tmp_path / "fake_conda_bin"
+    fake_bin.mkdir()
+    for name in ("python", "python3"):
+        p = fake_bin / name
+        p.write_text("#!/bin/bash\necho SHOULD_NOT_RUN >&2\nexit 99\n", encoding="utf-8")
+        p.chmod(0o755)
+    cfg = tmp_path / "train.json"
+    cfg.write_text('{"model": {"name": "saluki_cnn"}}', encoding="utf-8")
+
+    env = _base_env()
+    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+    cmd = f"""
+set -euo pipefail
+source {shlex.quote(str(SCRIPTS / 'sherlock_config.sh'))}
+_extract_model_name_from_config {shlex.quote(str(cfg))}
+"""
+    res = subprocess.run(["bash", "-c", cmd], env=env, text=True, capture_output=True)
+    assert res.returncode == 0, res.stderr
+    assert "SHOULD_NOT_RUN" not in res.stderr
+    assert res.stdout.strip() == "saluki_cnn"
+
+
+def test_stage_dataset_bundle_fails_hard_on_copy_error_without_creating_marker(tmp_path: Path):
+    lscratch = tmp_path / "lscratch"
+    lscratch.mkdir()
+    src_ds = tmp_path / "bad_dataset"
+    src_ds.mkdir()
+    (src_ds / "X.npy").write_bytes(b"DATA")
+
+    # Inject a failing `cp` wrapper to simulate a mid-copy I/O failure.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_cp = fake_bin / "cp"
+    fake_cp.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    fake_cp.chmod(0o755)
+
+    env = _base_env()
+    env.update(
+        PATH=f"{fake_bin}:{env.get('PATH', '')}",
+        RUN_ROOT=str(tmp_path / "run"),
+        L_SCRATCH_JOB=str(lscratch),
+        STAGE_DATASET_TO_LSCRATCH="1",
+    )
+    cmd = f"""
+set -euo pipefail
+source {shlex.quote(str(SCRIPTS / 'sherlock_config.sh'))}
+STAGED="$(stage_dataset_bundle {shlex.quote(str(src_ds))})"
+echo "UNREACHABLE:$STAGED"
+"""
+    res = subprocess.run(["bash", "-c", cmd], env=env, text=True, capture_output=True)
+    assert res.returncode != 0
+    assert "UNREACHABLE:" not in res.stdout
+    assert not list((lscratch / "datasets").glob("*/.staged_ok"))
+
+
+def test_setup_apptainer_env_rejects_missing_explicit_tar_and_enforces_require_snapshot(tmp_path: Path):
+    lscratch = tmp_path / "lscratch"
+    lscratch.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_apptainer = fake_bin / "apptainer"
+    fake_apptainer.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_apptainer.chmod(0o755)
+    fake_sif = tmp_path / "deps.sif"
+    fake_sif.write_bytes(b"SIF")
+
+    base = _base_env()
+    base.update(
+        PATH=f"{fake_bin}:{base.get('PATH', '')}",
+        RUN_ROOT=str(tmp_path / "run"),
+        L_SCRATCH_JOB=str(lscratch),
+        RUNTIME_BACKEND="apptainer",
+        APPTAINER_IMAGE=str(fake_sif),
+        TRANSCRIPTML_REPO=str(REPO_ROOT),
+        JOB_START_JITTER_MAX="0",
+    )
+
+    # 1. Explicit TRANSCRIPTML_SRC_TAR that does not exist must fail (never fall back to repo)
+    env_missing = {**base, "TRANSCRIPTML_SRC_TAR": str(tmp_path / "nonexistent.tar.gz")}
+    res1 = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(SCRIPTS / 'sherlock_config.sh'))}; setup_transcriptml_env"],
+        env=env_missing,
+        text=True,
+        capture_output=True,
+    )
+    assert res1.returncode != 0
+    assert "does not exist" in res1.stderr
+
+    # 2. REQUIRE_CODE_SNAPSHOT=1 with empty TRANSCRIPTML_SRC_TAR must fail
+    env_req = {**base, "TRANSCRIPTML_SRC_TAR": "", "REQUIRE_CODE_SNAPSHOT": "1"}
+    res2 = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(SCRIPTS / 'sherlock_config.sh'))}; setup_transcriptml_env"],
+        env=env_req,
+        text=True,
+        capture_output=True,
+    )
+    assert res2.returncode != 0
+    assert "REQUIRE_CODE_SNAPSHOT=1" in res2.stderr
+
