@@ -27,9 +27,11 @@ build_region_ablation_args() {
     OUT_DIR="${INTERPRET_ROOT}/region_ablation_custom/${REGION_ABLATION_CUSTOM_RUN_NAME}/fold${FOLD}"
     family="${REGION_ABLATION_FAMILIES}"
   fi
+  local staged_dataset
+  staged_dataset="$(stage_dataset_bundle "${INTERPRET_DATASET_DIR}")"
   REGION_ARGS=(
     --checkpoint "${CV_ROOT}/fold${FOLD}/model/best.pt"
-    --dataset "${INTERPRET_DATASET_DIR}"
+    --dataset "${staged_dataset}"
     --out-dir "${OUT_DIR}"
     --families "${family}"
     --n-ablations "${REGION_ABLATION_N}"

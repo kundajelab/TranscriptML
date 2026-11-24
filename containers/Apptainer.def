@@ -1,0 +1,65 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+%labels
+    Author Isaac Vock / Kundaje Lab
+    Project TranscriptML
+    Version v1
+    BaseImage pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+%files
+    requirements.txt /opt/transcriptml/requirements.txt
+
+%post
+    set -eu
+
+    # Keep the pre-installed CUDA PyTorch build pinned so pip never replaces it.
+    TORCH_SPEC="$(python -c 'import torch; print("torch==" + torch.__version__.split("+")[0])')"
+    echo "${TORCH_SPEC}" > /opt/transcriptml/constraints.txt
+
+    python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+    python -m pip install --no-cache-dir \
+        --upgrade-strategy only-if-needed \
+        -c /opt/transcriptml/constraints.txt \
+        -r /opt/transcriptml/requirements.txt
+
+    # Verify CUDA PyTorch build survived dependency resolution and core imports succeed.
+    python - <<'PY'
+import h5py
+import matplotlib
+import numba
+import numpy
+import pandas
+import polars
+import pyarrow
+import pyfaidx
+import pysam
+import pytest
+import scipy
+import seaborn
+import sklearn
+import tangermeme
+import torch
+
+print("torch:", torch.__version__, "cuda:", torch.version.cuda)
+assert torch.version.cuda is not None, "CUDA support was lost during pip install!"
+print("numpy:", numpy.__version__)
+print("tangermeme:", tangermeme.__version__)
+print("numba:", numba.__version__)
+print("pysam:", pysam.__version__)
+print("polars:", polars.__version__)
+print("pyarrow:", pyarrow.__version__)
+PY
+
+    python -m pip freeze > /opt/transcriptml/pip-freeze.txt
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export MPLBACKEND=Agg
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+
+%runscript
+    exec python "$@"

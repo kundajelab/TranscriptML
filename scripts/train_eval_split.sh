@@ -47,12 +47,13 @@ if [[ -n "${TRAIN_MODEL_OVERRIDE:-}" ]]; then
 fi
 
 CONFIG_PATH="$(python "${SCRIPT_DIR}/write_train_config.py" "${writer_args[@]}")"
+STAGED_DATASET_DIR="$(stage_dataset_bundle "${DATASET_DIR}")"
 
-transcriptml train "${CONFIG_PATH}"
+transcriptml train "${CONFIG_PATH}" --dataset "${STAGED_DATASET_DIR}"
 
 transcriptml evaluate \
   --checkpoint "${MODEL_DIR}/best.pt" \
-  --dataset "${DATASET_DIR}" \
+  --dataset "${STAGED_DATASET_DIR}" \
   --out-csv "${EVAL_DIR}/${EVAL_SPLIT}_predictions.csv" \
   --split "${EVAL_SPLIT}" \
   --batch-size "${PRED_BATCH_SIZE}" \

@@ -9,22 +9,37 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-if "MPLCONFIGDIR" not in os.environ:
-    _mpl_cache = Path(os.environ.get("TMPDIR", "/tmp")) / "matplotlib-transcriptml-training"
-    _mpl_cache.mkdir(parents=True, exist_ok=True)
-    os.environ["MPLCONFIGDIR"] = str(_mpl_cache)
 
-import matplotlib
+def _ensure_mpl_config_dir() -> None:
+    """Point Matplotlib's config/font cache at a job-scoped local directory if unset."""
 
-if (
-    "matplotlib.pyplot" not in sys.modules
-    and "MPLBACKEND" not in os.environ
-    and not os.environ.get("DISPLAY")
-):
-    matplotlib.use("Agg")
+    if os.environ.get("MPLCONFIGDIR"):
+        return
+    base = os.environ.get("L_SCRATCH_JOB") or os.environ.get("TMPDIR") or "/tmp"
+    user = os.environ.get("USER") or (str(os.getuid()) if hasattr(os, "getuid") else "user")
+    job_tag = os.environ.get("SLURM_JOB_ID") or str(os.getpid())
+    mpl_cache = Path(base) / f"matplotlib-transcriptml-{user}-{job_tag}"
+    mpl_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(mpl_cache)
 
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+
+def _get_pyplot():
+    """Lazily configure and import Matplotlib only when generating plots."""
+
+    _ensure_mpl_config_dir()
+    import matplotlib
+
+    if (
+        "matplotlib.pyplot" not in sys.modules
+        and "MPLBACKEND" not in os.environ
+        and not os.environ.get("DISPLAY")
+    ):
+        matplotlib.use("Agg")
+
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+
+    return plt, MaxNLocator
 
 
 def _extract_series(
@@ -92,6 +107,7 @@ def plot_training_curve(
     destination = Path(out_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
+    plt, MaxNLocator = _get_pyplot()
     train_epochs, train_values = _extract_series(history, train_key)
     val_epochs, val_values = _extract_series(history, val_key)
 

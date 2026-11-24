@@ -26,12 +26,13 @@ setup_transcriptml_env
 
 FOLD="${SLURM_ARRAY_TASK_ID:-${FOLD:-${1:-}}}"
 CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
+STAGED_INTERPRET_DATASET="$(stage_dataset_bundle "${INTERPRET_DATASET_DIR}")"
 
 for spec in "${MOTIF_ABLATION_SPECS[@]}"; do
   parse_motif_ablation_spec "${spec}"
   transcriptml motif-ablation \
     --checkpoint "${CHECKPOINT}" \
-    --dataset "${INTERPRET_DATASET_DIR}" \
+    --dataset "${STAGED_INTERPRET_DATASET}" \
     --out-dir "${INTERPRET_ROOT}/motif_ablation/${MOTIF_SPEC_LABEL}/fold${FOLD}" \
     --motif "${MOTIF_SPEC_1}" \
     --n-scrambles "${N_SCRAMBLES}" \

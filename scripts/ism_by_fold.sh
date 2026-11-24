@@ -28,9 +28,11 @@ FOLD="${SLURM_ARRAY_TASK_ID:-${FOLD:-${1:-}}}"
 CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
 OUT_DIR="${INTERPRET_ROOT}/ism/fold${FOLD}"
 
+STAGED_INTERPRET_DATASET="$(stage_dataset_bundle "${INTERPRET_DATASET_DIR}")"
+
 transcriptml ism \
   --checkpoint "${CHECKPOINT}" \
-  --dataset "${INTERPRET_DATASET_DIR}" \
+  --dataset "${STAGED_INTERPRET_DATASET}" \
   --out-dir "${OUT_DIR}" \
   --device "${DEVICE}" \
   --batch-size "${PRED_BATCH_SIZE}" \

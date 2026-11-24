@@ -19,7 +19,8 @@ FASTA/GTF/IP BAMs/SMInput BAM
 ```
 
 Copy this directory to a writable run directory and edit `rbpnet_config.sh`.
-At minimum set `TRANSCRIPTML_REPO`, `GENOME_FASTA`, `GTF`, `SMINPUT_BAM`, and
+By default, jobs run with `RUNTIME_BACKEND="apptainer"` (`APPTAINER_IMAGE="${OAK}/isvock/containers/transcriptml-deps_v1.sif"`), staging the container, a submit-time `TranscriptML/src` snapshot (`${EXP_ROOT}/code_snapshot/`), dataset bundles, and runtime caches to `$L_SCRATCH_JOB` (pass `-s RUNTIME_BACKEND=conda` to fall back to Conda).
+At minimum set `GENOME_FASTA`, `GTF`, `SMINPUT_BAM`, and
 the `IP_BAMS` array. Use `sample_name=path` values, for example:
 
 ```bash

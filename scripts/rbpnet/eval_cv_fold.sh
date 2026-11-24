@@ -57,10 +57,12 @@ if [[ ! -f "${BUNDLE_DIR}/config.json" ]]; then
   exit 1
 fi
 
+STAGED_BUNDLE_DIR="$(stage_dataset_bundle "${BUNDLE_DIR}")"
+
 command=(
   transcriptml evaluate
   --checkpoint "${CHECKPOINT}"
-  --dataset "${BUNDLE_DIR}"
+  --dataset "${STAGED_BUNDLE_DIR}"
   --out-dir "${OUT_DIR}"
   --split "${EVAL_SPLIT}"
   --batch-size "${EVAL_BATCH_SIZE}"

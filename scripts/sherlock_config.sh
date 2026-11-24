@@ -30,16 +30,28 @@ fi
 # ---------------------------------------------------------------------------
 # User settings: environment and TranscriptML source.
 # ---------------------------------------------------------------------------
-CONDA_ENV="${CONDA_ENV:-transcript-ml}"
+# Runtime backend: "apptainer" (recommended on Sherlock) or "conda" (legacy fallback).
+RUNTIME_BACKEND="${RUNTIME_BACKEND:-apptainer}"
+APPTAINER_IMAGE="${APPTAINER_IMAGE:-${OAK:+${OAK}/isvock/containers/transcriptml-deps_v1.sif}}"
+TRANSCRIPTML_SRC_TAR="${TRANSCRIPTML_SRC_TAR:-}"
+CODE_SNAPSHOT_ENABLED="${CODE_SNAPSHOT_ENABLED:-1}"
+STAGE_SIF_TO_LSCRATCH="${STAGE_SIF_TO_LSCRATCH:-1}"
+STAGE_DATASET_TO_LSCRATCH="${STAGE_DATASET_TO_LSCRATCH:-1}"
+JOB_START_JITTER_MAX="${JOB_START_JITTER_MAX:-15}"
+
+# Legacy Conda settings (used only when RUNTIME_BACKEND=conda).
+CONDA_ENV="${CONDA_ENV:-transcript-ml2}"
 SHERLOCK_CONDA_ROOT="${SHERLOCK_CONDA_ROOT:-${GROUP_HOME:-${HOME}}/miniconda}"
 
-# If this copied scripts directory is outside the TranscriptML repo and the
-# package is not installed in CONDA_ENV, set TRANSCRIPTML_REPO to the clean repo
-# checkout. If scripts/ still lives inside the repo, this is auto-detected.
+# Clean TranscriptML checkout used to snapshot/stage src/ into jobs.
+# Auto-detected if scripts/ still lives inside the repo, or falls back to
+# ${OAK}/isvock/software/TranscriptML when present.
 TRANSCRIPTML_REPO="${TRANSCRIPTML_REPO:-}"
 _TRANSCRIPTML_REPO_CANDIDATE="$(cd "${_TRANSCRIPTML_SCRIPT_DIR}/.." && pwd)"
 if [[ -z "${TRANSCRIPTML_REPO}" && -d "${_TRANSCRIPTML_REPO_CANDIDATE}/src/transcriptml" ]]; then
   TRANSCRIPTML_REPO="${_TRANSCRIPTML_REPO_CANDIDATE}"
+elif [[ -z "${TRANSCRIPTML_REPO}" && -n "${OAK:-}" && -d "${OAK}/isvock/software/TranscriptML/src/transcriptml" ]]; then
+  TRANSCRIPTML_REPO="${OAK}/isvock/software/TranscriptML"
 fi
 
 # ---------------------------------------------------------------------------
@@ -110,7 +122,8 @@ EVAL_SPLIT="${EVAL_SPLIT:-test}"
 TRAIN_SEED="${TRAIN_SEED:-}"
 REQUIRE_SPLIT_FILE="${REQUIRE_SPLIT_FILE:-1}"
 SWEEP_SKIP_COMPLETED="${SWEEP_SKIP_COMPLETED:-1}"
-SWEEP_MAX_CONCURRENT="${SWEEP_MAX_CONCURRENT:-}"
+SWEEP_MAX_CONCURRENT="${SWEEP_MAX_CONCURRENT:-20}"
+CODON_ISM_MAX_CONCURRENT="${CODON_ISM_MAX_CONCURRENT:-20}"
 
 # Runtime settings.
 PRED_BATCH_SIZE="${PRED_BATCH_SIZE:-128}"
@@ -138,7 +151,7 @@ DEEP_SHAP_CONVERGENCE_ATOL="${DEEP_SHAP_CONVERGENCE_ATOL:-1e-3}"
 DEEP_SHAP_CONVERGENCE_RTOL="${DEEP_SHAP_CONVERGENCE_RTOL:-0.01}"
 DEEP_SHAP_REFERENCE_PREDICTIONS_FORMAT="${DEEP_SHAP_REFERENCE_PREDICTIONS_FORMAT:-none}"
 DEEP_SHAP_SEQUENCE_SHARDS="${DEEP_SHAP_SEQUENCE_SHARDS:-1}"
-DEEP_SHAP_MAX_CONCURRENT="${DEEP_SHAP_MAX_CONCURRENT:-}"
+DEEP_SHAP_MAX_CONCURRENT="${DEEP_SHAP_MAX_CONCURRENT:-20}"
 DEEP_SHAP_CDS_CHANNEL="${DEEP_SHAP_CDS_CHANNEL:-}"
 DEEP_SHAP_INCLUDE_STOP_CODONS="${DEEP_SHAP_INCLUDE_STOP_CODONS:-0}"
 DEEP_SHAP_RECODE_INITIATION_CODON="${DEEP_SHAP_RECODE_INITIATION_CODON:-0}"
@@ -336,7 +349,7 @@ _extract_model_name_from_config() {
     py_cmd="python"
   fi
   if [[ -n "${py_cmd}" ]]; then
-    "${py_cmd}" -c '
+    command "${py_cmd}" -c '
 import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -717,14 +730,73 @@ require_no_positional_args() {
   fi
 }
 
+prepare_code_snapshot() {
+  if [[ "${RUNTIME_BACKEND}" != "apptainer" || "${CODE_SNAPSHOT_ENABLED}" != "1" ]]; then
+    return 0
+  fi
+  if [[ -n "${TRANSCRIPTML_SRC_TAR}" ]]; then
+    return 0
+  fi
+  if [[ -z "${TRANSCRIPTML_REPO}" || ! -d "${TRANSCRIPTML_REPO}/src/transcriptml" ]]; then
+    return 0
+  fi
+  local snapshot_dir="${EXP_ROOT}/code_snapshot"
+  if ! mkdir -p "${snapshot_dir}" 2>/dev/null; then
+    return 0
+  fi
+  local tmp_tar="${snapshot_dir}/.transcriptml_snapshot_${$}.tar.gz"
+  if ! tar -C "${TRANSCRIPTML_REPO}" \
+      --exclude='__pycache__' \
+      --exclude='*.pyc' \
+      --exclude='*.pyo' \
+      --exclude='*.egg-info' \
+      -cf - src pyproject.toml 2>/dev/null | gzip -n > "${tmp_tar}"; then
+    rm -f "${tmp_tar}"
+    return 0
+  fi
+  local content_hash=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    content_hash="$(sha256sum "${tmp_tar}" | awk '{print substr($1, 1, 12)}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    content_hash="$(shasum -a 256 "${tmp_tar}" | awk '{print substr($1, 1, 12)}')"
+  else
+    content_hash="$(date -u +%Y%m%dT%H%M%SZ)_$$"
+  fi
+  local git_prefix=""
+  if command -v git >/dev/null 2>&1 && git -C "${TRANSCRIPTML_REPO}" rev-parse --short HEAD >/dev/null 2>&1; then
+    git_prefix="$(git -C "${TRANSCRIPTML_REPO}" rev-parse --short HEAD)_"
+  fi
+  local final_tar="${snapshot_dir}/transcriptml_${git_prefix}${content_hash}.tar.gz"
+  if [[ -f "${final_tar}" ]]; then
+    rm -f "${tmp_tar}"
+  else
+    mv -f "${tmp_tar}" "${final_tar}"
+  fi
+  TRANSCRIPTML_SRC_TAR="${final_tar}"
+}
+
+run_host_python() {
+  if [[ "${RUNTIME_BACKEND}" == "apptainer" && -n "${APPTAINER_IMAGE}" && -f "${APPTAINER_IMAGE}" ]] \
+      && command -v apptainer >/dev/null 2>&1; then
+    apptainer exec --cleanenv "${APPTAINER_IMAGE}" python "$@"
+  elif command -v python >/dev/null 2>&1; then
+    command python "$@"
+  else
+    command python3 "$@"
+  fi
+}
+
 export_workflow_env() {
+  prepare_code_snapshot
+  export RUNTIME_BACKEND APPTAINER_IMAGE TRANSCRIPTML_SRC_TAR CODE_SNAPSHOT_ENABLED
+  export STAGE_SIF_TO_LSCRATCH STAGE_DATASET_TO_LSCRATCH JOB_START_JITTER_MAX
   export CONDA_ENV SHERLOCK_CONDA_ROOT TRANSCRIPTML_REPO TRANSCRIPTML_RUN_CONFIG
   export GTF FASTA TARGETS TARGET_ID_COL TARGET_COL SPLIT_COL METADATA_COLS SALUKI_LENGTH SALUKI_TRUNCATE_FROM SALUKI_MRNA_ONLY
   export RUN_NAME RUN_ROOT DATASET_DIR EXP_NAME EXPERIMENTS_DIR EXP_ROOT
   export CV_ROOT SWEEP_ROOT SWEEP_TABLE INTERPRET_ROOT INTERPRET_DATASET_DIR
   export TRAIN_OUTPUT_ROOT MODEL_DIR EVAL_DIR GENERATED_TRAIN_CONFIG
   export N_FOLDS CV_SEED CV_VAL_OFFSET CV_MODEL BASE_TRAIN_CONFIG TRAIN_MODEL_OVERRIDE
-  export EVAL_SPLIT TRAIN_SEED REQUIRE_SPLIT_FILE SWEEP_SKIP_COMPLETED SWEEP_MAX_CONCURRENT
+  export EVAL_SPLIT TRAIN_SEED REQUIRE_SPLIT_FILE SWEEP_SKIP_COMPLETED SWEEP_MAX_CONCURRENT CODON_ISM_MAX_CONCURRENT
   export PRED_BATCH_SIZE MUTATION_BATCH_SIZE DEVICE
   export DEEP_SHAP_REFERENCE_STRATEGY DEEP_SHAP_RUN_NAME DEEP_SHAP_OUT_ROOT DEEP_SHAP_CHECKPOINT_NAME
   export DEEP_SHAP_N_REFERENCES DEEP_SHAP_SEED DEEP_SHAP_TARGET DEEP_SHAP_ATTRIBUTION_BATCH_SIZE
@@ -764,12 +836,252 @@ prepare_train_submission() {
 
 _resolve_cv_model_from_config
 
+stage_dataset_bundle() {
+  local src_dir="$1"
+  local overlay_dir="${2:-}"
+  if [[ "${STAGE_DATASET_TO_LSCRATCH:-1}" != "1" || -z "${L_SCRATCH_JOB:-}" || ! -d "${L_SCRATCH_JOB}" ]]; then
+    printf '%s\n' "${overlay_dir:-${src_dir}}"
+    return 0
+  fi
+  if [[ ! -d "${src_dir}" ]]; then
+    printf '%s\n' "${overlay_dir:-${src_dir}}"
+    return 0
+  fi
+
+  # If only one path was passed and X.npy is a symlink (e.g., foldN/dataset),
+  # stage the real shared bundle once and layer the fold directory on top.
+  if [[ -z "${overlay_dir}" && -L "${src_dir}/X.npy" ]]; then
+    local real_x=""
+    real_x="$(readlink -f "${src_dir}/X.npy" 2>/dev/null || true)"
+    if [[ -n "${real_x}" && -f "${real_x}" ]]; then
+      local real_base
+      real_base="$(dirname "${real_x}")"
+      if [[ "${real_base}" != "${src_dir}" ]]; then
+        overlay_dir="${src_dir}"
+        src_dir="${real_base}"
+      fi
+    fi
+  fi
+
+  if [[ "${src_dir}" == "${L_SCRATCH_JOB}"/* && -z "${overlay_dir}" ]]; then
+    printf '%s\n' "${src_dir}"
+    return 0
+  fi
+
+  local canonical_src
+  canonical_src="$(cd "${src_dir}" && pwd -P)"
+  local base_key
+  if command -v sha256sum >/dev/null 2>&1; then
+    base_key="$(printf '%s' "${canonical_src}" | sha256sum | awk '{print substr($1, 1, 16)}')"
+  else
+    base_key="$(printf '%s' "${canonical_src}" | tr '/ ' '__')"
+  fi
+  local base_dst="${L_SCRATCH_JOB}/datasets/base_${base_key}"
+
+  if [[ ! -f "${base_dst}/.staged_ok" ]]; then
+    local req_kb avail_kb margin_kb
+    req_kb="$(du -skL "${canonical_src}" 2>/dev/null | awk '{print $1}')"
+    avail_kb="$(df -Pk "${L_SCRATCH_JOB}" 2>/dev/null | awk 'NR==2 {print $4}')"
+    margin_kb=$((5 * 1024 * 1024))
+    if [[ -n "${req_kb}" && -n "${avail_kb}" ]] && (( avail_kb < req_kb + margin_kb )); then
+      echo "[runtime] Skipping dataset staging (${req_kb} KB needed, ${avail_kb} KB free on ${L_SCRATCH_JOB}); reading directly." >&2
+      printf '%s\n' "${overlay_dir:-${src_dir}}"
+      return 0
+    fi
+    local t0 t1
+    t0="$(date +%s)"
+    mkdir -p "${base_dst}"
+    cp -aL "${canonical_src}/." "${base_dst}/"
+    touch "${base_dst}/.staged_ok"
+    t1="$(date +%s)"
+    echo "[runtime] Staged dataset ${canonical_src} -> ${base_dst} ($((req_kb / 1024)) MB) in $((t1 - t0))s" >&2
+  fi
+
+  if [[ -z "${overlay_dir}" ]]; then
+    printf '%s\n' "${base_dst}"
+    return 0
+  fi
+
+  local canonical_overlay
+  canonical_overlay="$(cd "${overlay_dir}" && pwd -P)"
+  local ov_key
+  if command -v sha256sum >/dev/null 2>&1; then
+    ov_key="$(printf '%s' "${canonical_overlay}" | sha256sum | awk '{print substr($1, 1, 16)}')"
+  else
+    ov_key="$(printf '%s' "${canonical_overlay}" | tr '/ ' '__')"
+  fi
+  local ov_dst="${L_SCRATCH_JOB}/datasets/overlay_${ov_key}"
+  rm -rf "${ov_dst}"
+  mkdir -p "${ov_dst}"
+  local item base_name
+  for item in "${base_dst}"/*; do
+    [[ -e "${item}" ]] || continue
+    base_name="$(basename "${item}")"
+    [[ "${base_name}" == ".staged_ok" || "${base_name}" == "splits.json" ]] && continue
+    ln -s "${item}" "${ov_dst}/${base_name}"
+  done
+  for item in "${canonical_overlay}"/*; do
+    [[ -e "${item}" || -L "${item}" ]] || continue
+    base_name="$(basename "${item}")"
+    if [[ "${base_name}" == "splits.json" || ! -e "${ov_dst}/${base_name}" ]]; then
+      cp -aL "${item}" "${ov_dst}/${base_name}"
+    fi
+  done
+  printf '%s\n' "${ov_dst}"
+}
+
+_run_in_transcriptml_container() {
+  local -a cmd=(apptainer exec --cleanenv)
+  if [[ "${_TML_APPTAINER_USE_NV:-0}" == "1" ]]; then
+    cmd+=(--nv)
+  fi
+  if [[ -n "${L_SCRATCH_JOB:-}" && -d "${L_SCRATCH_JOB}" ]]; then
+    cmd+=(--bind "${L_SCRATCH_JOB}:${L_SCRATCH_JOB}")
+  elif [[ -n "${_TML_RUNTIME_ROOT:-}" && -d "${_TML_RUNTIME_ROOT}" ]]; then
+    cmd+=(--bind "${_TML_RUNTIME_ROOT}:${_TML_RUNTIME_ROOT}")
+  fi
+  cmd+=(
+    --env "PYTHONPATH=${_TML_STAGED_SRC_DIR}"
+    --env "TMPDIR=${_TML_RUNTIME_ROOT}/tmp"
+    --env "MPLCONFIGDIR=${_TML_RUNTIME_ROOT}/cache/matplotlib"
+    --env "NUMBA_CACHE_DIR=${_TML_RUNTIME_ROOT}/cache/numba"
+    --env "TORCH_HOME=${_TML_RUNTIME_ROOT}/cache/torch"
+    --env "XDG_CACHE_HOME=${_TML_RUNTIME_ROOT}/cache/xdg"
+    --env "PYTHONNOUSERSITE=1"
+    --env "PYTHONDONTWRITEBYTECODE=1"
+    --env "PYTHONFAULTHANDLER=1"
+    --env "OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}"
+    --env "MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}"
+    --env "OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}"
+  )
+  if [[ -n "${CUDA_VISIBLE_DEVICES+x}" ]]; then
+    cmd+=(--env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}")
+  fi
+  if [[ -n "${NVIDIA_VISIBLE_DEVICES+x}" ]]; then
+    cmd+=(--env "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}")
+  fi
+  if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    cmd+=(--env "SLURM_JOB_ID=${SLURM_JOB_ID}")
+  fi
+  if [[ -n "${L_SCRATCH_JOB:-}" ]]; then
+    cmd+=(--env "L_SCRATCH_JOB=${L_SCRATCH_JOB}")
+  fi
+  "${cmd[@]}" "${_TML_STAGED_SIF}" "$@"
+}
+
+_setup_apptainer_env() {
+  if ! command -v apptainer >/dev/null 2>&1; then
+    echo "RUNTIME_BACKEND=apptainer requested, but 'apptainer' is not on PATH." >&2
+    return 1
+  fi
+  if [[ -z "${APPTAINER_IMAGE}" || ! -f "${APPTAINER_IMAGE}" ]]; then
+    echo "APPTAINER_IMAGE does not exist: ${APPTAINER_IMAGE:-<unset>}" >&2
+    echo "Build it with containers/build_sherlock_sif.sh or set APPTAINER_IMAGE." >&2
+    return 1
+  fi
+
+  # Mild startup jitter on job arrays to smooth concurrent staging spikes.
+  if [[ -n "${SLURM_ARRAY_TASK_ID:-}" && "${JOB_START_JITTER_MAX:-0}" =~ ^[1-9][0-9]*$ ]]; then
+    local jitter=$((RANDOM % JOB_START_JITTER_MAX))
+    if (( jitter > 0 )); then
+      sleep "${jitter}"
+    fi
+  fi
+
+  if [[ -n "${L_SCRATCH_JOB:-}" && -d "${L_SCRATCH_JOB}" ]]; then
+    _TML_RUNTIME_ROOT="${L_SCRATCH_JOB}/tml_runtime"
+  else
+    _TML_RUNTIME_ROOT="${TMPDIR:-/tmp}/tml_runtime_${USER:-user}_${SLURM_JOB_ID:-$$}"
+  fi
+  mkdir -p \
+    "${_TML_RUNTIME_ROOT}/tmp" \
+    "${_TML_RUNTIME_ROOT}/cache/matplotlib" \
+    "${_TML_RUNTIME_ROOT}/cache/numba" \
+    "${_TML_RUNTIME_ROOT}/cache/torch" \
+    "${_TML_RUNTIME_ROOT}/cache/xdg"
+
+  local t0 t1 t2
+  t0="$(date +%s)"
+  if [[ "${STAGE_SIF_TO_LSCRATCH:-1}" == "1" && -n "${L_SCRATCH_JOB:-}" && -d "${L_SCRATCH_JOB}" ]]; then
+    _TML_STAGED_SIF="${_TML_RUNTIME_ROOT}/$(basename "${APPTAINER_IMAGE}")"
+    if [[ ! -f "${_TML_STAGED_SIF}" ]]; then
+      cp -f "${APPTAINER_IMAGE}" "${_TML_STAGED_SIF}"
+    fi
+  else
+    _TML_STAGED_SIF="${APPTAINER_IMAGE}"
+  fi
+  t1="$(date +%s)"
+
+  local code_root="${_TML_RUNTIME_ROOT}/transcriptml_src"
+  if [[ ! -d "${code_root}/src/transcriptml" ]]; then
+    rm -rf "${code_root}"
+    mkdir -p "${code_root}"
+    if [[ -n "${TRANSCRIPTML_SRC_TAR}" && -f "${TRANSCRIPTML_SRC_TAR}" ]]; then
+      tar -C "${code_root}" -xzf "${TRANSCRIPTML_SRC_TAR}"
+    elif [[ -n "${TRANSCRIPTML_REPO}" && -d "${TRANSCRIPTML_REPO}/src/transcriptml" ]]; then
+      tar -C "${TRANSCRIPTML_REPO}" \
+        --exclude='__pycache__' \
+        --exclude='*.pyc' \
+        --exclude='*.pyo' \
+        --exclude='*.egg-info' \
+        -cf - src pyproject.toml | tar -C "${code_root}" -xf -
+    else
+      echo "Could not locate TranscriptML source (TRANSCRIPTML_SRC_TAR and TRANSCRIPTML_REPO are unset or invalid)." >&2
+      return 1
+    fi
+  fi
+  _TML_STAGED_SRC_DIR="${code_root}/src"
+  t2="$(date +%s)"
+
+  _TML_APPTAINER_USE_NV=0
+  if [[ "${DEVICE:-}" != "cpu" ]] && { \
+      [[ -n "${CUDA_VISIBLE_DEVICES:-}" && "${CUDA_VISIBLE_DEVICES}" != "NoDevFiles" ]] \
+      || [[ -n "${SLURM_JOB_GPUS:-}" ]] \
+      || [[ -n "${SLURM_STEP_GPUS:-}" ]] \
+      || [[ -e /dev/nvidiactl ]]; }; then
+    _TML_APPTAINER_USE_NV=1
+  fi
+
+  unset PYTHONPATH || true
+  export PYTHONNOUSERSITE=1
+
+  transcriptml() {
+    _run_in_transcriptml_container python -m transcriptml.cli.main "$@"
+  }
+  python() {
+    _run_in_transcriptml_container python "$@"
+  }
+  python3() {
+    _run_in_transcriptml_container python "$@"
+  }
+
+  echo "[runtime] backend=apptainer host=$(hostname) nv=${_TML_APPTAINER_USE_NV} sif_stage=$((t1 - t0))s code_stage=$((t2 - t1))s sif=${_TML_STAGED_SIF}" >&2
+  _resolve_cv_model_from_config
+}
+
 setup_transcriptml_env() {
+  if [[ "${RUNTIME_BACKEND:-apptainer}" == "apptainer" ]]; then
+    _setup_apptainer_env
+    return $?
+  fi
+
+  # Legacy Conda backend (with scrubbed host PYTHONPATH and job-local caches).
   module load gcc/10.1.0
   module load openblas/0.3.10
 
   source "${SHERLOCK_CONDA_ROOT}/etc/profile.d/conda.sh"
   conda activate "${CONDA_ENV}"
+
+  local cache_root="${L_SCRATCH_JOB:-${TMPDIR:-/tmp}/tml_runtime_${USER:-user}_${SLURM_JOB_ID:-$$}}/tml_cache"
+  mkdir -p "${cache_root}/tmp" "${cache_root}/matplotlib" "${cache_root}/numba" "${cache_root}/torch" "${cache_root}/xdg"
+  export TMPDIR="${cache_root}/tmp"
+  export MPLCONFIGDIR="${cache_root}/matplotlib"
+  export NUMBA_CACHE_DIR="${cache_root}/numba"
+  export TORCH_HOME="${cache_root}/torch"
+  export XDG_CACHE_HOME="${cache_root}/xdg"
+  export PYTHONNOUSERSITE=1
+  export PYTHONFAULTHANDLER=1
+  unset PYTHONPATH || true
 
   if [[ -n "${TRANSCRIPTML_REPO}" ]]; then
     if [[ ! -d "${TRANSCRIPTML_REPO}" ]]; then
@@ -778,7 +1090,7 @@ setup_transcriptml_env() {
     fi
     cd "${TRANSCRIPTML_REPO}"
     if [[ -d "${TRANSCRIPTML_REPO}/src" ]]; then
-      export PYTHONPATH="${TRANSCRIPTML_REPO}/src:${PYTHONPATH:-}"
+      export PYTHONPATH="${TRANSCRIPTML_REPO}/src"
     fi
   elif ! command -v transcriptml >/dev/null 2>&1; then
     echo "TRANSCRIPTML_REPO is unset and transcriptml is not on PATH after conda activation." >&2

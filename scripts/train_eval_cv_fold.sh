@@ -38,14 +38,16 @@ CONFIG_PATH="$(
     --val-offset "${CV_VAL_OFFSET}"
 )"
 
-transcriptml train "${CONFIG_PATH}"
-
 FOLD_DIR="${CV_ROOT}/fold${FOLD}"
+STAGED_FOLD_DATASET="$(stage_dataset_bundle "${DATASET_DIR}" "${FOLD_DIR}/dataset")"
+
+transcriptml train "${CONFIG_PATH}" --dataset "${STAGED_FOLD_DATASET}"
+
 mkdir -p "${FOLD_DIR}/eval"
 
 transcriptml evaluate \
   --checkpoint "${FOLD_DIR}/model/best.pt" \
-  --dataset "${FOLD_DIR}/dataset" \
+  --dataset "${STAGED_FOLD_DATASET}" \
   --out-csv "${FOLD_DIR}/eval/${EVAL_SPLIT}_predictions.csv" \
   --split "${EVAL_SPLIT}" \
   --batch-size "${PRED_BATCH_SIZE}" \

@@ -62,8 +62,9 @@ Important config values:
 
 | Variable(s) | When to change |
 | --- | --- |
-| `TRANSCRIPTML_REPO` | Set this to the clean TranscriptML checkout when the copied `scripts/mpra/` directory is outside the repo. |
-| `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Set these to the conda environment and conda install used on Sherlock. |
+| `RUNTIME_BACKEND`, `APPTAINER_IMAGE` | Defaults to `RUNTIME_BACKEND="apptainer"` and `APPTAINER_IMAGE="${OAK}/isvock/containers/transcriptml-deps_v1.sif"`, staging the `.sif`, code snapshot, dataset bundle, and caches to `$L_SCRATCH_JOB`. Pass `-s RUNTIME_BACKEND=conda` to fall back to Conda. |
+| `TRANSCRIPTML_REPO`, `TRANSCRIPTML_SRC_TAR`, `CODE_SNAPSHOT_ENABLED` | Clean TranscriptML checkout snapshotted under `${EXP_ROOT}/code_snapshot/` at submission time (or set `TRANSCRIPTML_SRC_TAR` to pin a release tarball). |
+| `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Used only when `RUNTIME_BACKEND="conda"`. |
 | `MPRA_TABLE` | Input CSV/TSV table with one row per MPRA construct. |
 | `SEQUENCE_COL`, `TARGET_COL` | Column names for the 3-prime UTR insert sequence and scalar RNA stability target. |
 | `ID_COL` | Optional stable construct identifier column. Row numbers are used when this is empty. |

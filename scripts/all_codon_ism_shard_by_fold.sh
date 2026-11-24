@@ -24,20 +24,34 @@ parse_workflow_args "$@"
 set -- "${WORKFLOW_POSITIONAL_ARGS[@]+"${WORKFLOW_POSITIONAL_ARGS[@]}"}"
 setup_transcriptml_env
 
-FOLD="${FOLD:-${1:-}}"
-if [[ -z "${FOLD}" ]]; then
-  echo "FOLD must be exported by the submit script or passed as the first argument" >&2
+CODON_ISM_SHARDS_PER_FOLD="${CODON_ISM_SHARDS_PER_FOLD:-10}"
+if ! [[ "${CODON_ISM_SHARDS_PER_FOLD}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CODON_ISM_SHARDS_PER_FOLD must be a positive integer" >&2
   exit 2
 fi
 
-CODON_ISM_SHARDS_PER_FOLD="${CODON_ISM_SHARDS_PER_FOLD:-10}"
-SHARD="${SLURM_ARRAY_TASK_ID:-${2:-0}}"
+if [[ -n "${FOLD:-}" ]]; then
+  SHARD="${SLURM_ARRAY_TASK_ID:-${SHARD:-${2:-0}}}"
+elif [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+  TASK_ID="${SLURM_ARRAY_TASK_ID}"
+  FOLD=$((TASK_ID / CODON_ISM_SHARDS_PER_FOLD))
+  SHARD=$((TASK_ID % CODON_ISM_SHARDS_PER_FOLD))
+else
+  FOLD="${1:-}"
+  SHARD="${2:-0}"
+fi
+if [[ -z "${FOLD}" ]]; then
+  echo "FOLD must be set, derived from SLURM_ARRAY_TASK_ID, or passed as the first argument" >&2
+  exit 2
+fi
+
 CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
 OUT_DIR="${INTERPRET_ROOT}/all_codon_ism/fold${FOLD}/shard${SHARD}"
+STAGED_INTERPRET_DATASET="$(stage_dataset_bundle "${INTERPRET_DATASET_DIR}")"
 
 transcriptml codon-ism \
   --checkpoint "${CHECKPOINT}" \
-  --dataset "${INTERPRET_DATASET_DIR}" \
+  --dataset "${STAGED_INTERPRET_DATASET}" \
   --out-dir "${OUT_DIR}" \
   --device "${DEVICE}" \
   --batch-size "${PRED_BATCH_SIZE}" \

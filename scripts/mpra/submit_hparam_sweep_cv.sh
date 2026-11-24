@@ -22,12 +22,12 @@ fi
 
 mkdir -p "${SWEEP_ROOT}" slurm_output
 NORMALIZED_SWEEP_TABLE="$(
-  python "${SCRIPT_DIR}/hparam_sweep_utils.py" normalize-table \
+  run_host_python "${SCRIPT_DIR}/hparam_sweep_utils.py" normalize-table \
     --table "${SWEEP_TABLE}" \
     --out "${SWEEP_ROOT}/sweep_table.tsv"
 )"
 N_COMBOS="$(
-  python "${SCRIPT_DIR}/hparam_sweep_utils.py" count-rows \
+  run_host_python "${SCRIPT_DIR}/hparam_sweep_utils.py" count-rows \
     --table "${NORMALIZED_SWEEP_TABLE}"
 )"
 

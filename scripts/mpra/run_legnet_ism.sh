@@ -35,9 +35,11 @@ if [[ ! -f "${INTERPRET_DATASET_DIR}/X.npy" ]]; then
   exit 1
 fi
 
+STAGED_INTERPRET_DATASET="$(stage_dataset_bundle "${INTERPRET_DATASET_DIR}")"
+
 transcriptml ism \
   --checkpoint "${LEGNET_CHECKPOINT}" \
-  --dataset "${INTERPRET_DATASET_DIR}" \
+  --dataset "${STAGED_INTERPRET_DATASET}" \
   --out-dir "${ISM_OUT_DIR}" \
   --device "${DEVICE}" \
   --batch-size "${PRED_BATCH_SIZE}" \

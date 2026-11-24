@@ -18,6 +18,17 @@ _REGION_ABLATION_FAMILIES = (
     "junction_scatter",
     "junction_density",
 )
+_DEEP_SHAP_REFERENCE_STRATEGIES = (
+    "full-mono",
+    "full-dinuc",
+    "5utr-mono",
+    "5utr-dinuc",
+    "3utr-mono",
+    "3utr-dinuc",
+    "cds-codon-shuffle",
+    "cds-synonymous",
+    "cds-unrestricted",
+)
 
 
 def _csv_list(value: str | None) -> list[str] | None:
@@ -531,11 +542,9 @@ def build_parser() -> argparse.ArgumentParser:
                 ),
             )
         if name == "deep-shap":
-            from transcriptml.interpret.deep_shap import REFERENCE_STRATEGIES
-
             p.add_argument(
                 "--reference-strategy",
-                choices=REFERENCE_STRATEGIES,
+                choices=_DEEP_SHAP_REFERENCE_STRATEGIES,
                 default="full-mono",
             )
             p.add_argument("--n-references", type=int, default=20)

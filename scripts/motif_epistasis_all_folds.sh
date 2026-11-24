@@ -24,6 +24,8 @@ parse_workflow_args "$@"
 require_no_positional_args
 setup_transcriptml_env
 
+STAGED_INTERPRET_DATASET="$(stage_dataset_bundle "${INTERPRET_DATASET_DIR}")"
+
 for FOLD in $(seq 0 $((N_FOLDS - 1))); do
   CHECKPOINT="${CV_ROOT}/fold${FOLD}/model/best.pt"
   for spec in "${MOTIF_EPISTASIS_SPECS[@]}"; do
@@ -31,7 +33,7 @@ for FOLD in $(seq 0 $((N_FOLDS - 1))); do
     args=(
       epistasis
       --checkpoint "${CHECKPOINT}"
-      --dataset "${INTERPRET_DATASET_DIR}"
+      --dataset "${STAGED_INTERPRET_DATASET}"
       --out-dir "${INTERPRET_ROOT}/motif_epistasis/${MOTIF_SPEC_LABEL}/fold${FOLD}"
       --motif "${MOTIF_SPEC_1}"
       --n-scrambles "${N_SCRAMBLES}"

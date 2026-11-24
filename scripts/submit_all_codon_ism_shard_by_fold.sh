@@ -15,14 +15,26 @@ require_no_positional_args
 export_workflow_env
 
 CODON_ISM_SHARDS_PER_FOLD="${CODON_ISM_SHARDS_PER_FOLD:-10}"
-if (( CODON_ISM_SHARDS_PER_FOLD <= 0 )); then
-  echo "CODON_ISM_SHARDS_PER_FOLD must be positive" >&2
+if ! [[ "${N_FOLDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "N_FOLDS must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "${CODON_ISM_SHARDS_PER_FOLD}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CODON_ISM_SHARDS_PER_FOLD must be a positive integer" >&2
   exit 2
 fi
 
-for ((FOLD = 0; FOLD < N_FOLDS; FOLD++)); do
-  sbatch \
-    --array=0-$((CODON_ISM_SHARDS_PER_FOLD - 1)) \
-    --export=ALL,FOLD="${FOLD}",CODON_ISM_SHARDS_PER_FOLD="${CODON_ISM_SHARDS_PER_FOLD}" \
-    "${SCRIPT_DIR}/all_codon_ism_shard_by_fold.sh"
-done
+N_TASKS=$((N_FOLDS * CODON_ISM_SHARDS_PER_FOLD))
+ARRAY_SPEC="0-$((N_TASKS - 1))"
+if [[ -n "${CODON_ISM_MAX_CONCURRENT:-}" ]]; then
+  if ! [[ "${CODON_ISM_MAX_CONCURRENT}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "CODON_ISM_MAX_CONCURRENT must be empty or a positive integer" >&2
+    exit 2
+  fi
+  ARRAY_SPEC="${ARRAY_SPEC}%${CODON_ISM_MAX_CONCURRENT}"
+fi
+
+sbatch \
+  --array="${ARRAY_SPEC}" \
+  --export=ALL,CODON_ISM_SHARDS_PER_FOLD="${CODON_ISM_SHARDS_PER_FOLD}" \
+  "${SCRIPT_DIR}/all_codon_ism_shard_by_fold.sh"

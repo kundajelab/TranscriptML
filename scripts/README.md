@@ -92,8 +92,10 @@ What each group means:
 
 | Variable(s) | When to change |
 | --- | --- |
-| `TRANSCRIPTML_REPO` | Set this to the clean TranscriptML checkout when the copied `scripts/` directory is outside the repo. This is the normal scratch-run case. If `transcriptml` is already installed in `CONDA_ENV`, you can leave it empty. |
-| `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Set these to the conda environment and conda install used on Sherlock. The job setup loads `gcc/10.1.0` and `openblas/0.3.10` before activating conda. |
+| `RUNTIME_BACKEND`, `APPTAINER_IMAGE` | Defaults to `RUNTIME_BACKEND="apptainer"` and `APPTAINER_IMAGE="${OAK}/isvock/containers/transcriptml-deps_v1.sif"`. Each job copies the `.sif` to `$L_SCRATCH_JOB` (controlled by `STAGE_SIF_TO_LSCRATCH=1`) and runs isolated with `--cleanenv` and job-local caches. Set `RUNTIME_BACKEND=conda` to fall back to the legacy Conda environment. |
+| `TRANSCRIPTML_REPO`, `TRANSCRIPTML_SRC_TAR`, `CODE_SNAPSHOT_ENABLED` | Clean TranscriptML checkout used to stage `src/` into `$L_SCRATCH_JOB` without rebuilding the container. By default (`CODE_SNAPSHOT_ENABLED=1`), `submit_*.sh` creates a content-addressed `<1 MB` tarball under `${EXP_ROOT}/code_snapshot/` at submission time so queued jobs stay frozen if you keep editing code. Set `TRANSCRIPTML_SRC_TAR` to pin a pre-built release tarball. |
+| `STAGE_DATASET_TO_LSCRATCH`, `JOB_START_JITTER_MAX`, `CODON_ISM_MAX_CONCURRENT` | Controls deduplicated dataset bundle staging (`X.npy`/`y.npy`) to `$L_SCRATCH_JOB` (default `1`), random `0–15s` array startup jitter, and default array concurrency caps (`20` for hyperparameter sweeps, DeepSHAP, and sharded all-codon ISM). |
+| `CONDA_ENV`, `SHERLOCK_CONDA_ROOT` | Used only when `RUNTIME_BACKEND="conda"`. |
 | `GTF`, `FASTA`, `TARGETS` | Set these to your annotation GTF, genome FASTA, and target table. |
 | `TARGET_ID_COL`, `TARGET_COL`, `SPLIT_COL`, `METADATA_COLS` | Match these to columns in `TARGETS`. Leave `SPLIT_COL=""` if your target table does not already define train/val/test splits. |
 | `SALUKI_LENGTH`, `SALUKI_TRUNCATE_FROM`, `SALUKI_MRNA_ONLY` | Set the encoded width, which end is removed from overlength transcripts (`5prime` for legacy behavior or `3prime` to retain the 5-prime end; short transcripts are always padded on the right), and whether `build_saluki_gtf.sh` passes `--mrna-only` (`0/1`, `false/true`, or `no/yes`). |

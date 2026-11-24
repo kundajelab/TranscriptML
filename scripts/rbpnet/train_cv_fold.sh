@@ -43,8 +43,9 @@ if [[ ! -f "${BUNDLE_DIR}/metadata.json" ]]; then
 fi
 
 FOLD_DIR="${CV_ROOT}/fold${FOLD}"
+STAGED_BUNDLE_DIR="$(stage_dataset_bundle "${BUNDLE_DIR}")"
 transcriptml train "${BASE_TRAIN_CONFIG}" \
   --cv-plan "${CV_PLAN}" \
   --fold "${FOLD}" \
-  --dataset "${BUNDLE_DIR}" \
+  --dataset "${STAGED_BUNDLE_DIR}" \
   --output-dir "${FOLD_DIR}/model"
